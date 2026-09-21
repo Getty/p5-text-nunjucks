@@ -1,0 +1,186 @@
+[
+  {
+    "name": "variable output",
+    "mode": "lex",
+    "template": "{{ a }}",
+    "expected": {
+      "ok": true,
+      "output": [
+        {
+          "type": "variable-start",
+          "value": "{{",
+          "lineno": 0,
+          "colno": 0
+        },
+        {
+          "type": "whitespace",
+          "value": " ",
+          "lineno": 0,
+          "colno": 2
+        },
+        {
+          "type": "symbol",
+          "value": "a",
+          "lineno": 0,
+          "colno": 3
+        },
+        {
+          "type": "whitespace",
+          "value": " ",
+          "lineno": 0,
+          "colno": 4
+        },
+        {
+          "type": "variable-end",
+          "value": "}}",
+          "lineno": 0,
+          "colno": 5
+        }
+      ]
+    }
+  },
+  {
+    "name": "string with tab escape",
+    "mode": "lex",
+    "template": "{{ 'a\\tb' }}",
+    "expected": {
+      "ok": true,
+      "output": [
+        {
+          "type": "variable-start",
+          "value": "{{",
+          "lineno": 0,
+          "colno": 0
+        },
+        {
+          "type": "whitespace",
+          "value": " ",
+          "lineno": 0,
+          "colno": 2
+        },
+        {
+          "type": "string",
+          "value": "a\tb",
+          "lineno": 0,
+          "colno": 3
+        },
+        {
+          "type": "whitespace",
+          "value": " ",
+          "lineno": 0,
+          "colno": 9
+        },
+        {
+          "type": "variable-end",
+          "value": "}}",
+          "lineno": 0,
+          "colno": 10
+        }
+      ]
+    }
+  },
+  {
+    "name": "block tag if/endif",
+    "mode": "lex",
+    "template": "{% if x %}y{% endif %}",
+    "expected": {
+      "ok": true,
+      "output": [
+        {
+          "type": "block-start",
+          "value": "{%",
+          "lineno": 0,
+          "colno": 0
+        },
+        {
+          "type": "whitespace",
+          "value": " ",
+          "lineno": 0,
+          "colno": 2
+        },
+        {
+          "type": "symbol",
+          "value": "if",
+          "lineno": 0,
+          "colno": 3
+        },
+        {
+          "type": "whitespace",
+          "value": " ",
+          "lineno": 0,
+          "colno": 5
+        },
+        {
+          "type": "symbol",
+          "value": "x",
+          "lineno": 0,
+          "colno": 6
+        },
+        {
+          "type": "whitespace",
+          "value": " ",
+          "lineno": 0,
+          "colno": 7
+        },
+        {
+          "type": "block-end",
+          "value": "%}",
+          "lineno": 0,
+          "colno": 8
+        },
+        {
+          "type": "data",
+          "value": "y",
+          "lineno": 0,
+          "colno": 10
+        },
+        {
+          "type": "block-start",
+          "value": "{%",
+          "lineno": 0,
+          "colno": 11
+        },
+        {
+          "type": "whitespace",
+          "value": " ",
+          "lineno": 0,
+          "colno": 13
+        },
+        {
+          "type": "symbol",
+          "value": "endif",
+          "lineno": 0,
+          "colno": 14
+        },
+        {
+          "type": "whitespace",
+          "value": " ",
+          "lineno": 0,
+          "colno": 19
+        },
+        {
+          "type": "block-end",
+          "value": "%}",
+          "lineno": 0,
+          "colno": 20
+        }
+      ]
+    }
+  },
+  {
+    "name": "raw data with dollar at backslash",
+    "mode": "lex",
+    "template": "a $b @c \\d",
+    "expected": {
+      "ok": true,
+      "output": [
+        {
+          "type": "data",
+          "value": "a $b @c \\d",
+          "lineno": 0,
+          "colno": 0
+        }
+      ]
+    }
+  }
+]
