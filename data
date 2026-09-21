@@ -1,0 +1,15 @@
+---
+class: standard
+created: 2026-09-21T22:47:09Z
+depends_on:
+- 21
+id: 25
+priority: low
+status: backlog
+tags:
+- perf
+title: 'Benchmarks: port bench/ and get a baseline vs upstream'
+updated: 2026-09-21T22:47:22Z
+---
+
+upstream/nunjucks/bench/ has the upstream benchmark templates. Add maint/bench (not shipped) rendering the same templates N times in Perl and via node, report both. No optimisation work before the compiler suite is green — this ticket only establishes the baseline and catches pathological slowness (per-operator Runtime calls are the expected hot spot).
