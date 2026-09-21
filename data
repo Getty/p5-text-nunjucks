@@ -1,0 +1,31 @@
+---
+claimed_at: 2026-09-21T23:52:44Z
+claimed_by: text-nunjucks-worker
+class: standard
+completed: 2026-09-21T23:52:44Z
+created: 2026-09-21T22:45:34Z
+id: 1
+priority: high
+started: 2026-09-21T23:52:44Z
+status: done
+tags:
+- harness
+- tests
+title: 'Corpus harness: t/corpus, maint/corpus-regen, t/corpus.t, xt/oracle-live.t'
+updated: 2026-09-21T23:52:45Z
+---
+
+The differential-test loop everything else is measured with. maint/oracle.js (done, see its header for the case format) already runs cases through upstream v3.2.4; this ticket builds the Perl side described in skill text-nunjucks-core, section "Tests".
+
+Deliver:
+- t/corpus/*.json — arrays of oracle cases, each with a committed "expected" (the oracle result object: ok/output or ok/error). Seed files: lex.json, parse.json, render-basics.json with a handful of cases each.
+- maint/corpus-regen — runs every t/corpus/*.json through node maint/oracle.js and rewrites "expected" in place, deterministically (stable key order, 2-space indent, trailing newline) so regen on an unchanged corpus is a no-op diff.
+- t/corpus.t — replays each case against the Perl port by mode (lex / parse / render). Until a mode is implemented its cases are TODO, not skipped silently; the file must pass on the empty port.
+- xt/oracle-live.t — author test: fails if any committed "expected" differs from what the live oracle says. skip_all with a clear message when upstream/ is missing.
+- Define the Perl-side AST/token dump shape to equal the oracle JSON exactly (type, lineno, colno, fields in nodes.js order; RegExp as {regex, flags}).
+
+Done when: prove -lr t/ is green on the stub dist, maint/corpus-regen is idempotent, xt/oracle-live.t passes with upstream/ present.
+
+Trap measured during bootstrap: 'dzil test' runs the MakeMaker harness with t/*.t only — NOT recursive. Once t/upstream/ exists, the built dist (and CPAN testers) would silently skip it. Part of this ticket: make the shipped dist run subdirectory tests (check what [@Author::GETTY] offers — skill getty-perl-release-author-getty — e.g. a MakeMaker test glob 't/*.t t/*/*.t') and prove it by counting test files in 'dzil test' output.
+
+Verified by orchestrator: prove -lr t/ green (16 tests, 15 TODO for k10/k11/k12/k16/k20, none silently skipped); corpus-regen idempotent; xt/oracle-live.t 4/4 vs live oracle; dist trap fixed+proven (MakeMaker::Awesome glob t/*.t t/*/*.t, corpus ships, t/upstream probe collected by make test). Committed 938105c, not pushed.
