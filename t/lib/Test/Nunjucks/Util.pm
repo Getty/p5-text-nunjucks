@@ -1,99 +1,185 @@
 package Test::Nunjucks::Util;
-# ABSTRACT: shared render() harness for ported upstream suites (t/upstream/*.t)
+# ABSTRACT: shared render()/equal() harness for ported upstream suites (t/upstream/*.t)
 #
-# Perl analogue of upstream/nunjucks/tests/util.js -- but util.js's render()
-# builds a real Environment + FileSystemLoader and calls t.render(ctx, cb).
-# Environment/Template (k16) are not ported yet, so this instead drives the
-# part of the pipeline that IS ported -- Compiler (k15) + Runtime (k14) --
-# through a minimal stub Environment/Context, the same shim t/10-compiler.t
-# already uses and for the same reason (see its own header comment). Once
-# k16 lands, replace the stub below with the real Environment/Context; the
-# render() signature here should not need to change for that.
+# Perl analogue of upstream/nunjucks/tests/util.js. util.js's render() builds a
+# real Environment + FileSystemLoader(templatesPath) and calls t.render(ctx, cb);
+# now that Environment/Context/Template (k16) are ported, this does the same
+# with a real Text::Nunjucks::Environment / ::Template -- the only difference is
+# the loader: FileSystemLoader is k19 and not ported, so a MemoryLoader below is
+# seeded from committed copies of the actual upstream template files
+# (t/upstream/templates/, byte-identical to upstream/nunjucks/tests/templates/)
+# so include/extends/import tests can run without the gitignored upstream/ tree
+# present -- the same MemoryLoader convention t/corpus.t already uses for the
+# same reason.
 #
-# util.js also exports `equal`, `jinjaEqual`, `finish` and `normEOL`. None of
-# those are ported here yet -- no suite ported so far needs them. Port each
-# alongside the first t/upstream/*.t that calls it, oracle-grounded like
-# everything else, rather than writing them speculatively/unexercised now.
+# util.js also exports `jinjaEqual` and `normEOL`. Neither is ported here yet --
+# no suite ported so far needs them. Port each alongside the first t/upstream/*.t
+# that calls it, oracle-grounded like everything else, rather than writing them
+# speculatively/unexercised now.
 #
-# `finish(done)` specifically has no Perl counterpart to add later either: it
-# exists in util.js only to coordinate mocha's async done() with nunjucks'
-# CPS callbacks that may or may not fire synchronously. Perl callbacks in
-# this port run synchronously unless user code defers them (ADR 0003), and
-# Test::More has no `done` ceremony -- render() below simply returns
-# (err, output) once the root() callback has fired.
+# `finish(done)` has no Perl counterpart and is never ported: it exists in
+# util.js only to coordinate mocha's async done() with nunjucks' CPS callbacks
+# that may or may not fire synchronously. Perl callbacks in this port run
+# synchronously unless user code defers them (ADR 0003), and Test::More has no
+# `done` ceremony -- render() below simply returns (err, output) once the
+# root() callback has fired. Ported suites (t/upstream/runtime.t) simply omit
+# the finish(done) call at each site; do the same here.
 
 use strict;
 use warnings;
 use Exporter 'import';
 use Carp qw( croak );
-use Text::Nunjucks::Compiler;
-use Text::Nunjucks::Runtime;
+use Test::More ();
+use Path::Tiny qw( path );
+use Text::Nunjucks::Environment;
+use Text::Nunjucks::Loader;
 
-our @EXPORT_OK = qw( render );
+our @EXPORT_OK = qw( render equal );
 
-#### stub Environment / Context (k16 not landed yet -- see header comment)
+#### MemoryLoader -- Perl analogue of maint/oracle.js's MemoryLoader / the
+#### FileSystemLoader(templatesPath) util.js's render() builds; k19 (concrete
+#### loaders) is not ported yet, so this stands in, seeded from committed
+#### copies of the real upstream template files (see header comment).
+
+package Test::Nunjucks::Util::_MemoryLoader {
+  use Moo;
+  extends 'Text::Nunjucks::Loader';
+
+  has templates => ( is => 'ro', default => sub { {} } );
+
+  sub get_source {
+    my ( $self, $name ) = @_;
+    return undef unless exists $self->templates->{$name};
+    return { src => $self->templates->{$name}, path => $name, noCache => 1 };
+  }
+}
 
 {
+  my $DEFAULT_TEMPLATES;
 
-  package Test::Nunjucks::Util::_Ctx;
-  sub new { my ( $c, $vars ) = @_; bless { vars => { %{ $vars // {} } }, exported => {} }, $c }
-  sub lookup        { my ( $s, $n ) = @_; exists $s->{vars}{$n} ? $s->{vars}{$n} : undef }
-  sub set_variable  { my ( $s, $n, $v ) = @_; $s->{vars}{$n} = $v; return }
-  sub get_variables { $_[0]->{vars} }
-  sub add_export    { my ( $s, $n ) = @_; $s->{exported}{$n} = 1; return }
-}
-{
-
-  package Test::Nunjucks::Util::_Env;
-  sub new        { my ( $c, %a ) = @_; bless { opts => $a{opts} // {}, filters => $a{filters} // {}, tests => $a{tests} // {} }, $c }
-  sub opts       { $_[0]->{opts} }
-  sub get_filter { my ( $s, $n ) = @_; $s->{filters}{$n} // croak( 'no filter: ' . $n ) }
-  sub get_test   { my ( $s, $n ) = @_; $s->{tests}{$n}   // croak( 'no test: ' . $n ) }
+  sub _default_templates {
+    return $DEFAULT_TEMPLATES if $DEFAULT_TEMPLATES;
+    my $dir = path(__FILE__)->parent->parent->parent->parent->child( 'upstream', 'templates' );
+    my %templates;
+    for my $file ( $dir->children ) {
+      next unless $file->is_file;
+      $templates{ $file->basename } = $file->slurp_utf8;
+    }
+    return $DEFAULT_TEMPLATES = \%templates;
+  }
 }
 
-#### render(template, ctx, opts) -> (err, output)
+sub _fresh_loader {
+  return Test::Nunjucks::Util::_MemoryLoader->new( templates => _default_templates() );
+}
+
+#### Extension -- Perl analogue of the JS constructor-function extension
+#### objects tests/compiler.js defines inline, e.g.:
+####   function TestExtension() {
+####     this.tags = ['test'];
+####     this.parse = function(parser, nodes, lexer) { ... };
+####     this.run = function(context, ...) { ... };
+####   }
+#### JS stores `parse`/`run` as per-instance closures, not class methods, and
+#### the closure body freely reads `this` (the extension itself, e.g. to build
+#### `new nodes.CallExtension(this, 'run', ...)`); Environment::add_extension
+#### also stamps `ext.__name = name` as a plain property set
+#### (Nodes::CallExtension._ext_attr then reads extName/autoescape back through
+#### ->can/method for a blessed ref -- see its own header comment). This bridges
+#### the same shape -- a blessed hashref whose parse/run/__name/autoescape are
+#### backed by the constructor's tags/parse/run/autoescape arguments -- with one
+#### adaptation: Perl closures have no implicit `this`, so parse/run dispatch
+#### passes the extension object as an explicit leading argument instead
+#### ($ext->parse(@rest) invokes parse->($ext, @rest), not just parse->(@rest)).
+package Test::Nunjucks::Util::_Extension {
+  sub new {
+    my ( $class, %args ) = @_;
+    return bless {
+      tags       => $args{tags} || [],
+      _parse     => $args{parse},
+      _run       => $args{run},
+      autoescape => $args{autoescape},
+    }, $class;
+  }
+  sub tags       { $_[0]->{tags} }
+  sub autoescape { $_[0]->{autoescape} }
+  sub __name     { my $self = shift; $self->{__name} = shift if @_; return $self->{__name} }
+  sub parse      { my $self = shift; return $self->{_parse}->( $self, @_ ) }
+  sub run        { my $self = shift; return $self->{_run}->( $self, @_ ) }
+}
+
+#### render(template, ctx, opts, env) -> (err, output)
 #
-# JS: render(str, ctx, opts, env, cb) constructs Environment+Template and
-# calls t.render(ctx, cb); cb(err, res) throws err (unless opts.noThrow) or
-# hands (err, normEOL(res)) to the caller. Ported as a direct (err, output)
-# return -- see the file header for why no callback/done plumbing is needed;
-# the CPS callback below still runs, it is just guaranteed synchronous here.
+# JS: render(str, ctx, opts, env, cb) constructs Environment+Template (unless
+# env is passed) and calls t.render(ctx, cb); cb(err, res) throws err (unless
+# opts.noThrow) or hands (err, normEOL(res)) to the caller. Ported as a direct
+# (err, output) return -- see the file header for why no callback/done plumbing
+# is needed; the CPS callback still runs, it is just guaranteed synchronous
+# here (ADR 0003).
 sub render {
-  my ( $template, $ctx, $opts ) = @_;
+  my ( $template, $ctx, $opts, $env ) = @_;
   $opts = { %{ $opts // {} } };
   $ctx  //= {};
 
-  my $no_throw = delete $opts->{noThrow};
-  $opts->{autoescape} = 1 unless exists $opts->{autoescape};
+  my $no_throw      = delete $opts->{noThrow};
+  my $filters       = delete $opts->{filters};
+  my $async_filters = delete $opts->{asyncFilters};
+  my $extensions    = delete $opts->{extensions};
 
-  my $src = eval { Text::Nunjucks::Compiler->compile( $template, [], undef, undef, $opts ) };
-  if ( my $e = $@ ) {
-    croak $e unless $no_throw;
-    return ( $e, undef );
+  $env //= Text::Nunjucks::Environment->new( [ _fresh_loader() ], $opts );
+
+  for my $name ( keys %{ $filters || {} } ) {
+    $env->add_filter( $name, $filters->{$name} );
+  }
+  for my $name ( keys %{ $async_filters || {} } ) {
+    $env->add_filter( $name, $async_filters->{$name}, 1 );
+  }
+  for my $name ( keys %{ $extensions || {} } ) {
+    $env->add_extension( $name, $extensions->{$name} );
   }
 
-  my $props = eval $src;    ## no critic (ProhibitStringyEval)
-  croak "emitted Perl failed to eval:\n$@\n--- SOURCE ---\n$src\n" if $@;
+  my $tmpl = $env->template_class->new( $template, $env );
 
-  my $env     = Test::Nunjucks::Util::_Env->new( opts => $opts );
-  my $context = Test::Nunjucks::Util::_Ctx->new($ctx);
-  my $frame   = Text::Nunjucks::Runtime->Frame->new;
-  $frame->top_level(1);
+  my $out;
+  my $ok = eval { $out = $tmpl->render($ctx); 1 };
+  if ( !$ok ) {
+    my $err = $@;
+    croak $err unless $no_throw;
+    return ( $err, undef );
+  }
+  return ( undef, $out );
+}
 
-  my ( $out, $err, $called );
-  $props->{root}->(
-    $env, $context, $frame, 'Text::Nunjucks::Runtime',
-    sub {
-      my ( $e, $r ) = @_;
-      $called = 1;
-      $e ? ( $err = $e ) : ( $out = $r );
-    }
-  );
-  croak "root() callback never fired (deferred callback -- not supported by this synchronous harness)"
-    unless $called;
+#### equal(template, ctx, opts, expected, env) -- JS's type-based argument
+# juggling (equal(str, ctx, opts, str2, env), any of ctx/opts/env omittable
+# because JS can tell a string apart from an object at the call site) becomes
+# arity-based dispatch here: every ported call site passes exactly the JS call's
+# argument count, `undef` standing in for an omitted middle argument (JS `null`)
+# exactly as the upstream call sites already do.
+sub equal {
+  my ( $template, @rest ) = @_;
+  my ( $ctx, $opts, $expected, $env );
 
-  croak $err if $err && !$no_throw;
-  return ( $err, $out );
+  if ( @rest == 1 ) {
+    ($expected) = @rest;
+  }
+  elsif ( @rest == 2 ) {
+    ( $ctx, $expected ) = @rest;
+  }
+  elsif ( @rest == 3 ) {
+    ( $ctx, $opts, $expected ) = @rest;
+  }
+  elsif ( @rest == 4 ) {
+    ( $ctx, $opts, $expected, $env ) = @rest;
+  }
+  else {
+    croak 'equal: wrong number of arguments';
+  }
+
+  my ( $err, $res ) = render( $template, $ctx, $opts, $env );
+  croak $err if $err;
+  Test::More::is( $res, $expected );
+  return $res;
 }
 
 1;
