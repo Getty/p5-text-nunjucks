@@ -1,0 +1,20 @@
+---
+claimed_at: 2026-09-22T02:26:54Z
+claimed_by: text-nunjucks-worker
+class: standard
+completed: 2026-09-22T02:26:54Z
+created: 2026-09-22T01:41:14Z
+id: 28
+priority: medium
+started: 2026-09-22T02:22:33Z
+status: done
+tags:
+- harness
+- tests
+title: 'Harness: ast_dump emits lineno/colno always; oracle omits them when undefined'
+updated: 2026-09-22T02:26:55Z
+---
+
+Found during k12 parser port. t/corpus.t ast_dump always emits lineno/colno, but the oracle (JSON.stringify) OMITS a key whose value is undefined. Some nodes legitimately have undefined positions: Case (upstream parser.js uses tok.line/tok.col -- a typo for lineno/colno -- faithfully preserved in the port) and the call-block's KeywordArgs()/NodeList(). So a corpus case containing a {% switch %} or {% call %}...{% endcall %} block would make t/corpus.t RED even against a byte-correct port, because ast_dump adds lineno:null/colno:null that the oracle omits. All 22 current parse cases are position-safe (every node carries a position), so nothing is broken today; t/10-parser.t sidesteps it via upstream's isAST (ignores positions). Fix: ast_dump should omit lineno/colno when undef, mirroring the oracle's JSON.stringify. MUST land before any switch/call parse corpus case is added (relevant to k21 test porting and corpus growth). Small, well-scoped harness change in t/corpus.t.
+
+Fixed: t/corpus.t ast_dump now emits lineno/colno only when defined (mirrors JSON.stringify dropping undefined keys); 0 preserved. Added oracle-generated switch + call-block parse cases as red-before/green-after proof (were tests 41-42 failing on lineno:null). Committed 29e8faf (not pushed). 288 tests, 6 TODO (render), 0 skip.
