@@ -1,0 +1,17 @@
+---
+class: standard
+created: 2026-09-22T00:32:44Z
+depends_on:
+- 3
+id: 26
+priority: low
+status: backlog
+tags:
+- nodes
+- divergence
+- adr
+title: 'print_nodes debug output: byte-match to JS or record divergence'
+updated: 2026-09-22T00:32:44Z
+---
+
+Fidelity audit F3 (k11). Text::Nunjucks::Nodes::print_nodes (a debug helper, STDOUT, NOT on the render or AST-comparison path) diverges from upstream printNodes (nodes.js:199, JSON.stringify(props,null,2)) in four cosmetic ways: 3-space indent (JSON::PP pretty, backend-dependent) vs 2; alphabetical keys (canonical=>1) vs insertion/fields order; ' : ' vs ': '; a doubled trailing newline (encoder already ends in \n, code appends another). Nodes.pm:315,370. Porting contract: a deliberate difference needs an ADR. Resolve as EITHER a one-line ADR declaring print_nodes output not byte-matched (proportionate for a debug helper; Perl hash order + variable JSON backend make 1:1 impractical as written) OR a faithful rewrite (build props in fields() order, hand-format 2-space, drop doubled newline) — the faithful path needs the k3 key-order mechanism, hence depends_on k3. Low severity, blocks nothing.
