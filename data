@@ -1,0 +1,21 @@
+---
+claimed_at: 2026-09-22T00:32:32Z
+claimed_by: text-nunjucks-worker
+class: standard
+completed: 2026-09-22T00:32:32Z
+created: 2026-09-21T22:47:04Z
+depends_on:
+- 1
+id: 11
+priority: high
+started: 2026-09-22T00:32:32Z
+status: done
+tags:
+- port
+title: Port nodes.js → Text::Nunjucks::Nodes
+updated: 2026-09-22T00:32:32Z
+---
+
+src/nodes.js (270 lines): Node base (lineno, colno, fields, find_all, iter_fields), NodeList/addChild, every concrete node type generated from its field list the way upstream's Node.extend does (ADR 0002 — Moo, but no 60 hand-written class files), CallExtension with its special init, print_nodes. Provide the to-JSON dump matching the oracle AST shape exactly (type = upstream typename, fields in declared order, undefined → null).
+
+Ported + fidelity-audited (verdict: structurally 1:1, behaviourally faithful, no wrong-output findings). 52 node types generated from field lists (ADR 0002). Committed fad7ea7 (not pushed). Audit notes: F4 (lazy-load JSON::MaybeXS) REJECTED — getty-perl-core forbids require-as-lazy-optimization, use-at-top + runtime dep is correct (JSON::MaybeXS becomes a real runtime dep at k17 dump filter anyway). F3 tracked as new ticket. F2 (CallExtension repr) noted on k8.
