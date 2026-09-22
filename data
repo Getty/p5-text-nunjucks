@@ -1,0 +1,20 @@
+---
+claimed_at: 2026-09-22T20:24:44Z
+claimed_by: text-nunjucks-test-writer
+class: standard
+completed: 2026-09-22T20:24:44Z
+created: 2026-09-21T22:47:08Z
+depends_on:
+- 16
+id: 21
+priority: high
+started: 2026-09-22T20:24:44Z
+status: done
+tags:
+- port
+- tests
+title: Port tests/compiler.js → t/upstream/compiler.t
+updated: 2026-09-22T20:24:44Z
+---
+
+The main behavioural suite: 2325 lines, ~300 it() blocks covering every tag, scoping, inheritance, macros, imports, async tags, autoescape, whitespace control, error positions. tests/util.js (equal / render / finish helpers, the Loader over tests/templates) becomes t/lib/ helper code. One subtest per it(), same title, same order; an unportable one is a TODO naming its ADR/ticket — never dropped, the count is the audit. Tests that only need template+JSON context should ALSO land in the corpus so the oracle keeps them honest. Can start as soon as render works; expect it to surface most remaining semantics bugs. Port per skill text-nunjucks-core: same functions, same order, snake_case names, upstream control flow kept. Probe surprises with the oracle and commit them as corpus cases. Any deliberate difference needs an ADR in the same change.
