@@ -1,0 +1,16 @@
+---
+class: standard
+created: 2026-09-22T18:09:17Z
+depends_on:
+- 15
+id: 40
+priority: low
+status: backlog
+tags:
+- divergence
+title: 'Divergence: pathological large integer literal overflows to Perl Inf -> emits
+  invalid ''Infinity'
+updated: 2026-09-22T18:09:17Z
+---
+
+compile_literal (Compiler.pm) now emits number literals via number_to_string (ADR 0007, fixed under k15). A ~300+ digit integer literal, e.g. {{ 99999...9 }}, overflows Perls "0 + digits" to Inf; number_to_string(Inf) returns the bareword "Infinity", which is NOT a valid Perl literal token, so the emitted source fails to compile. Upstream renders "Infinity" for such input. Pre-existed the k15 fix (the old "$v" path emitted bare "Inf"), so this is neither introduced nor regressed by k15 -- flagged out of scope by the k15 audit-fix worker. Options if we want fidelity: emit 9**9**9 (or similar) for non-finite doubles on the literal path, or decide it is an accepted divergence and record an ADR. Needs the maintainer to pick; corpus probe: echo (template with long digit run) | node maint/oracle.js.
