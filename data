@@ -1,0 +1,21 @@
+---
+claimed_at: 2026-09-22T02:22:32Z
+claimed_by: text-nunjucks-worker
+class: standard
+completed: 2026-09-22T02:22:32Z
+created: 2026-09-21T22:47:05Z
+depends_on:
+- 12
+id: 13
+priority: medium
+started: 2026-09-22T02:22:32Z
+status: done
+tags:
+- port
+title: Port transformer.js → Text::Nunjucks::Transformer
+updated: 2026-09-22T02:22:32Z
+---
+
+src/transformer.js (217 lines): the AST rewrite that lifts async filters (FilterAsync), super() into blocks, and converts If→IfAsync / For→AsyncEach where async nodes are inside. Tiny but the compiler's CPS output depends on it (ADR 0003). Tested through parser/compiler suites plus targeted AST-dump cases. Port per skill text-nunjucks-core: same functions, same order, snake_case names, upstream control flow kept. Probe surprises with the oracle and commit them as corpus cases. Any deliberate difference needs an ADR in the same change.
+
+Ported + fidelity-audited + fixed. 10/10 functions 1:1, differentially verified byte-for-byte against real upstream (30+ templates incl. gensym sequence). Audit found 1 wrong-output bug: F1 _lift_filters called ->name on CallExtensionAsync (no such field) -> died; fixed with can('name') guard mirroring lift_super, regression-tested (red-before/green-after). Committed 28f719c (not pushed). asyncFilters is caller-supplied (no k8/env coupling). 286 tests, 6 TODO (render), 0 skip.
