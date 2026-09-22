@@ -79,10 +79,19 @@ sub parse_supported {
 #   else  -> the value as-is; undef encodes to null, like the oracle's undefined
 # A node is anything that answers ->typename/->fields/->lineno/->colno, which is
 # the 1:1 image of `instanceof nodes.Node` without hardcoding the class name.
+#
+# lineno/colno are emitted only when defined. The oracle serializes with
+# JSON.stringify, which drops a key whose value is `undefined`, and some nodes
+# legitimately carry undefined positions -- the switch Case (upstream typo:
+# parser.js reads tok.line/tok.col, which Token does not have), the call-block's
+# appended KeywordArgs and its empty NodeList. A value of 0 is a real position
+# and stays; only genuine undef is dropped, matching JSON.stringify exactly.
 sub ast_dump {
   my ($n) = @_;
   if ( blessed($n) && $n->can('typename') && $n->can('fields') ) {
-    my %out = ( type => $n->typename, lineno => $n->lineno, colno => $n->colno );
+    my %out = ( type => $n->typename );
+    $out{lineno} = $n->lineno if defined $n->lineno;
+    $out{colno}  = $n->colno  if defined $n->colno;
     for my $f ( @{ $n->fields } ) {
       $out{$f} = ast_dump( $n->$f );
     }

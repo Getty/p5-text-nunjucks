@@ -927,6 +927,174 @@
     }
   },
   {
+    "name": "switch case node has undefined position",
+    "mode": "parse",
+    "template": "{% switch x %}{% case 1 %}a{% default %}b{% endswitch %}",
+    "expected": {
+      "ok": true,
+      "output": {
+        "type": "Root",
+        "lineno": 0,
+        "colno": 0,
+        "children": [
+          {
+            "type": "Switch",
+            "lineno": 0,
+            "colno": 3,
+            "expr": {
+              "type": "Symbol",
+              "lineno": 0,
+              "colno": 10,
+              "value": "x"
+            },
+            "cases": [
+              {
+                "type": "Case",
+                "cond": {
+                  "type": "Literal",
+                  "lineno": 0,
+                  "colno": 22,
+                  "value": 1
+                },
+                "body": {
+                  "type": "NodeList",
+                  "lineno": 0,
+                  "colno": 0,
+                  "children": [
+                    {
+                      "type": "Output",
+                      "lineno": 0,
+                      "colno": 26,
+                      "children": [
+                        {
+                          "type": "TemplateData",
+                          "lineno": 0,
+                          "colno": 26,
+                          "value": "a"
+                        }
+                      ]
+                    }
+                  ]
+                }
+              }
+            ],
+            "default": {
+              "type": "NodeList",
+              "lineno": 0,
+              "colno": 0,
+              "children": [
+                {
+                  "type": "Output",
+                  "lineno": 0,
+                  "colno": 40,
+                  "children": [
+                    {
+                      "type": "TemplateData",
+                      "lineno": 0,
+                      "colno": 40,
+                      "value": "b"
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        ]
+      }
+    }
+  },
+  {
+    "name": "call block keyword args and empty nodelist have undefined position",
+    "mode": "parse",
+    "template": "{% call foo() %}body{% endcall %}",
+    "expected": {
+      "ok": true,
+      "output": {
+        "type": "Root",
+        "lineno": 0,
+        "colno": 0,
+        "children": [
+          {
+            "type": "Output",
+            "lineno": 0,
+            "colno": 3,
+            "children": [
+              {
+                "type": "FunCall",
+                "lineno": 0,
+                "colno": 11,
+                "name": {
+                  "type": "Symbol",
+                  "lineno": 0,
+                  "colno": 8,
+                  "value": "foo"
+                },
+                "args": {
+                  "type": "NodeList",
+                  "lineno": 0,
+                  "colno": 11,
+                  "children": [
+                    {
+                      "type": "KeywordArgs",
+                      "children": [
+                        {
+                          "type": "Pair",
+                          "lineno": 0,
+                          "colno": 3,
+                          "key": {
+                            "type": "Symbol",
+                            "lineno": 0,
+                            "colno": 3,
+                            "value": "caller"
+                          },
+                          "value": {
+                            "type": "Caller",
+                            "lineno": 0,
+                            "colno": 3,
+                            "name": {
+                              "type": "Symbol",
+                              "lineno": 0,
+                              "colno": 3,
+                              "value": "caller"
+                            },
+                            "args": {
+                              "type": "NodeList",
+                              "children": []
+                            },
+                            "body": {
+                              "type": "NodeList",
+                              "lineno": 0,
+                              "colno": 0,
+                              "children": [
+                                {
+                                  "type": "Output",
+                                  "lineno": 0,
+                                  "colno": 16,
+                                  "children": [
+                                    {
+                                      "type": "TemplateData",
+                                      "lineno": 0,
+                                      "colno": 16,
+                                      "value": "body"
+                                    }
+                                  ]
+                                }
+                              ]
+                            }
+                          }
+                        }
+                      ]
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        ]
+      }
+    }
+  },
+  {
     "name": "error expected variable end",
     "mode": "parse",
     "template": "hello {{ foo",
