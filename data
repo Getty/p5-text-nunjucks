@@ -1,0 +1,21 @@
+---
+claimed_at: 2026-09-22T01:10:54Z
+claimed_by: text-nunjucks-worker
+class: standard
+completed: 2026-09-22T01:10:54Z
+created: 2026-09-21T22:47:04Z
+depends_on:
+- 1
+id: 10
+priority: high
+started: 2026-09-22T01:10:54Z
+status: done
+tags:
+- port
+title: Port lexer.js → Text::Nunjucks::Lexer
+updated: 2026-09-22T01:10:55Z
+---
+
+src/lexer.js (539 lines): Tokenizer with the exact token types/values/lineno/colno (0-based, as the oracle prints them), custom tags option, trimBlocks / lstripBlocks, regex tokens (r/.../flags — token only; runtime meaning is a separate ADR ticket), whitespace-control markers. Port tests/lexer.js → t/upstream/lexer.t (one subtest per it(), same titles). Add lex-mode corpus cases and make t/corpus.t replay mode 'lex'. Port per skill text-nunjucks-core: same functions, same order, snake_case names, upstream control flow kept. Probe surprises with the oracle and commit them as corpus cases. Any deliberate difference needs an ADR in the same change.
+
+Ported + fidelity-audited + fixed. Audit found 2 wrong-output divergences (JS->Perl semantics mapped inline, no ADR): F1 lstripBlocks /^\s+$/ diverged on NBSP/U+FEFF by SV utf8-flag state -> fixed via ADR 0005 (js_whitespace_class seam in Lib, explicit flag-independent ECMAScript set, oracle-verified codepoint by codepoint); F2 float at EOF {{3. gave '3.' + warning vs JS '3.null' -> fixed (raw JS null concat). F3 ('0'-delimiter truthiness) negligible, left. back() upstream bug ported 1:1, tracked k27. Committed 0fb46f5 (not pushed). 21 lex corpus cases real-green, 218 tests, 0 skip.
