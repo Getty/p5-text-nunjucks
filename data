@@ -1,0 +1,23 @@
+---
+claimed_at: 2026-09-22T05:01:13Z
+claimed_by: text-nunjucks-test-writer
+class: standard
+completed: 2026-09-22T18:09:00Z
+created: 2026-09-22T05:00:30Z
+depends_on:
+- 14
+id: 32
+priority: medium
+started: 2026-09-22T05:01:13Z
+status: done
+tags:
+- port
+- tests
+- upstream-suite
+title: Port tests/runtime.js → t/upstream/runtime.t (8 it)
+updated: 2026-09-22T18:09:00Z
+---
+
+Port upstream/nunjucks/tests/runtime.js to t/upstream/runtime.t, one it() at a time, oracle-grounded.
+
+Ported to t/upstream/runtime.t in d50a43f: 8/8 upstream it() (7 real, 1 TODO Object.prototype pollution -- no Perl equivalent, needs k16); +Util.pm render harness, +8 runtime.json cases (render-mode TODO until k16).
