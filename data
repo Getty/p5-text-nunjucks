@@ -1,0 +1,21 @@
+---
+class: standard
+completed: 2026-09-22T21:09:02Z
+created: 2026-09-21T22:46:07Z
+id: 8
+priority: high
+started: 2026-09-22T21:09:02Z
+status: done
+tags:
+- decision
+- adr
+- semantics
+title: 'ADR: callables — coderefs in context, keyword args, this, callback API'
+updated: 2026-09-22T21:09:02Z
+---
+
+Upstream calls context functions via runtime.callWrap with the context as `this`; keyword arguments arrive as a trailing object flagged __keywords; macros and `caller()` are built on the same path; async filters take a trailing callback; render()/renderString() take an optional cb and otherwise return (and throw). Decide the Perl shapes: what a coderef in the context receives (positional args, kwargs hashref marker?), how `this` is exposed (if at all), how custom filters / tests / globals / extensions are registered and called, and the public sync vs callback API of render / render_string under ADR 0003 (CPS kept). Oracle error text to preserve: 'Unable to call `x`, which is undefined or falsey'. Settle it with the oracle (node maint/oracle.js), not from the docs. Verified upstream facts are listed in .claude/skills/text-nunjucks-core/references/js-semantics.md. Outcome: an ADR in docs/adr/ (next free number), the mechanism in ONE place (Runtime or Lib), corpus cases in t/corpus/ pinning it, and the entry in js-semantics.md moved from "open" to "decided". Needs the maintainer: present the options with a recommendation, do not pick silently.
+
+Fidelity audit F2 (from k11 nodes port): CallExtension in Nodes.pm reads ext.__name/ext.autoescape via _ext_attr, dispatching method-vs-hashref-vs-string on the extension object (mirrors nodes.js ext.__name||ext, 1:1 for supported forms, no wrong output today since CallExtension only arises with registered extensions). The actual Perl representation of a registered extension is undecided and belongs with this ticket's extension/Environment API + registration decision. When decided, re-check _ext_attr against it and add an ADR + corpus case.
+
+DECISION MADE by maintainer (direction: maximum fidelity, cost accepted, new deps welcome) and recorded in ADR 0009, committed 066cb68; js-semantics marked decided. Mechanism implemented in k14 (Runtime); render-mode corpus-pinning follows once Environment (k16) makes render real. This ticket closes when the mechanism + oracle-grounded tests land.
