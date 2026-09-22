@@ -220,5 +220,51 @@
         ]
       }
     }
+  },
+  {
+    "name": "compare operators",
+    "mode": "parse",
+    "template": "{{ 1 < 2 }}",
+    "expected": {
+      "ok": true,
+      "output": {
+        "type": "Root",
+        "lineno": 0,
+        "colno": 0,
+        "children": [
+          {
+            "type": "Output",
+            "lineno": 0,
+            "colno": 0,
+            "children": [
+              {
+                "type": "Compare",
+                "lineno": 0,
+                "colno": 5,
+                "expr": {
+                  "type": "Literal",
+                  "lineno": 0,
+                  "colno": 3,
+                  "value": 1
+                },
+                "ops": [
+                  {
+                    "type": "<",
+                    "lineno": 0,
+                    "colno": 5,
+                    "expr": {
+                      "type": "Literal",
+                      "lineno": 0,
+                      "colno": 7,
+                      "value": 2
+                    }
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    }
   }
 ]
