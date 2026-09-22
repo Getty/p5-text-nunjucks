@@ -1,0 +1,21 @@
+---
+claimed_at: 2026-09-22T00:41:49Z
+claimed_by: text-nunjucks-worker
+class: standard
+completed: 2026-09-22T00:41:49Z
+created: 2026-09-21T22:47:03Z
+depends_on:
+- 1
+id: 9
+priority: high
+started: 2026-09-22T00:41:49Z
+status: done
+tags:
+- port
+title: Port lib.js → Text::Nunjucks::Lib
+updated: 2026-09-22T00:41:50Z
+---
+
+upstream/nunjucks/nunjucks/src/lib.js (396 lines): TemplateError + _prettifyError (message format '(path) [Line L, Column C]\n  msg' is asserted by upstream tests — keep byte-identical), escape (map includes ' → &#39; and \ → &#92;), type predicates, groupBy, toArray, without, repeat, each/map, asyncIter/asyncFor, keys/_entries/_values, extend, inOperator, getAttrGetter. Type predicates follow ADR 0001 (builtin::, never looks_like_number). Port tests/util.js-independent parts of tests/runtime.js later; here: t/upstream/lib.t where upstream has coverage, else t/10-lib.t. Port per skill text-nunjucks-core: same functions, same order, snake_case names, upstream control flow kept. Probe surprises with the oracle and commit them as corpus cases. Any deliberate difference needs an ADR in the same change.
+
+Ported + fidelity-audited + fixed. Audit found 2 wrong-output bugs, both fixed & regression-tested (oracle-verified): F1 repeat() truncated fractional n (would break center in k17) -> C-style loop; F2 in_operator string branch with undef key returned true+warning -> coerce undef to 'undefined' (JS ToString), returns false. F4 extracted JS falsiness into a _falsy seam beside _strict_eq (helps k14). F3 (keys on non-hash ref) left as commented open latency (believed unreachable). Committed 58ca1f1 (not pushed). All 25 lib.js units ported 1:1, class-method-only per getty-perl-core.
