@@ -1,0 +1,16 @@
+---
+class: standard
+created: 2026-09-22T01:00:55Z
+id: 27
+priority: low
+status: backlog
+tags:
+- lexer
+- upstream-bug
+- ported
+title: 'Ported upstream bug: Lexer back() reads nonexistent field (lexer.js this.src
+  typo)'
+updated: 2026-09-22T01:00:55Z
+---
+
+Found during k10 port + audit. lexer.js:476 back() does this.src.lastIndexOf(...) but the field is this.str, so this.src is undefined. The branch is unreachable: back() is only called from the trimBlocks CR-not-followed-by-LF path (lexer.js:118), after which the index points back at the \r, so current() is '\r' and never '\n' -- the 'if current == newline' branch that reads the nonexistent field is dead. Ported 1:1 per ADR 0004 (Lexer.pm reads the same nonexistent field $self->{src} with a NOTE comment); corpus case 'do not trim lone CR after blocks' (lex.json) pins the reachable path. Nuance if it were ever reached: JS throws TypeError on undefined.lastIndexOf, Perl rindex(undef,...) returns -1 + a warning -- behaviour-if-reached differs but is moot. Tracking only per house rule 'found an upstream bug -> ported + noted in a karr ticket'; reporting upstream is the maintainer's call. No action needed unless upstream fixes it (then re-sync).
