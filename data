@@ -1,0 +1,23 @@
+---
+claimed_at: 2026-09-22T05:01:13Z
+claimed_by: text-nunjucks-test-writer
+class: standard
+completed: 2026-09-22T18:08:59Z
+created: 2026-09-22T05:00:29Z
+depends_on:
+- 12
+id: 31
+priority: high
+started: 2026-09-22T05:01:13Z
+status: done
+tags:
+- port
+- tests
+- upstream-suite
+title: Port tests/parser.js → t/upstream/parser.t (37 it)
+updated: 2026-09-22T18:08:59Z
+---
+
+Port upstream/nunjucks/tests/parser.js to t/upstream/parser.t, one it() at a time, oracle-grounded expected, never drop an unportable test silently.
+
+Ported to t/upstream/parser.t in 440078d: 37/37 upstream it(), no TODO/skip; +9 oracle-grounded parse.json cases.
