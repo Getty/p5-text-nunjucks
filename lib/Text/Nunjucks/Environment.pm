@@ -106,7 +106,7 @@ package Text::Nunjucks::Environment {
 
     # dev flag: the trace shown on errors (default false).
     $opts = $self->opts( $opts || {} );
-    $self->opts->{dev} = $opts->{dev} ? true : false;
+    $self->opts->{dev} = $self->_runtime_class->_truthy( $opts->{dev} ) ? true : false;
 
     # autoescape: global autoescaping, default true. `!= null` keeps an explicit
     # false, defaults only for undefined/null.
@@ -115,9 +115,9 @@ package Text::Nunjucks::Environment {
       ? $opts->{autoescape}
       : true;
 
-    $self->opts->{throwOnUndefined} = $opts->{throwOnUndefined} ? true : false;
-    $self->opts->{trimBlocks}       = $opts->{trimBlocks}       ? true : false;
-    $self->opts->{lstripBlocks}     = $opts->{lstripBlocks}     ? true : false;
+    $self->opts->{throwOnUndefined} = $self->_runtime_class->_truthy( $opts->{throwOnUndefined} ) ? true : false;
+    $self->opts->{trimBlocks}       = $self->_runtime_class->_truthy( $opts->{trimBlocks} )       ? true : false;
+    $self->opts->{lstripBlocks}     = $self->_runtime_class->_truthy( $opts->{lstripBlocks} )     ? true : false;
 
     $self->loaders( [] );
 
@@ -242,7 +242,7 @@ package Text::Nunjucks::Environment {
   sub add_filter {
     my ( $self, $name, $func, $async ) = @_;
     my $wrapped = $func;
-    if ($async) {
+    if ( $self->_runtime_class->_truthy($async) ) {
       push @{ $self->async_filters }, $name;
     }
     $self->filters->{$name} = $wrapped;

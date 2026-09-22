@@ -122,5 +122,19 @@
       "ok": true,
       "output": "AB"
     }
+  },
+  {
+    "name": "throwOnUndefined string '0' opt is JS-truthy",
+    "template": "[{{ missing }}]",
+    "opts": {
+      "throwOnUndefined": "0"
+    },
+    "expected": {
+      "ok": false,
+      "error": {
+        "name": "Template render error",
+        "message": "(unknown path) [Line 1, Column 2]\n  attempted to output null or undefined value"
+      }
+    }
   }
 ]
