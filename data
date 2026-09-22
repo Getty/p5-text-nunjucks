@@ -1,0 +1,21 @@
+---
+class: standard
+completed: 2026-09-22T21:09:00Z
+created: 2026-09-21T22:46:05Z
+id: 4
+priority: high
+started: 2026-09-22T21:09:00Z
+status: done
+tags:
+- decision
+- adr
+- semantics
+title: 'ADR: numbers — JS Number formatting and arithmetic in Perl'
+updated: 2026-09-22T21:09:00Z
+---
+
+ADR 0001 gives us number-vs-string. Still open: JS Number→String formatting (oracle: 1/3 → 0.3333333333333333, 0.1+0.2 → 0.30000000000000004, 1e21 → 1e+21, 1/0 → Infinity, 'a'*2 → NaN) versus Perl's %.15g; `+` as concat-or-add depending on operand kinds; `//` floor division; `**`; comparison of mixed kinds ('10' < '9' is true, 10 < 9 false, 1 == '1' true, 1 === '1' false); int/float filters following parseInt/parseFloat ('3.7abc'|float → 3.7, 'x'|int → empty); round following Math.round (-2.5 → -2). Decide one number-to-string routine (shortest round-trip, %.17g fallback) and one home for the operators in Runtime. Settle it with the oracle (node maint/oracle.js), not from the docs. Verified upstream facts are listed in .claude/skills/text-nunjucks-core/references/js-semantics.md. Outcome: an ADR in docs/adr/ (next free number), the mechanism in ONE place (Runtime or Lib), corpus cases in t/corpus/ pinning it, and the entry in js-semantics.md moved from "open" to "decided". Needs the maintainer: present the options with a recommendation, do not pick silently.
+
+From k12 parser port (F3): INT/FLOAT literals convert via 0+$val (Parser.pm:1104/1109) matching parseInt/parseFloat for normal cases, but big integers diverge on Perl's float model -- oracle: {{ 100000000000000000000 }} -> Literal '100000000000000000000'; port -> '1e+20'. Deferred to k4 (number model), flagged in-code, not decided. CONSTRAINT: no oversized/edge-number corpus case may be committed until k4 lands. Note: scientific 1e21 is lexed as a Symbol upstream, so the parser never number-converts it (lexer scope, not k4-parser).
+
+DECISION MADE by maintainer (direction: maximum fidelity, cost accepted, new deps welcome) and recorded in ADR 0007, committed 066cb68; js-semantics marked decided. Mechanism implemented in k14 (Runtime); render-mode corpus-pinning follows once Environment (k16) makes render real. This ticket closes when the mechanism + oracle-grounded tests land.
