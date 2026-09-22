@@ -1,0 +1,23 @@
+---
+claimed_at: 2026-09-22T05:01:13Z
+claimed_by: text-nunjucks-test-writer
+class: standard
+completed: 2026-09-22T18:08:59Z
+created: 2026-09-22T05:00:29Z
+depends_on:
+- 10
+id: 30
+priority: high
+started: 2026-09-22T05:01:13Z
+status: done
+tags:
+- port
+- tests
+- upstream-suite
+title: Port tests/lexer.js → t/upstream/lexer.t (26 it)
+updated: 2026-09-22T18:08:59Z
+---
+
+Port the upstream mocha suite upstream/nunjucks/tests/lexer.js to t/upstream/lexer.t, one it() at a time. Oracle-grounded expected (never hand-typed); skip_all-guard if the module is missing; never silently drop an unportable test (mark + explain why). Complements the oracle corpus with the authors' curated edge cases.
+
+Ported to t/upstream/lexer.t in 30bf424: 26/26 upstream it(), 174 assertions, no TODO/skip; +10 oracle-grounded lex.json cases.
