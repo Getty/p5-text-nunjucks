@@ -1,5 +1,6 @@
 requires 'perl', '5.040';
 
+requires 'Hash::Ordered';
 requires 'JSON::MaybeXS';
 requires 'Moo';
 requires 'namespace::autoclean';

@@ -337,6 +337,12 @@ sub keys {
   # non-HASH ref dies here on the deref. The value model routes arrays through
   # async_iter / to_array, so this is believed unreachable; keys(undef) already
   # yields [] cleanly. Revisit if a k14/k17 call site reaches it.
+  #
+  # Ordered hash (template dict literal / engine-built object, ADR 0011): its
+  # own keys, in insertion order. (The rest of ADR 0011 -- sorting plain caller
+  # hashes -- is still open; this handles the ordered representation only.)
+  return [ $obj->keys ] if blessed($obj) && $obj->isa('Hash::Ordered');
+
   my $arr = [];
   for my $k ( CORE::keys %$obj ) {
     push @$arr, $k if $self->has_own_prop( $obj, $k );
@@ -393,6 +399,11 @@ sub in_operator {
     my $needle = defined($key) ? $key : 'undefined';
     return index( $val, $needle ) != -1 ? true : false;
   }
+  # Ordered hash (template dict literal / engine-built object, ADR 0011).
+  if ( blessed($val) && $val->isa('Hash::Ordered') ) {
+    return $val->exists($key) ? true : false;
+  }
+
   if ( $self->is_object($val) ) {
     return exists( $val->{$key} ) ? true : false;    # key in val
   }

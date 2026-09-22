@@ -7,6 +7,7 @@ use builtin qw( is_bool created_as_number true false );
 use Scalar::Util qw( blessed refaddr );
 use POSIX qw( floor fmod );
 use Carp qw( croak );
+use Hash::Ordered;
 use Text::Nunjucks::Lib;
 use Text::Nunjucks::Lib::Error;
 use Text::Nunjucks::Lib::TemplateError;
@@ -233,6 +234,24 @@ sub make_keyword_args {
   my ( $self, $obj ) = @_;
   bless $obj, $self->KwArgs;    # JS: obj.__keywords = true
   return $obj;
+}
+
+#### makeDict -- ordered object for template dict literals (ADR 0011)
+#
+# Port addition (no upstream counterpart): the compiler (k15) emits
+# $runtime->make_dict(k1, v1, ...) for every template `{...}` literal so that
+# JS insertion order survives (a plain Perl hash does not preserve it). The
+# representation is Hash::Ordered; member_lookup / keys / in_operator below read
+# it. NOTE: this wires only what the compiler's own dicts need; the rest of
+# ADR 0011 (sorted plain caller hashes, dump/dictsort/list/items) is still open.
+sub make_dict {
+  my ( $self, @kv ) = @_;
+  return Hash::Ordered->new(@kv);
+}
+
+sub _is_ordered_hash {
+  my ( $self, $v ) = @_;
+  return ( blessed($v) && $v->isa('Hash::Ordered') ) ? 1 : 0;
 }
 
 #### isKeywordArgs
@@ -517,6 +536,12 @@ sub member_lookup {
       return sub { $m->( $self, $obj, @_ ) };
     }
     return undef;
+  }
+
+  # Ordered hash (template dict literal / engine-built object, ADR 0011): read
+  # it like a plain object before the generic blessed-object branch below.
+  if ( $self->_is_ordered_hash($obj) ) {
+    return $obj->exists($key) ? $obj->get($key) : undef;
   }
 
   # Plain hashref: property access (a coderef value is returned as-is and
