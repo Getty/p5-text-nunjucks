@@ -204,6 +204,18 @@ subtest 'async_for' => sub {
     sub { push @got, 'done'; },
   );
   is_deeply( \@got, [ 'a=1', 'len=1', 'done' ], 'iterates key/value then calls cb' );
+
+  # JS `keys(arr || {})` -- a JS-falsy iterable (0, '', false, undef) must be an
+  # empty loop, not a crash on deref. (F2; None is guarded upstream in Runtime.)
+  for my $falsy ( 0, '', undef, false ) {
+    my @none;
+    my $ok = eval {
+      $L->async_for( $falsy, sub { push @none, 1 }, sub { push @none, 'done' } );
+      1;
+    };
+    ok( $ok, 'async_for on a falsy iterable does not crash' );
+    is_deeply( \@none, ['done'], 'falsy iterable -> empty loop, cb still fires' );
+  }
 };
 
 #### indexOf -- strict equality (===)

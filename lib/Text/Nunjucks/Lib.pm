@@ -4,6 +4,7 @@ package Text::Nunjucks::Lib;
 use strict;
 use warnings;
 use builtin qw( is_bool created_as_number true false );
+use Carp qw( croak );
 use Scalar::Util qw( blessed refaddr );
 use Text::Nunjucks::Lib::TemplateError;
 use Text::Nunjucks::Lib::Error;
@@ -280,7 +281,12 @@ sub async_iter {
 
 sub async_for {
   my ( $self, $obj, $iter, $cb ) = @_;
-  my $keys = $self->keys( $obj // {} );
+  # JS: lib.keys(arr || {}) -- JS falsiness, not Perl's `// {}` which only
+  # guarded undef and let a 0 / '' / false through to crash keys() on the deref.
+  # None (JS null) is a Runtime sentinel that Lib does not know (ADR 0006); the
+  # only caller that can pass a null iterable, Runtime::async_each, guards it
+  # there before delegating, so _falsy (kind-based, no None) suffices here.
+  my $keys = $self->keys( $self->_falsy($obj) ? {} : $obj );
   my $len  = scalar @$keys;
   my $i    = -1;
 
@@ -462,6 +468,79 @@ sub _strict_eq {
     return $a == $b ? 1 : 0;
   }
   return $a eq $b ? 1 : 0;                       # both strings
+}
+
+#### number_to_string -- ECMAScript Number::toString, shortest round-trip (ADR 0007)
+
+# Not a src/lib.js function: ADR 0007 designates Lib the single home for the
+# JS Number->String routine, and the JS *operators* that home in Runtime feed
+# their numeric results back through it. It reproduces ECMAScript
+# Number::toString: the shortest decimal that round-trips to the same IEEE
+# double, then JS's exponent thresholds and the spellings Infinity / -Infinity
+# / NaN. Every number reaching template output goes through it
+# (Runtime::_js_to_string / suppress_value); nothing uses bare "$n".
+#
+# JS numbers are all IEEE doubles; a Perl scalar can hold an exact 64-bit
+# integer no double can represent -- a literal like 1234567890123456789, or an
+# IV product Perl computed exactly (123456789 * 987654321 stays exact in Perl,
+# but JS rounds it). pack/unpack('d') forces the value through a C double first
+# so the rounding matches Node's. Runtime's operators round their operands the
+# same way before computing, so intermediates are doubles too.
+my $NUM_POS_INF = 9**9**9;
+my $NUM_NEG_INF = -$NUM_POS_INF;
+
+sub number_to_string {
+  my ( $self, $n ) = @_;
+
+  $n = unpack( 'd', pack( 'd', $n ) );      # normalise to a real IEEE double
+
+  return 'NaN'       if $n != $n;           # NaN is the only value != itself
+  return 'Infinity'  if $n == $NUM_POS_INF;
+  return '-Infinity' if $n == $NUM_NEG_INF;
+  return '0'         if $n == 0;            # +0 and -0 both render "0"
+
+  my $neg = $n < 0 ? 1 : 0;
+  my $abs = $neg ? -$n : $n;
+
+  # Shortest significant-digit count p (1..17) whose p-digit rounding of $abs
+  # parses back to exactly $abs. 17 sig digits always round-trip a double, so
+  # the loop terminates; sprintf %e gives the correctly-rounded p-digit form.
+  my ( $digits, $e10 );
+  for my $p ( 1 .. 17 ) {
+    my $sci = sprintf( '%.*e', $p - 1, $abs );
+    if ( 0 + $sci == $abs ) {
+      $sci =~ /\A(\d)(?:\.(\d+))?e([+-]\d+)\z/
+        or croak __PACKAGE__ . '->number_to_string cannot parse ' . $sci;
+      $digits = $1 . ( defined $2 ? $2 : '' );
+      $e10    = 0 + $3;
+      last;
+    }
+  }
+
+  # Strip trailing zeros for the spec's significant digits s (length k); the
+  # decimal point position is n = e10 + 1 (value = s x 10^(n-k)).
+  $digits =~ s/0+\z//;
+  $digits = '0' if $digits eq '';
+  my $k     = length $digits;
+  my $point = $e10 + 1;
+
+  my $out;
+  if ( $k <= $point && $point <= 21 ) {
+    $out = $digits . ( '0' x ( $point - $k ) );
+  } elsif ( 0 < $point && $point <= 21 ) {
+    $out = substr( $digits, 0, $point ) . '.' . substr( $digits, $point );
+  } elsif ( -6 < $point && $point <= 0 ) {
+    $out = '0.' . ( '0' x ( -$point ) ) . $digits;
+  } elsif ( $k == 1 ) {
+    my $e = $point - 1;
+    $out = $digits . 'e' . ( $e >= 0 ? '+' : '-' ) . abs($e);
+  } else {
+    my $e = $point - 1;
+    $out = substr( $digits, 0, 1 ) . '.' . substr( $digits, 1 )
+      . 'e' . ( $e >= 0 ? '+' : '-' ) . abs($e);
+  }
+
+  return $neg ? '-' . $out : $out;
 }
 
 1;
