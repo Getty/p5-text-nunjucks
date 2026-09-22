@@ -1,0 +1,19 @@
+---
+class: standard
+completed: 2026-09-22T21:09:01Z
+created: 2026-09-21T22:46:06Z
+id: 7
+priority: medium
+started: 2026-09-22T21:09:01Z
+status: done
+tags:
+- decision
+- adr
+- semantics
+title: 'ADR: regex literals r/.../flags — JS regex to Perl regex'
+updated: 2026-09-22T21:09:01Z
+---
+
+The lexer produces regex tokens (r/^h.l/gi); the oracle AST dumps them as {regex, flags}; templates use them via .test() and the replace filter. Decide: how a JS pattern + flags (g, i, m, y) becomes a qr// (syntax differences: named groups, \d under /u-less JS vs Perl Unicode, lookbehind, $ vs \z), what the regex value is at runtime (object with test/exec?), and what happens to patterns Perl cannot express (fail loud at compile time). Settle it with the oracle (node maint/oracle.js), not from the docs. Verified upstream facts are listed in .claude/skills/text-nunjucks-core/references/js-semantics.md. Outcome: an ADR in docs/adr/ (next free number), the mechanism in ONE place (Runtime or Lib), corpus cases in t/corpus/ pinning it, and the entry in js-semantics.md moved from "open" to "decided". Needs the maintainer: present the options with a recommendation, do not pick silently.
+
+DECISION MADE -> ADR 0013 (committed): regex literal becomes a blessed Runtime::Regex with test/exec/source/flags/global; flag map i/m/y(\G)/g(carried); qr// for common patterns; inexpressible constructs fail loud at compile. Mechanism lands with the replace filter (k17) / runtime. js-semantics decided.
