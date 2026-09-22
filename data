@@ -1,0 +1,21 @@
+---
+class: standard
+completed: 2026-09-22T21:09:01Z
+created: 2026-09-21T22:46:06Z
+id: 6
+priority: high
+started: 2026-09-22T21:09:01Z
+status: done
+tags:
+- decision
+- adr
+- semantics
+title: 'ADR: native JS methods reachable from templates'
+updated: 2026-09-22T21:09:01Z
+---
+
+Upstream memberLookup hands out native JS members, so templates can call them. Oracle: s.toUpperCase() works, arr.join('-') → 3-1-2, arr.length → 3, s.length → 7, arr.indexOf(1) → 1. A Perl scalar/array has no such members. Decide the emulated surface: at minimum .length on strings and arrays; then which String.prototype / Array.prototype methods (and that mutators like push/pop really mutate). Survey real-world templates + upstream tests for what is actually used. jinja-compat adds its own Python-style layer on top (separate ticket). Mechanism lives in Runtime::member_lookup only. Settle it with the oracle (node maint/oracle.js), not from the docs. Verified upstream facts are listed in .claude/skills/text-nunjucks-core/references/js-semantics.md. Outcome: an ADR in docs/adr/ (next free number), the mechanism in ONE place (Runtime or Lib), corpus cases in t/corpus/ pinning it, and the entry in js-semantics.md moved from "open" to "decided". Needs the maintainer: present the options with a recommendation, do not pick silently.
+
+From k9 lib port (F2): Lib::in_operator string branch coerces an undef search key to 'undefined' (JS String.prototype.indexOf ToString), but the full ToString of defined non-strings is deferred here -- booleans coerce to 'true'/'false' and numbers to JS number-strings in JS, not Perl's '1'/stringify. Verified still divergent: in_operator(true,'true story') -> Perl false vs oracle true. When k6 (native coercion) is decided, wire the in_operator string branch (and any sibling using Perl stringify) to the k6 ToString mechanism and add a corpus case.
+
+DECISION MADE by maintainer (direction: maximum fidelity, cost accepted, new deps welcome) and recorded in ADR 0008, committed 066cb68; js-semantics marked decided. Mechanism implemented in k14 (Runtime); render-mode corpus-pinning follows once Environment (k16) makes render real. This ticket closes when the mechanism + oracle-grounded tests land.
