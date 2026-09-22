@@ -5,6 +5,29 @@ use Test::More;
 use Scalar::Util qw( blessed );
 use JSON::MaybeXS ();
 use Path::Tiny qw( path );
+use builtin ();
+
+no warnings 'experimental::builtin';
+
+# render mode (k16): an in-memory loader mirroring maint/oracle.js's MemoryLoader
+# (getSource -> {src, path, noCache}). Defined only if the Loader base is present
+# so the file still loads on a port where render is not yet implemented.
+BEGIN {
+  if ( eval { require Text::Nunjucks::Loader; 1 } ) {
+    eval q{
+      package Corpus::MemoryLoader;
+      use Moo;
+      extends 'Text::Nunjucks::Loader';
+      has templates => ( is => 'ro', default => sub { {} } );
+      sub get_source {
+        my ( $self, $name ) = @_;
+        return undef unless exists $self->templates->{$name};
+        return { src => $self->templates->{$name}, path => $name, noCache => 1 };
+      }
+      1;
+    } or die $@;
+  }
+}
 
 # Replay every t/corpus/*.json case against the Perl port, dispatched by the
 # case's mode (lex / parse / render). Each case carries the oracle's result as
@@ -116,16 +139,56 @@ sub run_parse {
 
 #### render mode -- env.renderString / env.render through the callback API
 
-# Replaying render needs the Environment/loader/callback surface that ADR 0003
-# (CPS) and tickets k16/k20 define: an in-memory loader for cases that carry
-# "templates" + "render", opts and context threaded in, jinjaCompat toggled,
-# and the render callback resolved. That API does not exist yet, so render
-# cases stay TODO. When it lands, set render_supported to detect it and wire
-# run_render to the oracle's render() semantics (maint/oracle.js).
-sub render_supported { 0 }
+# The render surface (Environment/Context/Template + the callback protocol of
+# ADR 0003) lands with k16. Cases carry an optional in-memory "templates" bag,
+# a "render" name (else "template" is renderString'd), a "context" and "opts".
+# jinjaCompat is not modelled yet (no corpus case sets it); assert it if seen.
+sub render_supported {
+  eval { require Text::Nunjucks::Environment; 1 } && Text::Nunjucks::Environment->can('new');
+}
+
+# Normalise a JSON-decoded value to the port's value model at the context
+# boundary (the oracle hands upstream real JS values): JSON booleans become
+# native booleans (ADR 0001) and JSON null becomes the None sentinel (ADR 0006).
+# Numbers/strings pass through; containers are rebuilt so caller hashes stay
+# plain (ADR 0011 gives them key-sorted iteration, not this harness's concern).
+sub normalize {
+  my ($v) = @_;
+  return Text::Nunjucks::Runtime->None if !defined $v;            # JS null
+  if ( blessed($v) ) {
+    return ( $v ? builtin::true() : builtin::false() ) if $v->isa('JSON::PP::Boolean');
+    return $v;
+  }
+  my $r = ref $v;
+  return { map { $_ => normalize( $v->{$_} ) } keys %$v } if $r eq 'HASH';
+  return [ map { normalize($_) } @$v ] if $r eq 'ARRAY';
+  return $v;
+}
 
 sub run_render {
-  die "render-mode replay is not wired yet (render API lands in k16/k20)\n";
+  my ($case) = @_;
+  die "jinjaCompat render cases are not modelled yet\n" if $case->{jinjaCompat};
+
+  require Text::Nunjucks::Runtime;
+  my $loader = Corpus::MemoryLoader->new( templates => $case->{templates} // {} );
+  my $opts   = defined $case->{opts}    ? normalize( $case->{opts} )    : undef;
+  my $ctx    = defined $case->{context} ? normalize( $case->{context} ) : {};
+  my $env    = Text::Nunjucks::Environment->new( [$loader], $opts );
+
+  my ( $err, $res, $called );
+  my $cb = sub { ( $err, $res ) = @_; $called = 1; };
+
+  if ( defined $case->{render} ) {
+    $env->render( $case->{render}, $ctx, $cb );
+  }
+  else {
+    $env->render_string( $case->{template}, $ctx, $cb );
+  }
+
+  die "render callback was never invoked (template deferred without resolving)\n"
+    unless $called;
+  return error_result($err) if $err;
+  return { ok => true, output => $res };
 }
 
 my %MODE = (
