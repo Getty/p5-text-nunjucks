@@ -1,0 +1,19 @@
+---
+class: standard
+completed: 2026-09-22T21:09:00Z
+created: 2026-09-21T22:46:05Z
+id: 2
+priority: high
+started: 2026-09-22T21:09:00Z
+status: done
+tags:
+- decision
+- adr
+- semantics
+title: 'ADR: undefined vs null — how Perl undef maps to the two JS empties'
+updated: 2026-09-22T21:09:00Z
+---
+
+JS has undefined AND null; Perl has undef. Upstream: both render as empty string, but `n is defined` is true for a context value of null and false for a missing one; `none` literal is null; throwOnUndefined fires for both; member lookup on either yields undefined without error. Options: (a) exists-based — missing key = undefined, present undef = null, no sentinel; breaks down for values flowing through set/macros/filters. (b) a null sentinel object for `none`/JSON null, undef = undefined. (c) collapse both and record the divergence. Settle it with the oracle (node maint/oracle.js), not from the docs. Verified upstream facts are listed in .claude/skills/text-nunjucks-core/references/js-semantics.md. Outcome: an ADR in docs/adr/ (next free number), the mechanism in ONE place (Runtime or Lib), corpus cases in t/corpus/ pinning it, and the entry in js-semantics.md moved from "open" to "decided". Needs the maintainer: present the options with a recommendation, do not pick silently.
+
+DECISION MADE by maintainer (direction: maximum fidelity, cost accepted, new deps welcome) and recorded in ADR 0006, committed 066cb68; js-semantics marked decided. Mechanism implemented in k14 (Runtime); render-mode corpus-pinning follows once Environment (k16) makes render real. This ticket closes when the mechanism + oracle-grounded tests land.
