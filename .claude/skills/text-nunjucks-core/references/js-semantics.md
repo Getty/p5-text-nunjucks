@@ -36,7 +36,7 @@ Measured: `'0'`, `[]`, `{}` → truthy; `0`, `''` → falsy; `{{ z or 'd' }}` wi
 | `{{ n.foo }}` / `{{ u.foo.bar }}` | both empty, no error |
 | `{{ a.b.c }}` with `throwOnUndefined` | error `attempted to output null or undefined value` |
 
-## Object key order — open, ticket k3
+## Object key order — decided, ADR 0011
 
 `{% for k, v in {b:1, a:2} %}` → `b=1;a=2;` (insertion order). `dump` →
 `{"b":1,"a":2}`. `dictsort|join(',')` → `a,2,b,1`.
@@ -50,7 +50,7 @@ Filters: `'3.7'|int` → `3` · `'x'|int` → empty · `'3.7abc'|float` → `3.7
 `2.5|round` → `3` · `-2.5|round` → `-2` · `[10,9,1]|sort` → `1,9,10` ·
 `['b','A','c']|sort` → `A,b,c`.
 
-## Strings are UTF-16 upstream — open, ticket k5
+## Strings are UTF-16 upstream — decided, ADR 0012
 
 On `'héllo😀'`: `length` → `7`, `s.length` → `7`, `s[1]` → `é`, `reverse` →
 splits the surrogate pair into two lone surrogates.
@@ -65,7 +65,7 @@ splits the surrogate pair into two lone surrogates.
 
 `{{ [3,1,2] }}` → `3,1,2` · `{{ {} }}` → `[object Object]`.
 
-## Regex literals — open, ticket k7
+## Regex literals — decided, ADR 0013
 
 `{{ r/^h.l/.test(s) }}` → `true`. Oracle AST dumps a regex as
 `{ "regex": <source>, "flags": <flags> }`.
