@@ -1,0 +1,89 @@
+[
+  {
+    "name": "failed func call to undefined symbol",
+    "template": "{{ foo(\"cvan\") }}",
+    "expected": {
+      "ok": false,
+      "error": {
+        "name": "Template render error",
+        "message": "(unknown path)\n  Error: Unable to call `foo`, which is undefined or falsey"
+      }
+    }
+  },
+  {
+    "name": "failed func call to bracket lookup",
+    "template": "{{ foo[\"bar\"](\"cvan\") }}",
+    "expected": {
+      "ok": false,
+      "error": {
+        "name": "Template render error",
+        "message": "(unknown path)\n  Error: Unable to call `foo[\"bar\"]`, which is undefined or falsey"
+      }
+    }
+  },
+  {
+    "name": "failed func call to dot lookup",
+    "template": "{{ foo.bar(\"second call\") }}",
+    "expected": {
+      "ok": false,
+      "error": {
+        "name": "Template render error",
+        "message": "(unknown path)\n  Error: Unable to call `foo[\"bar\"]`, which is undefined or falsey"
+      }
+    }
+  },
+  {
+    "name": "failed func call full name over ten chars",
+    "template": "{{ foo.barThatIsLongerThanTen() }}",
+    "expected": {
+      "ok": false,
+      "error": {
+        "name": "Template render error",
+        "message": "(unknown path)\n  Error: Unable to call `foo[\"barThatIsLongerThanTen\"]`, which is undefined or falsey"
+      }
+    }
+  },
+  {
+    "name": "failed func call multiple args (dot lookup)",
+    "template": "{{ foo.bar(\"multiple\", \"args\") }}",
+    "expected": {
+      "ok": false,
+      "error": {
+        "name": "Template render error",
+        "message": "(unknown path)\n  Error: Unable to call `foo[\"bar\"]`, which is undefined or falsey"
+      }
+    }
+  },
+  {
+    "name": "failed func call multiple args (nested bracket lookup)",
+    "template": "{{ foo[\"bar\"][\"zip\"](\"multiple\", \"args\") }}",
+    "expected": {
+      "ok": false,
+      "error": {
+        "name": "Template render error",
+        "message": "(unknown path)\n  Error: Unable to call `foo[\"bar\"][\"zip\"]`, which is undefined or falsey"
+      }
+    }
+  },
+  {
+    "name": "macro allows undefined argument in last position",
+    "template": "{% macro foo(bar, baz) %}{{ bar }} {{ baz }}{% endmacro %}{{ foo(\"hello\", nosuchvar) }}",
+    "expected": {
+      "ok": true,
+      "output": "hello "
+    }
+  },
+  {
+    "name": "macro allows a prototype-less argument in last position",
+    "template": "{% macro foo(bar, baz) %}{{ bar }} {{ baz.qux }}{% endmacro %}{{ foo(\"hello\", noProto) }}",
+    "context": {
+      "noProto": {
+        "qux": "world"
+      }
+    },
+    "expected": {
+      "ok": true,
+      "output": "hello world"
+    }
+  }
+]
