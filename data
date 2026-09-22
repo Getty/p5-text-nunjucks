@@ -1,0 +1,17 @@
+---
+class: standard
+created: 2026-09-22T05:00:32Z
+depends_on:
+- 22
+id: 39
+priority: low
+status: backlog
+tags:
+- port
+- tests
+- upstream-suite
+title: Port tests/jinja-compat.js → t/upstream/jinja-compat.t (13 it)
+updated: 2026-09-22T05:00:32Z
+---
+
+Port upstream/nunjucks/tests/jinja-compat.js to t/upstream/jinja-compat.t, oracle-grounded (jinjaCompat mode).
