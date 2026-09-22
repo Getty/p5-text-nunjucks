@@ -1,0 +1,23 @@
+---
+claimed_at: 2026-09-22T20:02:56Z
+claimed_by: text-nunjucks-worker
+class: standard
+completed: 2026-09-22T20:02:56Z
+created: 2026-09-21T22:47:06Z
+depends_on:
+- 15
+id: 16
+priority: high
+started: 2026-09-22T20:02:56Z
+status: done
+tags:
+- port
+title: Port environment.js → Environment, Context, Template (+ Loader base)
+updated: 2026-09-22T20:02:56Z
+---
+
+src/environment.js (590 lines) + src/loader.js + src/object.js semantics: Environment (opts: autoescape default TRUE, throwOnUndefined, trimBlocks, lstripBlocks, tags, dev), add_filter/get_filter, add_test/get_test, add_global/get_global, add_extension/remove/has, resolve_template, get_template (cache, eager compile, parent-relative names, ignoreMissing), render / render_string per the callables ADR; Context (lookup, set_variable, blocks, add_block/get_block/get_super, exported vars); Template (lazy compile via eval of the emitted Perl, root render function, get_exported). Loader base incl. on/emit ('update', 'load') and resolve for relative templates. Make t/corpus.t replay mode 'render' here — from this ticket on the corpus is live. Port per skill text-nunjucks-core: same functions, same order, snake_case names, upstream control flow kept. Probe surprises with the oracle and commit them as corpus cases. Any deliberate difference needs an ADR in the same change.
+
+Fidelity audit (81043a9) done: structurally 1:1, no drift. F1 (opts !! vs Perl ?: truthiness for dev/throwOnUndefined/trimBlocks/lstripBlocks/add_filter-async) -> worker fix in flight. F2 (Context.lookup JS in prototype-chain vs Perl own-key exists; toString/constructor render empty vs native fn) -> maintainer ADR pending. guarded-require bridge -> transitional, clears with k17/k19. waterfall/iterable/mapping/extends-fix confirmed faithful. Loader.resolve dotdot -> k19.
+
+F1 fixed (d830dc6): opts truthiness via _truthy. Audit clean, no structural drift. F2 + guarded-require recorded as ADRs 0014/0015 (adc7faf). Loader.resolve -> k19 note, Tests lower/upper -> k17 note. k16 complete.
