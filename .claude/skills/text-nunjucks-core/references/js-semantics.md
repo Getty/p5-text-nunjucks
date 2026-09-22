@@ -26,7 +26,7 @@ Perl disagrees: the string `'0'`, an empty array, an empty object.
 Measured: `'0'`, `[]`, `{}` → truthy; `0`, `''` → falsy; `{{ z or 'd' }}` with
 `z = 0` → `d`; `{{ '0' and 1 }}` → `1` (and/or return the operand, not a bool).
 
-## undefined vs null — open, ticket k2
+## undefined vs null — decided, ADR 0006
 
 | Template (`n` = JSON null, `u` missing) | Upstream |
 |---|---|
@@ -41,7 +41,7 @@ Measured: `'0'`, `[]`, `{}` → truthy; `0`, `''` → falsy; `{{ z or 'd' }}` wi
 `{% for k, v in {b:1, a:2} %}` → `b=1;a=2;` (insertion order). `dump` →
 `{"b":1,"a":2}`. `dictsort|join(',')` → `a,2,b,1`.
 
-## Numbers — open, ticket k4
+## Numbers — decided, ADR 0007
 
 `1/3` → `0.3333333333333333` · `0.1+0.2` → `0.30000000000000004` · `1e21` →
 `1e+21` · `10/4` → `2.5` · `7 // 2` → `3` · `2 ** 0.5` → `1.4142135623730951` ·
@@ -55,7 +55,7 @@ Filters: `'3.7'|int` → `3` · `'x'|int` → empty · `'3.7abc'|float` → `3.7
 On `'héllo😀'`: `length` → `7`, `s.length` → `7`, `s[1]` → `é`, `reverse` →
 splits the surrogate pair into two lone surrogates.
 
-## Native JS members from templates — open, ticket k6
+## Native JS members from templates — decided, ADR 0008
 
 `s.toUpperCase()` works · `arr.join('-')` → `3-1-2` · `arr.length` → `3` ·
 `arr.indexOf(1)` → `1`. Calling something missing:
@@ -70,7 +70,7 @@ splits the surrogate pair into two lone surrogates.
 `{{ r/^h.l/.test(s) }}` → `true`. Oracle AST dumps a regex as
 `{ "regex": <source>, "flags": <flags> }`.
 
-## Callables, kwargs, `this`, callback API — open, ticket k8
+## Callables, kwargs, `this`, callback API — decided, ADR 0009
 
 ## Escaping — port as is, no decision needed
 
