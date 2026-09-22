@@ -1,0 +1,17 @@
+---
+class: standard
+created: 2026-09-22T05:00:30Z
+depends_on:
+- 16
+id: 33
+priority: medium
+status: backlog
+tags:
+- port
+- tests
+- upstream-suite
+title: Port tests/core.js → t/upstream/core.t (2 it)
+updated: 2026-09-22T05:00:30Z
+---
+
+Port upstream/nunjucks/tests/core.js to t/upstream/core.t (core render behaviour), oracle-grounded.
