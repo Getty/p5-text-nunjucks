@@ -1,0 +1,16 @@
+---
+class: standard
+created: 2026-09-22T01:52:50Z
+id: 29
+priority: low
+status: backlog
+tags:
+- parser
+- divergence
+- adr
+title: 'Divergence: malformed ''from X import <non-symbol>'' -- upstream TypeError
+  vs port silent success'
+updated: 2026-09-22T01:52:50Z
+---
+
+Fidelity audit F2 (k12). {% from "x" import 3 %}: upstream parser.js:358 does name.value.charAt(0) and throws a raw JS TypeError ('name.value.charAt is not a function') -- not a TemplateError. Port (Parser.pm:441 via _char_at) stringifies 3 -> '3', ne '_', and SUCCEEDS, building a FromImport with a Literal name. Only affects invalid syntax. The raw TypeError text is not faithfully reproducible in Perl. Decide: either (a) an ADR recording this as a deliberate difference (do not chase the exact TypeError), or (b) parse_from rejects a non-Symbol name (fail loud, closer to upstream's crash than silent success but with different text). Recommend (b)+ADR: a correct port should not silently accept invalid syntax. Low severity, error path only.
