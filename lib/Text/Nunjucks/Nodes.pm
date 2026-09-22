@@ -310,6 +310,19 @@ sub _extend {
 
 _extend(@$_) for @NODE_TYPES;
 
+# Set carries a non-field `body`. Upstream declares Set with fields
+# {targets, value}, and the parser attaches a block-set's Capture to node.body
+# dynamically (parser.js parseSet), which the compiler reads back
+# (compiler.js compileSet). It is not a field(), so it never appears in the AST
+# dump -- exactly the CallExtension.autoescape pattern above: a real accessor
+# that lives outside the field list. Added here rather than in the table so the
+# @NODE_TYPES rows keep mapping 1:1 to nodes.js's extend() calls.
+{
+  package Text::Nunjucks::Nodes::Set;
+  use Moo;
+  has body => ( is => 'rw' );
+}
+
 #### printNodes -- AST pretty-printer (upstream: print / printNodes)
 
 my $JSON = JSON::MaybeXS->new( canonical => 1, convert_blessed => 1 )->pretty(1);
