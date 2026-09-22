@@ -1643,5 +1643,590 @@
         }
       ]
     }
+  },
+  {
+    "name": "function call tokens",
+    "mode": "lex",
+    "template": "{{ foo(bar) }}",
+    "expected": {
+      "ok": true,
+      "output": [
+        {
+          "type": "variable-start",
+          "value": "{{",
+          "lineno": 0,
+          "colno": 0
+        },
+        {
+          "type": "whitespace",
+          "value": " ",
+          "lineno": 0,
+          "colno": 2
+        },
+        {
+          "type": "symbol",
+          "value": "foo",
+          "lineno": 0,
+          "colno": 3
+        },
+        {
+          "type": "left-paren",
+          "value": "(",
+          "lineno": 0,
+          "colno": 6
+        },
+        {
+          "type": "symbol",
+          "value": "bar",
+          "lineno": 0,
+          "colno": 7
+        },
+        {
+          "type": "right-paren",
+          "value": ")",
+          "lineno": 0,
+          "colno": 10
+        },
+        {
+          "type": "whitespace",
+          "value": " ",
+          "lineno": 0,
+          "colno": 11
+        },
+        {
+          "type": "variable-end",
+          "value": "}}",
+          "lineno": 0,
+          "colno": 12
+        }
+      ]
+    }
+  },
+  {
+    "name": "group (parenthesized tuple) tokens",
+    "mode": "lex",
+    "template": "{{ (1, 2, 3) }}",
+    "expected": {
+      "ok": true,
+      "output": [
+        {
+          "type": "variable-start",
+          "value": "{{",
+          "lineno": 0,
+          "colno": 0
+        },
+        {
+          "type": "whitespace",
+          "value": " ",
+          "lineno": 0,
+          "colno": 2
+        },
+        {
+          "type": "left-paren",
+          "value": "(",
+          "lineno": 0,
+          "colno": 3
+        },
+        {
+          "type": "int",
+          "value": "1",
+          "lineno": 0,
+          "colno": 4
+        },
+        {
+          "type": "comma",
+          "value": ",",
+          "lineno": 0,
+          "colno": 5
+        },
+        {
+          "type": "whitespace",
+          "value": " ",
+          "lineno": 0,
+          "colno": 6
+        },
+        {
+          "type": "int",
+          "value": "2",
+          "lineno": 0,
+          "colno": 7
+        },
+        {
+          "type": "comma",
+          "value": ",",
+          "lineno": 0,
+          "colno": 8
+        },
+        {
+          "type": "whitespace",
+          "value": " ",
+          "lineno": 0,
+          "colno": 9
+        },
+        {
+          "type": "int",
+          "value": "3",
+          "lineno": 0,
+          "colno": 10
+        },
+        {
+          "type": "right-paren",
+          "value": ")",
+          "lineno": 0,
+          "colno": 11
+        },
+        {
+          "type": "whitespace",
+          "value": " ",
+          "lineno": 0,
+          "colno": 12
+        },
+        {
+          "type": "variable-end",
+          "value": "}}",
+          "lineno": 0,
+          "colno": 13
+        }
+      ]
+    }
+  },
+  {
+    "name": "array literal tokens",
+    "mode": "lex",
+    "template": "{{ [1, 2, 3] }}",
+    "expected": {
+      "ok": true,
+      "output": [
+        {
+          "type": "variable-start",
+          "value": "{{",
+          "lineno": 0,
+          "colno": 0
+        },
+        {
+          "type": "whitespace",
+          "value": " ",
+          "lineno": 0,
+          "colno": 2
+        },
+        {
+          "type": "left-bracket",
+          "value": "[",
+          "lineno": 0,
+          "colno": 3
+        },
+        {
+          "type": "int",
+          "value": "1",
+          "lineno": 0,
+          "colno": 4
+        },
+        {
+          "type": "comma",
+          "value": ",",
+          "lineno": 0,
+          "colno": 5
+        },
+        {
+          "type": "whitespace",
+          "value": " ",
+          "lineno": 0,
+          "colno": 6
+        },
+        {
+          "type": "int",
+          "value": "2",
+          "lineno": 0,
+          "colno": 7
+        },
+        {
+          "type": "comma",
+          "value": ",",
+          "lineno": 0,
+          "colno": 8
+        },
+        {
+          "type": "whitespace",
+          "value": " ",
+          "lineno": 0,
+          "colno": 9
+        },
+        {
+          "type": "int",
+          "value": "3",
+          "lineno": 0,
+          "colno": 10
+        },
+        {
+          "type": "right-bracket",
+          "value": "]",
+          "lineno": 0,
+          "colno": 11
+        },
+        {
+          "type": "whitespace",
+          "value": " ",
+          "lineno": 0,
+          "colno": 12
+        },
+        {
+          "type": "variable-end",
+          "value": "}}",
+          "lineno": 0,
+          "colno": 13
+        }
+      ]
+    }
+  },
+  {
+    "name": "blocks with no surrounding whitespace",
+    "mode": "lex",
+    "template": "data{{hello}}{%if%}data",
+    "expected": {
+      "ok": true,
+      "output": [
+        {
+          "type": "data",
+          "value": "data",
+          "lineno": 0,
+          "colno": 0
+        },
+        {
+          "type": "variable-start",
+          "value": "{{",
+          "lineno": 0,
+          "colno": 4
+        },
+        {
+          "type": "symbol",
+          "value": "hello",
+          "lineno": 0,
+          "colno": 6
+        },
+        {
+          "type": "variable-end",
+          "value": "}}",
+          "lineno": 0,
+          "colno": 11
+        },
+        {
+          "type": "block-start",
+          "value": "{%",
+          "lineno": 0,
+          "colno": 13
+        },
+        {
+          "type": "symbol",
+          "value": "if",
+          "lineno": 0,
+          "colno": 15
+        },
+        {
+          "type": "block-end",
+          "value": "%}",
+          "lineno": 0,
+          "colno": 17
+        },
+        {
+          "type": "data",
+          "value": "data",
+          "lineno": 0,
+          "colno": 19
+        }
+      ]
+    }
+  },
+  {
+    "name": "filter pipe token",
+    "mode": "lex",
+    "template": "{{ foo|bar }}",
+    "expected": {
+      "ok": true,
+      "output": [
+        {
+          "type": "variable-start",
+          "value": "{{",
+          "lineno": 0,
+          "colno": 0
+        },
+        {
+          "type": "whitespace",
+          "value": " ",
+          "lineno": 0,
+          "colno": 2
+        },
+        {
+          "type": "symbol",
+          "value": "foo",
+          "lineno": 0,
+          "colno": 3
+        },
+        {
+          "type": "pipe",
+          "value": "|",
+          "lineno": 0,
+          "colno": 6
+        },
+        {
+          "type": "symbol",
+          "value": "bar",
+          "lineno": 0,
+          "colno": 7
+        },
+        {
+          "type": "whitespace",
+          "value": " ",
+          "lineno": 0,
+          "colno": 10
+        },
+        {
+          "type": "variable-end",
+          "value": "}}",
+          "lineno": 0,
+          "colno": 11
+        }
+      ]
+    }
+  },
+  {
+    "name": "arithmetic operators plus minus times divide",
+    "mode": "lex",
+    "template": "{{ 3+3-3*3/3 }}",
+    "expected": {
+      "ok": true,
+      "output": [
+        {
+          "type": "variable-start",
+          "value": "{{",
+          "lineno": 0,
+          "colno": 0
+        },
+        {
+          "type": "whitespace",
+          "value": " ",
+          "lineno": 0,
+          "colno": 2
+        },
+        {
+          "type": "int",
+          "value": "3",
+          "lineno": 0,
+          "colno": 3
+        },
+        {
+          "type": "operator",
+          "value": "+",
+          "lineno": 0,
+          "colno": 4
+        },
+        {
+          "type": "int",
+          "value": "3",
+          "lineno": 0,
+          "colno": 5
+        },
+        {
+          "type": "operator",
+          "value": "-",
+          "lineno": 0,
+          "colno": 6
+        },
+        {
+          "type": "int",
+          "value": "3",
+          "lineno": 0,
+          "colno": 7
+        },
+        {
+          "type": "operator",
+          "value": "*",
+          "lineno": 0,
+          "colno": 8
+        },
+        {
+          "type": "int",
+          "value": "3",
+          "lineno": 0,
+          "colno": 9
+        },
+        {
+          "type": "operator",
+          "value": "/",
+          "lineno": 0,
+          "colno": 10
+        },
+        {
+          "type": "int",
+          "value": "3",
+          "lineno": 0,
+          "colno": 11
+        },
+        {
+          "type": "whitespace",
+          "value": " ",
+          "lineno": 0,
+          "colno": 12
+        },
+        {
+          "type": "variable-end",
+          "value": "}}",
+          "lineno": 0,
+          "colno": 13
+        }
+      ]
+    }
+  },
+  {
+    "name": "custom block start and end tags",
+    "mode": "lex",
+    "template": "{= =}",
+    "opts": {
+      "tags": {
+        "blockStart": "{=",
+        "blockEnd": "=}"
+      }
+    },
+    "expected": {
+      "ok": true,
+      "output": [
+        {
+          "type": "block-start",
+          "value": "{=",
+          "lineno": 0,
+          "colno": 0
+        },
+        {
+          "type": "whitespace",
+          "value": " ",
+          "lineno": 0,
+          "colno": 2
+        },
+        {
+          "type": "block-end",
+          "value": "=}",
+          "lineno": 0,
+          "colno": 3
+        }
+      ]
+    }
+  },
+  {
+    "name": "custom comment start and end tags",
+    "mode": "lex",
+    "template": "<!-- A comment! -->",
+    "opts": {
+      "tags": {
+        "commentStart": "<!--",
+        "commentEnd": "-->"
+      }
+    },
+    "expected": {
+      "ok": true,
+      "output": [
+        {
+          "type": "comment",
+          "value": "<!-- A comment! -->",
+          "lineno": 0,
+          "colno": 0
+        }
+      ]
+    }
+  },
+  {
+    "name": "overriding variableStart makes the default {{ ordinary data",
+    "mode": "lex",
+    "template": "{{",
+    "opts": {
+      "tags": {
+        "variableStart": "<<<"
+      }
+    },
+    "expected": {
+      "ok": true,
+      "output": [
+        {
+          "type": "data",
+          "value": "{{",
+          "lineno": 0,
+          "colno": 0
+        }
+      ]
+    }
+  },
+  {
+    "name": "whitespace runs including a newline are their own tokens",
+    "mode": "lex",
+    "template": "data {% 1 2\n   3  %} data",
+    "expected": {
+      "ok": true,
+      "output": [
+        {
+          "type": "data",
+          "value": "data ",
+          "lineno": 0,
+          "colno": 0
+        },
+        {
+          "type": "block-start",
+          "value": "{%",
+          "lineno": 0,
+          "colno": 5
+        },
+        {
+          "type": "whitespace",
+          "value": " ",
+          "lineno": 0,
+          "colno": 7
+        },
+        {
+          "type": "int",
+          "value": "1",
+          "lineno": 0,
+          "colno": 8
+        },
+        {
+          "type": "whitespace",
+          "value": " ",
+          "lineno": 0,
+          "colno": 9
+        },
+        {
+          "type": "int",
+          "value": "2",
+          "lineno": 0,
+          "colno": 10
+        },
+        {
+          "type": "whitespace",
+          "value": "\n   ",
+          "lineno": 0,
+          "colno": 11
+        },
+        {
+          "type": "int",
+          "value": "3",
+          "lineno": 1,
+          "colno": 3
+        },
+        {
+          "type": "whitespace",
+          "value": "  ",
+          "lineno": 1,
+          "colno": 4
+        },
+        {
+          "type": "block-end",
+          "value": "%}",
+          "lineno": 1,
+          "colno": 6
+        },
+        {
+          "type": "data",
+          "value": " data",
+          "lineno": 1,
+          "colno": 8
+        }
+      ]
+    }
   }
 ]
