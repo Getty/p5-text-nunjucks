@@ -1,0 +1,19 @@
+---
+class: standard
+completed: 2026-09-22T21:09:01Z
+created: 2026-09-21T22:46:06Z
+id: 5
+priority: medium
+started: 2026-09-22T21:09:01Z
+status: done
+tags:
+- decision
+- adr
+- semantics
+title: 'ADR: strings — UTF-16 code units vs Perl characters'
+updated: 2026-09-22T21:09:01Z
+---
+
+JS strings are UTF-16. Oracle on 'héllo😀': length → 7 (not 6), reverse → splits the surrogate pair, s[1] → é. Affects length, reverse, truncate, center, slice/indexing, wordcount, batch on strings. Options: (a) Perl character semantics everywhere, record the astral-plane divergence (recommended: nobody wants lone surrogates); (b) emulate code units. Also decide the I/O contract: templates and context are decoded character strings, render returns characters, loaders decode UTF-8. Settle it with the oracle (node maint/oracle.js), not from the docs. Verified upstream facts are listed in .claude/skills/text-nunjucks-core/references/js-semantics.md. Outcome: an ADR in docs/adr/ (next free number), the mechanism in ONE place (Runtime or Lib), corpus cases in t/corpus/ pinning it, and the entry in js-semantics.md moved from "open" to "decided". Needs the maintainer: present the options with a recommendation, do not pick silently.
+
+DECISION MADE -> ADR 0012 (committed): string ops emulate UTF-16 code units (option b), overriding the initial option-a recommendation, because the maintainer requires the same template to run byte-identically in Perl and Node. length/slice/reverse/truncate/center/wordcount/batch reckon in code units; astral chars = 2 units; lone surrogates on pair-splitting (1:1). Mechanism in Lib, lands with k17. REVERSIBLE by maintainer to option-a (char semantics, documented astral divergence) before k17 implements it.
