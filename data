@@ -1,0 +1,25 @@
+---
+claimed_at: 2026-09-22T03:54:58Z
+claimed_by: text-nunjucks-worker
+class: standard
+completed: 2026-09-22T18:08:58Z
+created: 2026-09-21T22:47:06Z
+depends_on:
+- 12
+- 13
+- 14
+id: 15
+priority: high
+started: 2026-09-22T18:08:58Z
+status: done
+tags:
+- port
+title: Port compiler.js → Text::Nunjucks::Compiler (emits Perl)
+updated: 2026-09-22T18:08:58Z
+---
+
+src/compiler.js (1200 lines): same Compiler class, same compile_* method per node type, same buffer/scope-closer bookkeeping, same tmpid scheme — but the emitted source is Perl. Root shape per ADR 0003: sub root ($env, $context, $frame, $runtime, $cb) with lineno/colno tracking, try/catch → handle_error → $cb->($err), blocks as b_<name>, return of { root, b_* }. Emitted code calls Runtime for every operator whose JS semantics differ from Perl's (+, ==, truthiness, comparison, in) — never inline Perl operators for those. String literals emitted safely (no interpolation holes: think '$', '@', '\\'). Keep the emitted source readable; it is what users debug. Port per skill text-nunjucks-core: same functions, same order, snake_case names, upstream control flow kept. Probe surprises with the oracle and commit them as corpus cases. Any deliberate difference needs an ADR in the same change.
+
+FORWARD NOTES from k14 (runtime) audit: (1) regular-for compiler MUST emit a JS-truthiness guard equivalent to upstream if(arr) (compiler.js:664) -- use $runtime->_truthy($arr), NOT 'if defined', else runtime.keys(None) crashes (same root as async-loop bug F2). (2) suppress_value faithfully returns the RAW value when autoescape is off, so the output path must append via $runtime->_js_to_string(...), NOT Perl '.' concat, or numbers stringify with %.15g instead of number_to_string. (3) The runtime operator surface (op_add/sub/mul/div/mod/pow/floordiv/neg/pos/concat, op_eq/ne/seq/sne/lt/gt/le/ge, op_and/or/not, _truthy/_falsy) is complete and matches compiler.js emission -- call these, never native Perl operators.
+
+Ported + fidelity-audited + audit fix landed in 7c38d56. Auditor: 78/78 functions 1:1; one wrong-output finding (number-literal emission -> number_to_string, ADR 0007) fixed with an oracle-grounded regression case. Suite 502 PASS.
