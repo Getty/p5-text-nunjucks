@@ -1,0 +1,22 @@
+---
+claimed_at: 2026-09-22T01:52:50Z
+claimed_by: text-nunjucks-worker
+class: standard
+completed: 2026-09-22T01:52:50Z
+created: 2026-09-21T22:47:04Z
+depends_on:
+- 10
+- 11
+id: 12
+priority: high
+started: 2026-09-22T01:52:50Z
+status: done
+tags:
+- port
+title: Port parser.js → Text::Nunjucks::Parser
+updated: 2026-09-22T01:52:50Z
+---
+
+src/parser.js (1368 lines): the full recursive-descent parser incl. every tag (if/elif/else, for/asyncEach/asyncAll, block, extends, include, import/from, macro, call, set incl. block-set, filter, raw/verbatim, switch/case, ifAsync), expression precedence chain, inline-if, filters with args, keyword args, dict/array/group literals, extensions hook (parse via extension.parse), error messages + positions. Port tests/parser.js → t/upstream/parser.t. Parse-mode corpus: every template under upstream/nunjucks/tests/templates/ becomes a case, and t/corpus.t compares the Perl AST dump to the oracle's. Port per skill text-nunjucks-core: same functions, same order, snake_case names, upstream control flow kept. Probe surprises with the oracle and commit them as corpus cases. Any deliberate difference needs an ADR in the same change.
+
+Ported + fidelity-audited. 56/56 methods 1:1, full precedence chain link-for-link, 0 wrong-output for valid templates. Committed bc04c5e (not pushed). Audit findings: F1 (ast_dump false-red on switch/call blocks) = harness bug, tracked k28. F2 (malformed non-symbol from-import) tracked as new divergence ticket. F3 (big-int literal) k4-deferred, noted on k4. Worker points all verified 1:1 (Set.body non-field accessor, k7 regex passthrough, k4 num conversion, k8 extension duck-typing). 22 parse corpus cases real-green, t/10-parser.t 834 assertions via isAST.
