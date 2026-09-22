@@ -396,6 +396,30 @@ sub in_operator {
   );
 }
 
+#### JS regex character classes -- explicit ECMAScript sets (ADR 0005)
+
+# JavaScript's \s is a FIXED ECMAScript set (WhiteSpace + LineTerminator), not
+# Perl's \s. It includes U+00A0 (NBSP, a member of the lexer's whitespace_chars)
+# and U+FEFF, and excludes U+0085; Perl's default /d \s additionally matches (or
+# not) U+00A0 depending on whether the target SV carries the UTF-8 flag, so the
+# same template would lex differently by how it reached the engine. The engine's
+# own regexes therefore map JS \s to this explicit class, matched flag-
+# independently under /u. Membership is oracle-verified via the lstripBlocks
+# /^\s+$/ path (see t/10-lexer.t / the k10 report), never recalled:
+#   WhiteSpace     U+0009 U+000B U+000C U+0020 U+00A0 U+FEFF
+#                  + Unicode Zs: U+1680, U+2000-U+200A, U+202F, U+205F, U+3000
+#   LineTerminator U+000A U+000D U+2028 U+2029
+# \d and \w get the same treatment when the parser/filters first need them; only
+# \s is needed so far (ADR 0005: added on demand, one seam per class, like
+# _strict_eq / _falsy below).
+my $JS_WHITESPACE_CLASS =
+  qr/[\x09\x0A\x0B\x0C\x0D\x20\x{A0}\x{1680}\x{2000}-\x{200A}\x{2028}\x{2029}\x{202F}\x{205F}\x{3000}\x{FEFF}]/u;
+
+sub js_whitespace_class {
+  my ($self) = @_;
+  return $JS_WHITESPACE_CLASS;
+}
+
 #### JS !x (falsiness) for _prepare_attribute_parts and future !x sites
 
 # Provisional JS falsiness keyed to ADR 0001 kinds. JS falsy values are
