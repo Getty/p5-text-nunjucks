@@ -1,0 +1,19 @@
+---
+class: standard
+completed: 2026-09-22T21:09:00Z
+created: 2026-09-21T22:46:05Z
+id: 3
+priority: high
+started: 2026-09-22T21:09:00Z
+status: done
+tags:
+- decision
+- adr
+- semantics
+title: 'ADR: object key order — JS insertion order vs Perl hashes'
+updated: 2026-09-22T21:09:00Z
+---
+
+JS objects iterate in insertion order; Perl hashes do not. Observable upstream: `{% for k, v in obj %}`, `dump` (JSON.stringify), `list`, `dictsort` tie order, `items`/`keys` in jinja-compat, dict literals in templates. Oracle: {b:1,a:2} iterates b then a. Options: (a) template dict literals build an ordered hash, plain Perl hashes iterate sorted by key (deterministic, documented divergence for caller data); (b) accept ordered-hash objects (Tie::IxHash / Hash::Ordered) from callers and honour their order; (a)+(b) combined is the likely answer. Decide the ordered-hash implementation and whether it is a dependency. Settle it with the oracle (node maint/oracle.js), not from the docs. Verified upstream facts are listed in .claude/skills/text-nunjucks-core/references/js-semantics.md. Outcome: an ADR in docs/adr/ (next free number), the mechanism in ONE place (Runtime or Lib), corpus cases in t/corpus/ pinning it, and the entry in js-semantics.md moved from "open" to "decided". Needs the maintainer: present the options with a recommendation, do not pick silently.
+
+DECISION MADE (maintainer direction: max fidelity, new deps welcome) -> ADR 0011 (committed): Hash::Ordered internally + template/engine objects, plain caller hashes sorted by key, caller ordered-hashes honoured. Hash::Ordered joins cpanfile. Mechanism + corpus land with k17 (filters) / k14-16. js-semantics decided.
