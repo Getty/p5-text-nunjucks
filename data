@@ -1,0 +1,25 @@
+---
+claimed_at: 2026-09-22T03:54:57Z
+claimed_by: text-nunjucks-worker
+class: standard
+completed: 2026-09-22T03:54:57Z
+created: 2026-09-21T22:47:05Z
+depends_on:
+- 9
+- 2
+- 4
+- 6
+- 8
+id: 14
+priority: high
+started: 2026-09-22T03:54:57Z
+status: done
+tags:
+- port
+title: Port runtime.js → Text::Nunjucks::Runtime
+updated: 2026-09-22T03:54:57Z
+---
+
+src/runtime.js (380 lines): Frame (set/get/lookup/resolve/push/pop, topLevel, isolateWrites), makeMacro, makeKeywordArgs, numArgs, SafeString (stringifies, survives filters via copySafeness/markSafe), suppressValue (autoescape), ensureDefined, memberLookup, contextOrFrameLookup, callWrap, handleError, asyncEach/asyncAll, fromIterator. This is where the decided JS-semantics mechanisms live — blocked on the ADR tickets it depends on; port the independent parts (Frame, SafeString) first if they are still open. Port tests/runtime.js → t/upstream/runtime.t. Port per skill text-nunjucks-core: same functions, same order, snake_case names, upstream control flow kept. Probe surprises with the oracle and commit them as corpus cases. Any deliberate difference needs an ADR in the same change.
+
+Ported + fidelity-audited + fixed. Faithful function-by-function; IEEE-double trap neutralized (operands/results via _dbl). 3 wrong-output fixes red-then-green oracle-grounded: F1 SafeString numeric index -> undef; F2 async-loop over null/falsy crash (Runtime async_each/async_all + Lib::async_for, JS-truthiness guard, None-awareness layered in Runtime); F3 -0 divisor sign via POSIX::copysign in op_mul/op_div. F4 UTF-16 deferred to k17 (ADR 0012, tracked on k17). ADR mechanisms implemented: None (0006), number_to_string in Lib + op_* operators (0007), member surface + in-place mutators (0008), KwArgs (0009), Lib::Error (0010). Committed 74d65ac. 311 tests, 0 skip/TODO. Forward-notes for compiler recorded on k15.
