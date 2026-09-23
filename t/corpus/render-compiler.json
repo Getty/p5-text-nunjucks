@@ -501,6 +501,38 @@
     }
   },
   {
+    "name": "regex method: exec no capture groups returns single-element array (k48)",
+    "template": "{{ r/x/.exec(\"xx\") }}",
+    "expected": {
+      "ok": true,
+      "output": "x"
+    }
+  },
+  {
+    "name": "regex method: exec no capture groups keyed access [0] (k48)",
+    "template": "{{ r/x/.exec(\"xx\")[0] }}",
+    "expected": {
+      "ok": true,
+      "output": "x"
+    }
+  },
+  {
+    "name": "regex method: exec no capture groups keyed access [1] renders empty (k48)",
+    "template": "{{ r/x/.exec(\"xx\")[1] }}",
+    "expected": {
+      "ok": true,
+      "output": ""
+    }
+  },
+  {
+    "name": "regex method: exec no capture groups no-match renders empty (k48)",
+    "template": "{{ r/x/.exec(\"yy\") }}",
+    "expected": {
+      "ok": true,
+      "output": ""
+    }
+  },
+  {
     "name": "regex string concat (k43)",
     "template": "{{ r/x/gi + \"!\" }}",
     "expected": {

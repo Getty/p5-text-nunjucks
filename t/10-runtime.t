@@ -716,6 +716,94 @@ subtest 'Regex: JS g/y flag semantics honour lastIndex (k46, ADR 0013)' => sub {
   }
 };
 
+# k48: Perl 5.40 list-context =~ against a qr// with no capture groups returns
+# the boolean match result instead of an empty list. JS RegExp.prototype.exec
+# always returns [full, ...captures] for any pattern. exec() must drop the
+# boolean so the result has JS's shape: [full] for no-groups, [full, c1, c2, ...]
+# otherwise. Pinned at the unit level to complement the corpus coverage (which
+# catches it through the full render path).
+subtest 'Regex::exec drops the boolean for no-capture-group patterns (k48)' => sub {
+  # --- stateless match ------------------------------------------------
+  {
+    my $r = $R->make_regex( 'x', '' );
+    is_deeply( $r->exec('xx'), ['x'],
+      'stateless: no groups -> [full] (no boolean)' );
+
+    my $m = $r->exec('xx');
+    is( $m->[0], 'x', 'stateless: m[0] is the full match' );
+    is( $m->[1], undef, 'stateless: m[1] is undef (undefined, not "true")' );
+    is( scalar @$m, 1, 'stateless: array length is 1' );
+
+    is( $r->exec('yy'), undef, 'stateless: no-match still returns undef' );
+  }
+
+  # --- capture groups still work (the k43 contract is preserved) ------
+  {
+    my $r = $R->make_regex( '(.)(.)', '' );
+    is_deeply( $r->exec('ab'), [ 'ab', 'a', 'b' ],
+      'capture groups: [full, c1, c2] (k43 shape)' );
+
+    my $m = $r->exec('ab');
+    is( $m->[0], 'ab', 'capture groups: m[0] is the full match' );
+    is( $m->[1], 'a',  'capture groups: m[1] is the first capture' );
+    is( $m->[2], 'b',  'capture groups: m[2] is the second capture' );
+  }
+
+  # --- mixed: non-capturing + capturing -------------------------------
+  {
+    my $r = $R->make_regex( '(?:x)(y)', '' );
+    is_deeply( $r->exec('xy'), [ 'xy', 'y' ],
+      '(?:x)(y): (?:...) does not capture, only (y) does' );
+  }
+
+  # --- named capture group --------------------------------------------
+  {
+    my $r = $R->make_regex( '(?<name>\d+)', '' );
+    is_deeply( $r->exec('42'), [ '42', '42' ],
+      '(?<name>...) is a named capture and counts' );
+  }
+
+  # --- global /g, no groups -------------------------------------------
+  {
+    my $r = $R->make_regex( 'x', 'g' );
+    is_deeply( $r->exec('xx'), ['x'],
+      'global: no groups -> [full] (no boolean)' );
+    is( $r->lastIndex, 1, 'global: lastIndex still advances to 1' );
+    is_deeply( $r->exec('xx'), ['x'],
+      'global: second exec -> [full] (no boolean)' );
+    is( $r->lastIndex, 2, 'global: lastIndex now 2' );
+    is( $r->exec('xx'), undef, 'global: third exec past end -> undef' );
+  }
+
+  # --- sticky /y, no groups -------------------------------------------
+  {
+    my $r = $R->make_regex( 'x', 'y' );
+    is_deeply( $r->exec('xyx'), ['x'],
+      'sticky: no groups -> [full] (no boolean)' );
+    is( $r->lastIndex, 1, 'sticky: lastIndex advances' );
+    is( $r->exec('xyx'), undef,
+      'sticky: at advanced pos, anchored no-match -> undef' );
+    is( $r->lastIndex, 0, 'sticky: lastIndex reset to 0 on no-match' );
+  }
+
+  # --- the _captures_count classifier on edge bodies ------------------
+  {
+    # 0 = no groups, N = N groups
+    is( $R->Regex->_count_capture_groups('x'),               0, 'plain body -> 0' );
+    is( $R->Regex->_count_capture_groups('(.)(.)'),          2, '(.)(.) -> 2' );
+    is( $R->Regex->_count_capture_groups('(?:x)'),           0, '(?:x) -> 0 (non-capturing)' );
+    is( $R->Regex->_count_capture_groups('(?=x)x'),          0, '(?=x)x -> 0 (lookahead)' );
+    is( $R->Regex->_count_capture_groups('(?!x)x'),          0, '(?!x)x -> 0 (neg lookahead)' );
+    is( $R->Regex->_count_capture_groups('(?<=x)x'),         0, '(?<=x)x -> 0 (lookbehind)' );
+    is( $R->Regex->_count_capture_groups('(?<!x)x'),         0, '(?<!x)x -> 0 (neg lookbehind)' );
+    is( $R->Regex->_count_capture_groups('(?<name>\d+)'),    1, '(?<name>\\d+) -> 1 (named capture)' );
+    is( $R->Regex->_count_capture_groups('[a](b)'),          1, '[a](b) -> 1 (char class ignored)' );
+    is( $R->Regex->_count_capture_groups('\(x\)'),           0, '\\(x\\) -> 0 (escaped parens)' );
+    is( $R->Regex->_count_capture_groups('(?#c)x'),          0, '(?#c)x -> 0 (comment group)' );
+    is( $R->Regex->_count_capture_groups('(a)(?:b)(c)'),     2, '(a)(?:b)(c) -> 2' );
+  }
+};
+
 done_testing;
 
 # helper: look a member up and call it via call_wrap (the compiler's path)

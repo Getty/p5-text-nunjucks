@@ -78,6 +78,13 @@ package Text::Nunjucks::Runtime::Regex {
   # success, reset to 0 on failure. Built unconditionally; test/exec pick which
   # one to use from the g/y flags.
   has _qr_anchored => ( is => 'ro', required => 1 );
+  # _captures_count is the number of native (numbered or named) capture groups
+  # in the JS regex body. Cached at construction time (k48) so exec can detect
+  # the no-groups case -- Perl 5.40's list-context `=~` returns the boolean
+  # match result instead of an empty list when the qr// has no groups, which
+  # the JS RegExp.prototype.exec contract never produces. Zero means: drop the
+  # boolean before assembling the [full, ...captures] array.
+  has _captures_count => ( is => 'ro', required => 1 );
   # lastIndex is the JS RegExp's mutable match position. JS resets it on every
   # successful match (g/y) and on every failed match (g/y); for non-g/non-y
   # regexes it is left alone. The current value is template-visible
@@ -159,10 +166,12 @@ package Text::Nunjucks::Runtime::Regex {
   # is what `{{ r/(.)(.).exec('ab') }}` wants). On no-match returns null
   # (undef, which the engine renders as empty). The Perl qr// match in list
   # context returns only the capture groups; we prepend $& (the full match)
-  # so the array matches RegExp.prototype.exec's shape. NOTE: the no-capture-
-  # groups boolean quirk in list context (qr// with no groups returns a
-  # builtin::true prepended) is tracked separately as #48 and NOT addressed
-  # here -- this ticket is about g/y state, not about that surface detail.
+  # so the array matches RegExp.prototype.exec's shape.
+  #
+  # k48: when the pattern has no capture groups, Perl 5.40's list-context
+  # match returns the boolean match result (builtin::true / builtin::false)
+  # instead of an empty list. JS never does that. _captures_count == 0
+  # means drop the boolean from @captures before assembling the result.
   #
   # Implementation note: pos() is only honoured as a START position by
   # m//g matches (perldoc perlop). So a plain list-context `$str =~ $qr`
@@ -192,6 +201,7 @@ package Text::Nunjucks::Runtime::Regex {
     $str = defined($str) ? "$str" : '';
     my $sticky = $self->_is_sticky;
     my $global = index( $self->flags, 'g' ) >= 0;
+    my $no_caps = $self->_captures_count == 0;
 
     if ($sticky) {
       my $qr_a  = $self->_qr_anchored;
@@ -199,6 +209,7 @@ package Text::Nunjucks::Runtime::Regex {
       pos($str) = $start;
       my @captures = $str =~ $qr_a;   # non-/g; \G anchors at pos
       if (@captures) {
+        @captures = () if $no_caps;   # k48: drop the bool for no-groups patterns
         $self->lastIndex( $start + length($&) );
         return [ $&, @captures ];
       }
@@ -215,6 +226,7 @@ package Text::Nunjucks::Runtime::Regex {
         # Slice the matched region; non-/g list-context match returns
         # exactly the captures from this one match.
         my @captures = substr( $str, $start, $end - $start ) =~ $qr;
+        @captures = () if $no_caps;   # k48: drop the bool for no-groups patterns
         $self->lastIndex($end);
         return [ $full, @captures ];
       }
@@ -223,7 +235,62 @@ package Text::Nunjucks::Runtime::Regex {
     }
     my @captures = $str =~ $self->_qr;
     return undef unless @captures;
+    @captures = () if $no_caps;       # k48: drop the bool for no-groups patterns
     return [ $&, @captures ];
+  }
+
+  # k48: count capture groups in a JS regex body. ECMAScript regex syntax:
+  # `(` starts a group; `(?:` / `(?=` / `(?!` / `(?<=` / `(?<!` / `(?#` are
+  # non-capturing / zero-width / comment forms; `(?<NAME>` is a NAMED
+  # capture group (counts); everything else is a numbered capture group.
+  # Backslash escapes any following byte; `[...]` is a character class
+  # where parens are literals. Walk the body byte-by-byte (the JS body is
+  # ASCII for every pattern in the corpus; UTF-8 non-ASCII literals would
+  # still walk correctly because substr/skip is over bytes, not codepoints).
+  sub _count_capture_groups {
+    my ( $self, $body ) = @_;
+    my $count    = 0;
+    my $i        = 0;
+    my $len      = length $body;
+    my $in_class = 0;
+    while ( $i < $len ) {
+      my $c = substr( $body, $i, 1 );
+      if ( $c eq '\\' ) {                                # escape: skip 2 bytes
+        $i += 2;
+        next;
+      }
+      if ($in_class) {                                   # inside [...] -- parens literal
+        $in_class = 0 if $c eq ']';
+        $i++;
+        next;
+      }
+      if ( $c eq '[' ) {
+        $in_class = 1;
+        $i++;
+        next;
+      }
+      if ( $c eq '(' && $i + 1 < $len && substr( $body, $i + 1, 1 ) eq '?' ) {
+        my $after = $i + 2 < $len ? substr( $body, $i + 2, 1 ) : '';
+        if ( $after eq ':' || $after eq '=' || $after eq '!' || $after eq '#' ) {
+          # (?:  (?=  (?!  (?# -- non-capturing / zero-width / comment
+        }
+        elsif ( $after eq '<' ) {
+          my $after_lt = $i + 3 < $len ? substr( $body, $i + 3, 1 ) : '';
+          if ( $after_lt ne '=' && $after_lt ne '!' ) {
+            $count++;                # (?<NAME> -- named capture
+          }
+          # (?<= / (?<! -- lookbehind, non-capturing
+        }
+        else {
+          $count++;                  # (?xyz -- invalid ECMAScript; count defensively
+        }
+      }
+      elsif ( $c eq '(' ) {
+        $count++;                    # plain ( ... ) -- numbered capture
+      }
+      $i++;
+    }
+    return $count;
   }
 
   # Stringification: `/source/flags` -- matches RegExp.prototype.toString so
@@ -505,10 +572,11 @@ sub make_regex {
   }
 
   return $self->Regex->new(
-    source       => $source,
-    flags        => $flags,
-    _qr          => $qr,
-    _qr_anchored => $qr_anchored,
+    source          => $source,
+    flags           => $flags,
+    _qr             => $qr,
+    _qr_anchored    => $qr_anchored,
+    _captures_count => $self->Regex->_count_capture_groups($source),
   );
 }
 
