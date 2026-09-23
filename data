@@ -1,0 +1,45 @@
+---
+claimed_at: 2026-09-23T06:21:00Z
+claimed_by: p5-text-nunjucks
+class: standard
+completed: 2026-09-23T06:21:00Z
+created: 2026-09-23T01:26:37Z
+depends_on:
+- 43
+id: 46
+priority: medium
+started: 2026-09-23T05:52:54Z
+status: done
+tags:
+- fidelity
+- regex
+- bug
+title: 'Bug: Runtime::Regex ignores JS g/y flags for matching (ADR 0013 partial)'
+updated: 2026-09-23T06:21:00Z
+---
+
+k43 (commit 900f3e5) implements the Regex class per ADR 0013 but the matching behaviour of the g and y flags diverges from JS:
+
+- Oracle: r/x/y.test("yxy") renders "false" (JS /y is sticky, no match at position 0).
+- Perl port: renders "true" (y flag ignored, single match anywhere).
+
+- Oracle: stateful global iteration set r = r/\d/g then m1 = r.exec("1 2 3") twice and m2 and m3 likewise yields "1|2|3" (lastIndex advances across calls).
+- Perl port: yields the same value for each call (no lastIndex tracking). With capture-group patterns the array shape breaks because Perl qr// in list context with no groups returns a builtin::true boolean which gets prepended to captures and routed through is_bool in _js_to_string.
+
+ADR 0013 requires:
+- y (sticky) to map to \G-anchored matching (the port ignores y entirely).
+- g to be carried on the object and honoured by test/replace/global matching (not a qr// flag).
+
+make_regex records the flags on the object but test() and exec() use a stateless qr// ($str =~ $self->_qr). Worker comment acknowledges "out of scope for a stateless qr// ... grow on demand" and "oracle-confirmed". The oracle-confirmed claim holds for the 13 corpus cases added in k43 (one-shot test/exec). It does not hold for stateful or sticky cases, which are observable in templates today.
+
+Per ADR 0004 (a difference without an ADR is a bug), ADR 0013 already documents the intended behaviour but the implementation does not honour it.
+
+Required fix: track lastIndex on the Regex object as a rw Moo attribute initialised to 0; reset to 0 on test/exec when g flag absent; honour \G anchor when y flag set; advance lastIndex after a successful match when g or y. Add corpus cases that exercise stateful iteration (g) and sticky matching (y) to pin the contract.
+
+Re-claiming: fix lastIndex tracking + sticky /\G anchor. Dispatched after k43 audit. Will run before #48 because both touch Regex::exec.
+
+2026-09-23 06:08 Fixed: sticky \G-anchored match (y), lastIndex-tracking on global (g), stateless otherwise. 9 new corpus cases (5 sticky, 4 global) oracle-grounded via maint/corpus-regen. New t/10-runtime.t subtest (36 assertions) pins lastIndex reset-on-failure and advance-on-match for test/exec, both g/y and stateless branches, plus member_lookup exposure. #48 (no-capture-groups list-context boolean quirk) explicitly out of scope -- tested with capture-group patterns to avoid entangling. Full prove -lr t/ green: 611 tests, 0 TODO, 0 skip. xt/oracle-live.t green. Deep recursion warning on Environment::async_iter is pre-existing (reproduced on stash, unrelated to k46). Two implementation notes documented in Runtime.pm: (1) Perl pos() only advances on m//g, so stateful test uses /$qr/g with qr cached in a local to dodge the Regex class '' overload that would stringify the qr as /source/flags. (2) Perl list-context match with /g iterates ALL matches and returns ALL captures, so exec splits: sticky uses non-/g list-context match against the \G-anchored qr (anchors at pos, returns captures from one match); global uses scalar /g probe then substr the matched region for a non-/g list-context match on the slice (skips like JS, captures cleanly). Ready for fidelity-auditor review.
+
+Fix landed (08095ca). Ready for fidelity-auditor review against src/runtime.js RegExp.prototype.test/exec and the JS lastIndex semantics. 9 oracle-grounded corpus cases, 36 runtime subtests, prove -lr t/ green (611 tests, 0 TODO, 0 skip), xt/oracle-live.t green. #48 left untouched per ticket instructions.
+
+audit: clean -- 0 findings. Sticky /y via \G-anchored _qr_anchored verified: test('xyx') at pos 0 advances lastIndex to 1; test('yxy') at pos 0 fails and resets to 0; pos-1 test('xyx') fails (anchored at 'y') and resets to 0; exec returns undef on no-match. Global /g via scalar /g with pos() start verified: 3 successive /(\d)/g.exec('1 2 3') yields [1,1]/[2,2]/[3,3] with lastIndex 1->3->5; 4th exec returns undef and resets lastIndex to 0. Stateless branch verified: /x/ test/exec leaves lastIndex unchanged at deliberate 7 regardless of match/no-match outcome. member_lookup('lastIndex') returns current value. All 9 oracle-regenerated corpus cases match JS oracle output byte-for-byte. 36 t/10-runtime.t subtest assertions green. prove -lr t/ 14 files, 611 tests, 0 TODO, 0 skip. xt/oracle-live.t green. #48 (no-capture-groups list-context boolean quirk) correctly out of scope; new tests use capture-group patterns to avoid entangling. Spot-checked additional cases (gy flags, sticky with i modifier, sticky multi-char x+, sticky capture group, g+y sticky takes precedence) all match JS oracle.
