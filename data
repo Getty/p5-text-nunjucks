@@ -1,0 +1,60 @@
+---
+claimed_at: 2026-09-23T06:41:53Z
+claimed_by: p5-text-nunjucks
+class: standard
+completed: 2026-09-23T06:41:53Z
+created: 2026-09-23T01:26:46Z
+depends_on:
+- 43
+- 46
+id: 48
+priority: medium
+started: 2026-09-23T06:23:57Z
+status: done
+tags:
+- fidelity
+- regex
+- bug
+title: 'Bug: Regex::exec prepends a boolean for no-capture-group patterns (Perl 5.40
+  quirk)'
+updated: 2026-09-23T06:41:53Z
+---
+
+k43 implements Regex::exec as:
+  sub exec {
+    my ( $self, $str ) = @_;
+    $str = defined($str) ? "$str" : '';
+    my @captures = $str =~ $self->_qr;
+    return undef unless @captures;
+    return [ $&, @captures ];
+  }
+
+In list context, $str =~ PATTERN returns:
+  - the captured groups if any groups exist;
+  - the boolean match result (builtin::true / builtin::false) if no groups exist.
+
+Measured on Perl 5.40:
+  my @r = "xx" =~ /x/;       # r == (builtin::true)  -- the boolean
+  my @r = "xy" =~ /(.)/;     # r == ("x")             -- the capture
+
+So for a pattern with no capture groups, the port returns:
+  [$&, (builtin::true_or_false)]
+
+which becomes [full_match, true/false], or via _js_to_string "[full,true]".
+
+JS RegExp.prototype.exec returns [full_match, ...captures] -- no boolean -- for any pattern.
+
+Probe (Perl port):
+  {% set r = r/x/g %}{% set m = r.exec("xx") %}{{ m }}   => "x,true"
+
+Oracle for the same case is unmeasured because the corpus has no no-capture-group exec case (the corpus exercises `r/(.)(.)/.exec("ab")` which has 2 groups and incidentally matches). The latent divergence surfaces only when a template does {{ r/x/.exec("xy") }} or iterates the result.
+
+Required fix: detect "no capture groups" in exec and drop the boolean. Easy proxy: check if the pattern body has unescaped "(" not followed by "?:" / "?=" / etc; or compile the qr with a sentinel and inspect $1..$n.
+
+Add a corpus case pinning the no-groups behaviour (e.g. {{ r/x/.exec("xx") }} -> "x") and at least one keyed access (m[0] and m[1]) to lock the shape.
+
+Re-claiming after #46 done (audit clean). Dispatched: drop the boolean that Perl 5.40 list-context =~ prepends for no-capture-group patterns in Regex::exec. Pattern matches the k43/k46 worker's stated approach.
+
+Closed: Pattern-introspection strategy (A). _count_capture_groups walks the body for unescaped '(' outside char classes, skipping (?:, (?=, (?!, (?<=, (?<!, (?# and counting (?<NAME> as named. _captures_count cached on Regex at make_regex time; all three exec branches (stateless, sticky, global) drop @captures to () when count == 0. 4 corpus cases added (maint/corpus-regen, not hand-edited); k48 subtest pins shape directly on Runtime including _count_capture_groups edge cases. prove -lr t/ = 620 green. xt/oracle-live.t = ok. k43 capture-group cases unchanged, k46 sticky/global stateful lastIndex semantics unchanged.
+
+2026-09-23 06:41 audit: clean -- walker correct on all 12 edge cases (incl. (?:, (?=, (?!, (?<=, (?<!, (?#, (?<NAME>, escaped \(, char class [(]); all 3 exec branches drop @captures on _captures_count==0 (Runtime.pm:212,229,238); k43 capture-group shape preserved ([ab,a,b]); k46 sticky/global stateful lastIndex unchanged (1→3→5); no-match returns undef in all branches; 4 corpus cases oracle-verified byte-for-byte (k48 plain, [0], [1], no-match); prove -lr t/ green (620/620), xt/oracle-live.t green. Minor note: (?#c) comment syntax is rejected by the JS regex engine (ES2015+), so the (?#c) walker branch and its subtest assertion are unreachable through real templates -- defensive, not a bug.
