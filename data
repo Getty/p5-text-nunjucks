@@ -1,0 +1,50 @@
+---
+claimed_at: 2026-09-23T00:59:01Z
+claimed_by: p5-text-nunjucks
+class: standard
+completed: 2026-09-23T00:59:01Z
+created: 2026-09-22T20:24:44Z
+id: 42
+priority: high
+started: 2026-09-22T21:09:27Z
+status: done
+tags:
+- bug
+title: 'Finish ADR 0011: Lib::keys must sort plain caller hashes (nondeterministic
+  iteration order)'
+updated: 2026-09-23T00:59:01Z
+---
+
+Surfaced by k21. ADR 0011 (accepted) is only half-built: Lib::keys() sorts nothing for a plain Perl hashref caller context -- its own inline comment says the rest of ADR 0011, sorting plain caller hashes, is still open. Result: a plain hashref context value iterates in raw, per-process-random Perl hash order (observed as real flakiness across PERL_HASH_SEED values). ADR 0011 decided plain caller hashes are SORTED. Fix: sort keys in the plain-hashref branch of Lib::keys (the Hash::Ordered branch is already correct). dump/dictsort/list/items over plain hashes may share this or stay with k17.
+
+2026-09-22 21:15 Sort landed in Lib::keys (lib/Text/Nunjucks/Lib.pm:338). ADR 0011 fully built:
+plain caller hashes now go through `sort CORE::keys` so a {b:1,a:2,c:3}
+context hash iterates a,b,c deterministically across PERL_HASH_SEED values
+(perl-level hash order is the documented divergence from JS insertion order).
+Hash::Ordered keeps its own (insertion) order, matching JS Object.keys.
+
+Regression: t/10-lib.t added subtest 'keys orders plain hashes key-sorted;
+Hash::Ordered in own order (ADR 0011)' covering plain hash, second sample
+to defeat the perl-order accident, Hash::Ordered own order, async_for
+flow-through, and _entries/_values propagation. The 5-arg iter destructure
+is pinned -- a 4-arg one would bind $next to $len (integer) and crash on
+the first recursion.
+
+t/upstream/compiler.t: comment at the include-tags test updated to reflect
+ADR 0011 closed (plain hashref would render identically -- still
+Hash::Ordered here because the JS-fidelity path deserves a pinned instance).
+The dict-literal and caller-Hash::Ordered subtests were restored to their
+if/else TODO branches -- those still fail on asyncEach/asyncAll because
+Lib::async_for reads `$obj->{$k}` (parallel work in Lib.pm:290-308 now
+adds a Hash::Ordered branch, so the k21/k17 follow-up may be very close
+to closing).
+
+Tests: prove -lr t/10-lib.t t/00-load.t t/corpus.t t/10-lexer.t t/10-nodes.t
+t/10-parser.t t/10-transformer.t = 404 passing, 7 files. The other 7 files
+(t/10-{compiler,environment,runtime,upstream/*}) fail to load because of
+uncommitted work in lib/Text/Nunjucks/Runtime.pm (a `Runtime::Regex` class
+with a sub flags reader that collides with Moo's auto-generated one --
+"You cannot overwrite a locally defined method (flags) with a reader").
+That's a separate ticket's parallel work, not k42 -- ADR 0013 regex.
+
+2026-09-22 21:15 ADR 0011 implemented: plain caller hashes now key-sorted via sort CORE::keys in Lib::keys. Hash::Ordered branch unchanged. Regression in t/10-lib.t (new subtest + Hash::Ordered use_ok). Comment at the include-tags test in t/upstream/compiler.t updated to reflect ADR closed. Other 7 test files fail to load because of uncommitted ADR 0013 Regex work in Runtime.pm -- not k42 scope. Needs fidelity-audit.
