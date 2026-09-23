@@ -270,13 +270,35 @@ subtest 'member_lookup: numbers, hashes, blessed objects' => sub {
   is( $R->member_lookup( $R->member_lookup( { a => { b => 7 } }, 'a' ), 'b' ),
     7, '{{ a.b }} nested' );
 
-  # blessed object: a member call binds the owner as $self (ADR 0009)
+  # ADR 0016: blessed-object member_lookup is the PROPERTY seam -- returns
+  # the value (an accessor result / attribute read), not a coderef. The
+  # method-call seam is member_lookup_method (tested below). Until ADR 0009
+  # this would also need a value-only accessor; the test obj below has greet
+  # that returns a string, so member_lookup produces the string directly.
   my $obj = TN_Test_Obj->new('world');
-  my $m   = $R->member_lookup( $obj, 'greet' );
+  is( $R->member_lookup( $obj, 'nonesuch' ), undef, 'missing member -> undefined' );
+  is( $R->member_lookup( $obj, 'name' ), 'world', 'name attribute readable' );
+};
+
+# ADR 0016: the method-call seam. FunCall over a LookupVal (e.g. obj.foo())
+# resolves its callable through here, not through member_lookup. Hash/array
+# values are returned only if they are coderefs (matches upstream's
+# "not a function" TypeError for plain-object calls).
+subtest 'member_lookup_method: blessed objects bind the owner (ADR 0016)' => sub {
+  my $obj = TN_Test_Obj->new('world');
+  my $m   = $R->member_lookup_method( $obj, 'greet' );
   ok( ref($m) eq 'CODE', 'method member -> a bound closure' );
   is( $R->call_wrap( $m, 'obj.greet', undef, [] ), 'hi world',
     'member call runs $obj->greet, owner bound' );
-  is( $R->member_lookup( $obj, 'nonesuch' ), undef, 'missing method -> undefined' );
+  is( $R->member_lookup_method( $obj, 'nonesuch' ), undef,
+    'missing method -> undefined' );
+
+  # plain hash: callable value -> bound; non-callable -> undef (upstream
+  # `obj.foo()` over a plain hash with no `foo` member dies "not a function").
+  is( $R->member_lookup_method( { greet => sub { 'coderef-value' } }, 'greet' )->(),
+    'coderef-value', 'plain-hash coderef member returned as-is' );
+  is( $R->member_lookup_method( { name => 'world' }, 'greet' ), undef,
+    'plain-hash non-callable member -> undef (call_wrap dies with upstream text)' );
 };
 
 subtest 'member_lookup: SafeString is a String OBJECT, not a primitive (F1)' => sub {
@@ -595,6 +617,7 @@ BEGIN {
   package TN_Test_Obj;
   sub new { my ( $c, $name ) = @_; bless { name => $name }, $c }
   sub greet { my ($self) = @_; 'hi ' . $self->{name} }
+  sub name  { $_[0]->{name} }
 
   package TN_Test_Ctx;
   sub new { my ( $c, $h ) = @_; bless { h => $h }, $c }

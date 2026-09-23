@@ -632,8 +632,15 @@ package Text::Nunjucks::Compiler::Compiler {
   }
 
   sub compile_lookup_val {
-    my ( $self, $node, $frame ) = @_;
-    $self->_emit('$runtime->member_lookup((');
+    my ( $self, $node, $frame, $seam ) = @_;
+    # ADR 0016: the seam is the property-read one by default
+    # ($runtime->member_lookup); FunCall hands us 'method' so a blessed-object
+    # member comes back as a callable for call_wrap. compile_fun_call is the
+    # only caller that flips the seam.
+    my $sym = ( $seam && $seam eq 'method' )
+      ? '$runtime->member_lookup_method(('
+      : '$runtime->member_lookup((';
+    $self->_emit($sym);
     $self->_compile_expression( $node->target, $frame );
     $self->_emit('), ');
     $self->_compile_expression( $node->val, $frame );
@@ -683,7 +690,17 @@ package Text::Nunjucks::Compiler::Compiler {
         . '; ' );
 
     $self->_emit('$runtime->call_wrap(');
-    $self->_compile_expression( $node->name, $frame );
+
+    # ADR 0016: the callable argument comes from the method-call seam
+    # (member_lookup_method), not the property-read one -- otherwise a
+    # blessed object's `obj.foo` would render its value rather than hand
+    # call_wrap something to invoke. A bare Symbol (foo()) goes through the
+    # normal expression compile (Frame/Context lookup yields the coderef).
+    if ( $node->name->typename eq 'LookupVal' ) {
+      $self->compile_lookup_val( $node->name, $frame, 'method' );
+    } else {
+      $self->_compile_expression( $node->name, $frame );
+    }
 
     # Name of what we're calling, for friendly errors on a failed lookup.
     $self->_emit(

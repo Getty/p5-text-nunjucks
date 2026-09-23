@@ -416,5 +416,112 @@
       "ok": true,
       "output": "0.30000000000000004"
     }
+  },
+  {
+    "name": "regex literal toString: name [0-9] backslash (autoescape off, k43)",
+    "template": "{{ r/name [0-9] \\// }}",
+    "opts": {
+      "autoescape": false
+    },
+    "expected": {
+      "ok": true,
+      "output": "/name [0-9] \\//"
+    }
+  },
+  {
+    "name": "regex literal toString: simple gi (autoescape on, k43)",
+    "template": "{{ r/x/gi }}",
+    "expected": {
+      "ok": true,
+      "output": "/x/gi"
+    }
+  },
+  {
+    "name": "regex property: source (k43)",
+    "template": "{{ r/x/gi.source }}",
+    "expected": {
+      "ok": true,
+      "output": "x"
+    }
+  },
+  {
+    "name": "regex property: flags (k43)",
+    "template": "{{ r/x/gi.flags }}",
+    "expected": {
+      "ok": true,
+      "output": "gi"
+    }
+  },
+  {
+    "name": "regex property: global true (k43)",
+    "template": "{{ r/x/g.global }}",
+    "expected": {
+      "ok": true,
+      "output": "true"
+    }
+  },
+  {
+    "name": "regex property: global false when flag absent (k43)",
+    "template": "{{ r/x/y.global }}",
+    "expected": {
+      "ok": true,
+      "output": "false"
+    }
+  },
+  {
+    "name": "regex method: test true (k43)",
+    "template": "{{ r/h/.test(\"hi\") }}",
+    "expected": {
+      "ok": true,
+      "output": "true"
+    }
+  },
+  {
+    "name": "regex method: test false (k43)",
+    "template": "{{ r/x/.test(\"hi\") }}",
+    "expected": {
+      "ok": true,
+      "output": "false"
+    }
+  },
+  {
+    "name": "regex method: exec captures joined (k43)",
+    "template": "{{ r/(.)(.)/.exec(\"ab\") }}",
+    "expected": {
+      "ok": true,
+      "output": "ab,a,b"
+    }
+  },
+  {
+    "name": "regex method: exec no match renders empty (k43)",
+    "template": "{{ r/x/.exec(\"ab\") }}",
+    "expected": {
+      "ok": true,
+      "output": ""
+    }
+  },
+  {
+    "name": "regex string concat (k43)",
+    "template": "{{ r/x/gi + \"!\" }}",
+    "expected": {
+      "ok": true,
+      "output": "/x/gi!"
+    }
+  },
+  {
+    "name": "regex exec falsy in if (k43)",
+    "template": "{% if r/x/.exec(\"ab\") %}YES{% else %}NO{% endif %}",
+    "expected": {
+      "ok": true,
+      "output": "NO"
+    }
+  },
+  {
+    "name": "regex exec truthy in if (k43)",
+    "template": "{% if r/h/.exec(\"hi\") %}YES{% else %}NO{% endif %}",
+    "expected": {
+      "ok": true,
+      "output": "YES"
+    }
   }
 ]

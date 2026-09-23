@@ -53,6 +53,73 @@ package Text::Nunjucks::Runtime::KwArgs {
   # class: its hash IS the data. isKeywordArgs is a blessed/isa check.
 }
 
+#### Regex -- template regex literal (ADR 0013)
+#
+# A template `/.../flags` becomes a blessed Regex object with the members
+# templates read on a JS RegExp (source, flags, global) and call (test, exec).
+# The attributes are the JS ones verbatim (source, flags) -- per the k43
+# discipline, `flags` is a Moo attribute (auto-generated accessor), NEVER a
+# hand-rolled `sub flags` (the previous half-attempt collided with Moo's reader
+# and made the whole class unloadable; the rewrite is fresh, not patched).
+package Text::Nunjucks::Runtime::Regex {
+  use Moo;
+  use namespace::autoclean;
+  use overload
+    '""'   => \&_stringify,
+    'bool' => sub { 1 },
+    fallback => 1;
+
+  has source => ( is => 'ro', required => 1 );
+  has flags  => ( is => 'ro', required => 1 );
+  has _qr    => ( is => 'ro', required => 1 );
+
+  # JS RegExp.global: true iff the g flag was set. Templates read it as a
+  # property ({{ r.global }}); the g flag is also tracked separately on the
+  # object so test/exec honour it (a Perl qr// is single-match by default).
+  # Returns a Perl boolean (!!1 / !!0) so Runtime::_js_to_string routes it
+  # through the is_bool branch and renders "true" / "false", matching
+  # RegExp.prototype.global's JS boolean.
+  sub global {
+    my ($self) = @_;
+    return ( index( $self->flags, 'g' ) >= 0 ) ? !!1 : !!0;
+  }
+
+  # RegExp.prototype.test: true iff the qr matches anywhere in $str. The
+  # behaviour is identical to JS for non-global regexes; for g/y it is
+  # single-match too (stateful iteration would need lastIndex tracking and a
+  # corpus case to motivate it -- k43 keeps the surface honest and grows on
+  # demand per ADR 0013). Returns a Perl boolean for the same reason as
+  # global above.
+  sub test {
+    my ( $self, $str ) = @_;
+    $str = defined($str) ? "$str" : '';
+    return ( $str =~ $self->_qr ) ? !!1 : !!0;
+  }
+
+  # RegExp.prototype.exec: return an Array of [full match, cap1, cap2, ...]
+  # (JS renders an Array as 'a,b,c' via toString, which is what
+  # `{{ r/(.)(.).exec('ab') }}` wants). The Perl qr// match in list context
+  # returns only the capture groups; we prepend $& (the full match) so the
+  # array matches RegExp.prototype.exec's shape.
+  sub exec {
+    my ( $self, $str ) = @_;
+    $str = defined($str) ? "$str" : '';
+    my @captures = $str =~ $self->_qr;
+    return undef unless @captures;
+    return [ $&, @captures ];
+  }
+
+  # Stringification: `/source/flags` -- matches RegExp.prototype.toString so
+  # `{{ r/x/i }}` renders the right thing (oracle proves it: rendering
+  # `{{ r/name [0-9] \\// }}` produces `/name [0-9] \\//`).
+  sub _stringify {
+    my ($self) = @_;
+    return '/' . $self->source . '/' . $self->flags;
+  }
+
+  sub to_string { return '/' . $_[0]->source . '/' . $_[0]->flags }
+}
+
 #### SafeString -- src/runtime.js function SafeString (a String subclass)
 
 package Text::Nunjucks::Runtime::SafeString {
@@ -176,6 +243,7 @@ sub None       { return Text::Nunjucks::Runtime::None->instance }
 sub Frame      { 'Text::Nunjucks::Runtime::Frame' }
 sub SafeString { 'Text::Nunjucks::Runtime::SafeString' }
 sub KwArgs     { 'Text::Nunjucks::Runtime::KwArgs' }
+sub Regex      { 'Text::Nunjucks::Runtime::Regex' }
 
 sub _error_class          { 'Text::Nunjucks::Lib::Error' }
 sub _template_error_class { 'Text::Nunjucks::Lib::TemplateError' }
@@ -185,6 +253,7 @@ sub _template_error_class { 'Text::Nunjucks::Lib::TemplateError' }
 sub _is_none        { my ( $self, $v ) = @_; ( blessed($v) && $v->isa('Text::Nunjucks::Runtime::None') )       ? 1 : 0 }
 sub _is_safe_string { my ( $self, $v ) = @_; ( blessed($v) && $v->isa('Text::Nunjucks::Runtime::SafeString') ) ? 1 : 0 }
 sub _is_kwargs      { my ( $self, $v ) = @_; ( blessed($v) && $v->isa('Text::Nunjucks::Runtime::KwArgs') )     ? 1 : 0 }
+sub _is_regex       { my ( $self, $v ) = @_; ( blessed($v) && $v->isa('Text::Nunjucks::Runtime::Regex') )      ? 1 : 0 }
 
 #### makeMacro
 
@@ -247,6 +316,70 @@ sub make_keyword_args {
 sub make_dict {
   my ( $self, @kv ) = @_;
   return Hash::Ordered->new(@kv);
+}
+
+#### makeRegex -- compile a template regex literal into a Regex object (ADR 0013)
+#
+# JS RegExp flags (https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/RegExp):
+#   g  -- global (stateful, lastIndex; tracked on the Regex object, NOT a qr// flag)
+#   i  -- case-insensitive
+#   m  -- ^/$ match per line
+#   s  -- . matches newlines
+#   u  -- Unicode mode (in JS: \u{...} escapes, surrogate-pair merging)
+#   y  -- sticky (stateful match at lastIndex; not portable to a stateless qr//)
+# JS RegExp is constructed in upstream parser.js:1043 as `new RegExp(body, flags)`
+# and then read through `memberLookup`. JS's RegExp.prototype.toString yields
+# `/body/flags`, which is what `{{ r/x/i }}` renders (oracle: '{{ r/x/gi }}'
+# -> '/x/gi').
+#
+# ADR 0013 home is here (k43): one seam that owns pattern translation and the
+# Regex object. ADR 0005 says engine-internal regexes use explicit ECMAScript
+# character-class sets; for user-facing regex literals the path of least
+# surprise today is to compile the JS body verbatim under Perl's /a flag
+# (ASCII-only `\d`/`\s`/`\w`, matching JS defaults), and croak loudly when
+# the body does not compile (the "fail loud" rule).
+sub make_regex {
+  my ( $self, $source, $flags ) = @_;
+  $flags //= '';
+
+  # Validate every flag -- an unrecognised JS flag is a typo we should not
+  # silently absorb.
+  my %known = map { $_ => 1 } qw( g i m s u y );
+  for my $f ( split //, $flags ) {
+    croak __PACKAGE__ . '->make_regex: unsupported JS flag ' . $f
+      unless $known{$f};
+  }
+
+  # Map JS flags onto a Perl inline modifier group. g and y do not become
+  # qr// flags -- global state is carried on the Regex object itself
+  # (source/flags/global/test/exec), and a sticky match (y) is out of scope
+  # for a stateless qr// (k43 grow-on-demand: a corpus case for /y would
+  # motivate lastIndex tracking).
+  my $perl_mods = '';
+  $perl_mods .= 'i' if index( $flags, 'i' ) >= 0;
+  $perl_mods .= 'm' if index( $flags, 'm' ) >= 0;
+  $perl_mods .= 's' if index( $flags, 's' ) >= 0;
+  # JS `u` (unicode mode): no Perl analogue is exactly right; JS `\d`/`\s`/`\w`
+  # are ASCII-only by default, so /a (ASCII-restricted) is the closest 1:1.
+  # A future corpus case with non-ASCII JS `\p{...}` will motivate either a
+  # tailored translator or a documented divergence (k43 ADR-grown).
+  $perl_mods .= 'a' if index( $flags, 'u' ) >= 0;
+
+  my $qr;
+  {
+    local $@;
+    my $compiled = eval { qr/(?$perl_mods:$source)/ };
+    croak __PACKAGE__ . '->make_regex: cannot compile pattern '
+      . $source . ': ' . ( $@ // 'unknown error' )
+      unless defined $compiled;
+    $qr = $compiled;
+  }
+
+  return $self->Regex->new(
+    source => $source,
+    flags  => $flags,
+    _qr    => $qr,
+  );
 }
 
 sub _is_ordered_hash {
@@ -348,6 +481,12 @@ sub ensure_defined {
 # indexing / .length / slice / charAt / split('')/ reverse here use Perl
 # code-points; ADR 0012 requires UTF-16 code units -- retrofitted in k17
 # (filters), when the js-utf16 seams and all their consumers land in one pass.
+#
+# ADR 0016 split: this function is the PROPERTY-ACCESS seam
+# (`member_lookup($obj, $key)` returns the value the template would see at
+# `{{ obj.key }}`); the METHOD-CALL seam `member_lookup_method` returns a bound
+# coderef for `{{ obj.key() }}`. The compiler picks at the AST site
+# (compile_lookup_val vs compile_fun_call -> the latter on a LookupVal name).
 
 my %STRING_METHODS = (
   toUpperCase => sub { my ( $self, $s ) = @_; uc $s },
@@ -497,6 +636,16 @@ sub member_lookup {
 
   my $key = $self->_member_key($val);           # JS ToString of the lookup key
 
+  # Regex surface (ADR 0013): source / flags / global are property reads,
+  # not method calls. `test` and `exec` are method-shaped and go through
+  # member_lookup_method (FunCall path).
+  if ( $self->_is_regex($obj) ) {
+    return $obj->source if $key eq 'source';
+    return $obj->flags  if $key eq 'flags';
+    return $obj->global if $key eq 'global';
+    return undef;
+  }
+
   # Array surface
   if ( Text::Nunjucks::Lib->is_array($obj) ) {
     if ( $self->_is_index_key($key) ) {
@@ -505,8 +654,8 @@ sub member_lookup {
       return $obj->[$i];
     }
     return scalar @$obj if $key eq 'length';
-    if ( my $m = $ARRAY_METHODS{$key} ) {
-      return sub { $m->( $self, $obj, @_ ) };
+    if ( $ARRAY_METHODS{$key} ) {                 # ADR 0016: method on FunCall seam
+      return sub { $ARRAY_METHODS{$key}->( $self, $obj, @_ ) };
     }
     return undef;
   }
@@ -524,16 +673,16 @@ sub member_lookup {
       return substr( $s, $i, 1 );
     }
     return length($s) if $key eq 'length';
-    if ( my $m = $STRING_METHODS{$key} ) {
-      return sub { $m->( $self, $s, @_ ) };
+    if ( $STRING_METHODS{$key} ) {               # ADR 0016: method on FunCall seam
+      return sub { $STRING_METHODS{$key}->( $self, $s, @_ ) };
     }
     return undef;
   }
 
   # Number surface
   if ( created_as_number($obj) ) {
-    if ( my $m = $NUMBER_METHODS{$key} ) {
-      return sub { $m->( $self, $obj, @_ ) };
+    if ( $NUMBER_METHODS{$key} ) {
+      return sub { $NUMBER_METHODS{$key}->( $self, $obj, @_ ) };
     }
     return undef;
   }
@@ -550,7 +699,68 @@ sub member_lookup {
     return exists( $obj->{$key} ) ? $obj->{$key} : undef;
   }
 
-  # Blessed user object: a member call binds the owner ($obj->method), ADR 0009.
+  # Blessed user object (ADR 0016: this seam returns the VALUE -- an accessor
+  # call or a Moo attribute read -- not a bound coderef. The coderef comes from
+  # member_lookup_method, which the compiler emits at FunCall sites).
+  if ( blessed($obj) ) {
+    return $obj->$key if $obj->can($key);
+    return undef;
+  }
+
+  return undef;
+}
+
+# ADR 0016: the second half of the split. Where member_lookup returns the value
+# of a property, member_lookup_method returns a bound coderef for the method at
+# $key, ready to be passed to call_wrap. The two branches land on different
+# emitted symbols in the compiled Perl; FunCall -> member_lookup_method, every
+# other property read -> member_lookup.
+sub member_lookup_method {
+  my ( $self, $obj, $val ) = @_;
+
+  return undef if !defined($obj) || $self->_is_none($obj);
+
+  my $key = $self->_member_key($val);
+
+  # Regex: test/exec are method-shaped; source/flags/global are properties
+  # (FunCall would be `{{ r.test("...") }} }`).
+  if ( $self->_is_regex($obj) ) {
+    return sub { $obj->test(@_) } if $key eq 'test';
+    return sub { $obj->exec(@_) } if $key eq 'exec';
+    return undef;
+  }
+
+  # String surface -- emulated methods come back bound to the string value.
+  if ( Text::Nunjucks::Lib->is_string($obj) || $self->_is_safe_string($obj) ) {
+    my $s = $self->_is_safe_string($obj) ? $obj->val : $obj;
+    return sub { $STRING_METHODS{$key}->( $self, $s, @_ ) } if $STRING_METHODS{$key};
+    return undef;
+  }
+
+  # Array surface
+  if ( Text::Nunjucks::Lib->is_array($obj) ) {
+    return sub { $ARRAY_METHODS{$key}->( $self, $obj, @_ ) } if $ARRAY_METHODS{$key};
+    return undef;
+  }
+
+  # Number surface
+  if ( created_as_number($obj) ) {
+    return sub { $NUMBER_METHODS{$key}->( $self, $obj, @_ ) } if $NUMBER_METHODS{$key};
+    return undef;
+  }
+
+  # Hashref (plain or ordered): the FunCall site must produce a coderef, so
+  # we only return one if the value is callable. Upstream: calling a
+  # non-function member on a plain object is a TypeError ("not a function")
+  # -- we mirror that by returning undef and letting call_wrap produce the
+  # exact upstream text.
+  if ( ref($obj) eq 'HASH' || $self->_is_ordered_hash($obj) ) {
+    my $fn = exists( $obj->{$key} ) ? $obj->{$key} : undef;       # plain hash
+    $fn    = $obj->get($key) if !defined($fn) && $self->_is_ordered_hash($obj);
+    return Text::Nunjucks::Lib->is_function($fn) ? $fn : undef;
+  }
+
+  # Blessed user object: `{{ obj.foo() }} }` needs a bound coderef.
   if ( blessed($obj) ) {
     return sub { $obj->$key(@_) } if $obj->can($key);
     return undef;
@@ -765,6 +975,7 @@ sub _js_to_string {
   return $v unless ref($v);                                   # string
   return $v->val if $self->_is_safe_string($v);              # SafeString -> value
   return $self->_array_join( $v, ',' ) if ref($v) eq 'ARRAY';# Array.toString => join(',')
+  return "$v" if $self->_is_regex($v);                       # Regex.toString -> /source/flags
   return '[object Object]';    # object / other ref (overloaded objects: k8)
 }
 

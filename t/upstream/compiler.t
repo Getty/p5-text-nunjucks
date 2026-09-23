@@ -1582,12 +1582,15 @@ subtest 'compiler' => sub {
   };
 
   subtest 'should render regexs' => sub {
-    todo_equal( 'ADR 0013: Runtime::make_regex is not implemented yet (Compiler emits it, Runtime does not answer it)',
-      '{{ r/name [0-9] \\// }}', {}, { autoescape => false },
+    # ADR 0013 / k43: the template `/.../flags` literal compiles to
+    # $runtime->make_regex(body, flags); the resulting Regex object's
+    # stringification is /body/flags (RegExp.prototype.toString). Auto-escape
+    # must NOT touch a literal regex's slashes/backslashes; the cases here
+    # cover the two upstream mocha assertions verbatim.
+    equal( '{{ r/name [0-9] \\// }}', {}, { autoescape => false },
       '/name [0-9] \\//' );
 
-    todo_equal( 'ADR 0013: Runtime::make_regex is not implemented yet (Compiler emits it, Runtime does not answer it)',
-      '{{ r/x/gi }}',
+    equal( '{{ r/x/gi }}',
       '/x/gi' );
   };
 
