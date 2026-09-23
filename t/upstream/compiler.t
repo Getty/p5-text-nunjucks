@@ -257,24 +257,12 @@ subtest 'compiler' => sub {
           'x,y,z.1,2,3.' );
       };
       subtest 'should do loop over key-values of a literal in-template Object' => sub {
-        if ( $block eq 'for' ) {
-          equal( "{% $block k, v in { one: 1, two: 2 } %}" .
-            "-{{ k }}:{{ v }}-{% $end %}", '-one:1--two:2-' );
-        }
-        else {
-        TODO: {
-            # BUG (not an ADR divergence): Lib::async_for reads values with a
-            # raw `$obj->{$k}` hash deref; a template dict literal compiles to
-            # $runtime->make_dict(...) -- a blessed Hash::Ordered (ADR 0011),
-            # not a plain hashref -- so this dies "Not a HASH reference" for
-            # asyncEach/asyncAll (plain `for` does not go through async_for
-            # and is unaffected, see above).
-            local $TODO = 'Lib::async_for does not support Hash::Ordered dict values (bug, k17/k21 follow-up)';
-            my ( $err, $res ) = render( "{% $block k, v in { one: 1, two: 2 } %}" .
-              "-{{ k }}:{{ v }}-{% $end %}", undef, { noThrow => 1 } );
-            is( $res, '-one:1--two:2-', 'key-value loop over an in-template dict literal' );
-          }
-        }
+        # ADR 0011: a template dict literal is a Hash::Ordered (insertion order);
+        # Lib::async_for and Runtime::async_all now read its values through the
+        # Hash::Ordered branch / member_lookup seam, so this iterates the same
+        # way for all three tags -- one pinned test per branch.
+        equal( "{% $block k, v in { one: 1, two: 2 } %}" .
+          "-{{ k }}:{{ v }}-{% $end %}", '-one:1--two:2-' );
       };
       subtest 'should support loop.index' => sub {
         equal( "{% $block i in [7,3,6] %}{{ loop.index }}{% $end %}", '123' );
@@ -335,21 +323,8 @@ subtest 'compiler' => sub {
         # would iterate key-sorted instead -- a documented divergence, not
         # exercised here since Hash::Ordered gets full fidelity).
         my $items = Hash::Ordered->new( foo => 1, bar => 2 );
-        if ( $block eq 'for' ) {
-          equal( "{% $block k, v in items %}({{ k }},{{ v }}){% $end %}",
-            { items => $items }, '(foo,1)(bar,2)' );
-        }
-        else {
-        TODO: {
-            # Same Lib::async_for/Hash::Ordered bug as the dict-literal case
-            # above -- asyncEach/asyncAll cannot iterate a Hash::Ordered value
-            # (from a caller OR a template dict literal) without it.
-            local $TODO = 'Lib::async_for does not support Hash::Ordered dict values (bug, k17/k21 follow-up)';
-            my ( $err, $res ) = render( "{% $block k, v in items %}({{ k }},{{ v }}){% $end %}",
-              { items => $items }, { noThrow => 1 } );
-            is( $res, '(foo,1)(bar,2)', 'key-value loop over an ordered caller Object' );
-          }
-        }
+        equal( "{% $block k, v in items %}({{ k }},{{ v }}){% $end %}",
+          { items => $items }, '(foo,1)(bar,2)' );
       };
       subtest "should support loop.index when looping over an Object's key-value pairs" => sub {
         equal( "{% $block k, v in items %}{{ loop.index }}{% $end %}",
@@ -370,19 +345,8 @@ subtest 'compiler' => sub {
         # asserting the JS-fidelity (insertion) path, and one pinned instance
         # per branch is enough.
         my $items = Hash::Ordered->new( foo => 1, bar => 2 );
-        if ( $block eq 'for' ) {
-          equal( "{% $block item, v in items %}{% include \"item.njk\" %}{% $end %}",
-            { items => $items }, 'showing fooshowing bar' );
-        }
-        else {
-        TODO: {
-            local $TODO = 'Lib::async_for does not support Hash::Ordered dict values (bug, k17/k21 follow-up)';
-            my ( $err, $res ) = render(
-              "{% $block item, v in items %}{% include \"item.njk\" %}{% $end %}",
-              { items => $items }, { noThrow => 1 } );
-            is( $res, 'showing fooshowing bar', 'include tags in the body of the loop' );
-          }
-        }
+        equal( "{% $block item, v in items %}{% include \"item.njk\" %}{% $end %}",
+          { items => $items }, 'showing fooshowing bar' );
       };
       subtest 'should work with {% set %} and {% include %} tags' => sub {
         equal(

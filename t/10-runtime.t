@@ -529,6 +529,40 @@ subtest 'async loops over null / falsy iterables (F2)' => sub {
   is( $out, 'a=1', 'async_all over a non-empty object still iterates' );
 };
 
+subtest 'async loops over Hash::Ordered values (k41)' => sub {
+  # ADR 0011: template dict literals and engine-built objects are Hash::Ordered.
+  # Lib::async_for reads via the Hash::Ordered branch; Runtime::async_all reads
+  # via member_lookup (which already handles Hash::Ordered). A Hash::Ordered
+  # caller arg must not die "Not a HASH reference" on either loop.
+  my $items = Hash::Ordered->new( foo => 1, bar => 2, baz => 3 );
+
+  # async_all collects outputs in insertion order
+  my $out;
+  $R->async_all(
+    $items, 1,
+    sub { my ( $k, $v, $i, $l, $d ) = @_; $d->( $i, "$k=$v" ) },
+    sub { ( undef, $out ) = @_ },
+  );
+  is( $out, 'foo=1bar=2baz=3', 'async_all over Hash::Ordered collects in insertion order' );
+
+  # async_each iterates the same way
+  my @seen;
+  $R->async_each(
+    $items, 1,
+    sub {
+      my ( $k, $v, $i, $l, $next ) = @_;
+      push @seen, "$i:$k=$v";
+      $next->();
+    },
+    sub { push @seen, 'done' },
+  );
+  is_deeply(
+    \@seen,
+    [ '0:foo=1', '1:bar=2', '2:baz=3', 'done' ],
+    'async_each over Hash::Ordered iterates in insertion order',
+  );
+};
+
 subtest 'container ToString (_js_to_string) -- mechanism in Runtime' => sub {
   is( $R->_js_to_string( [ 3, 1, 2 ] ),   '3,1,2',           '{{ [3,1,2] }}' );
   is( $R->_js_to_string( {} ),            '[object Object]', '{{ {} }}' );

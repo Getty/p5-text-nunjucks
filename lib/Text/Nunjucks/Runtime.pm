@@ -685,9 +685,15 @@ sub async_all {
     if ( $len == 0 ) {
       $cb->( undef, '' );
     } else {
+      # JS: func(k, arr[k], i, len, done) -- property access. The same lookup
+      # seam the runtime uses for member access (member_lookup) handles
+      # Hash::Ordered (template dict literal / engine-built object, ADR 0011)
+      # and plain hashrefs, matching arr[k] on a JS plain object; calling it
+      # here keeps Runtime::async_all on one seam instead of duplicating the
+      # Hash::Ordered branch that Lib::async_for already has.
       for ( my $i = 0; $i < scalar @$keys; $i++ ) {
         my $k = $keys->[$i];
-        $func->( $k, $arr->{$k}, $i, $len, $done );
+        $func->( $k, $self->member_lookup( $arr, $k ), $i, $len, $done );
       }
     }
   }

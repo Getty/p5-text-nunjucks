@@ -344,6 +344,22 @@
     }
   },
   {
+    "name": "asyncEach over dict literal (k41, Hash::Ordered)",
+    "template": "{% asyncEach k, v in { one: 1, two: 2 } %}-{{ k }}:{{ v }}-{% endeach %}",
+    "expected": {
+      "ok": true,
+      "output": "-one:1--two:2-"
+    }
+  },
+  {
+    "name": "asyncAll over dict literal (k41, Hash::Ordered)",
+    "template": "{% asyncAll k, v in { one: 1, two: 2 } %}-{{ k }}:{{ v }}-{% endall %}",
+    "expected": {
+      "ok": true,
+      "output": "-one:1--two:2-"
+    }
+  },
+  {
     "name": "asyncEach else on empty",
     "template": "{% asyncEach i in a %}{{ i }}{% else %}empty{% endeach %}",
     "context": {

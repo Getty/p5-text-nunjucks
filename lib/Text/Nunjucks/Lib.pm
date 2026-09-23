@@ -290,12 +290,21 @@ sub async_for {
   my $len  = scalar @$keys;
   my $i    = -1;
 
+  # Value lookup mirrors the ordering policy of keys() above (ADR 0011): a
+  # Hash::Ordered (template dict literal / engine-built object) reads via ->get;
+  # a plain hashref reads via ->{}. Lib doesn't reach Runtime->member_lookup
+  # (Lib and Runtime don't form a dep cycle in either direction), so this is the
+  # single seam -- the Runtime side mirrors it for its own async_all loop.
+  my $lookup = ( blessed($obj) && $obj->isa('Hash::Ordered') )
+    ? sub { my $k = shift; $obj->exists($k) ? $obj->get($k) : undef }
+    : sub { my $k = shift; $obj->{$k} };
+
   my $next;
   $next = sub {
     $i++;
     my $k = $keys->[$i];
     if ( $i < $len ) {
-      $iter->( $k, $obj->{$k}, $i, $len, $next );
+      $iter->( $k, $lookup->($k), $i, $len, $next );
     } else {
       $cb->();
     }
