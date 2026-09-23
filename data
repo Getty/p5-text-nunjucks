@@ -1,0 +1,41 @@
+---
+claimed_at: 2026-09-23T06:46:05Z
+claimed_by: p5-text-nunjucks
+class: standard
+completed: 2026-09-23T06:46:05Z
+created: 2026-09-22T20:24:45Z
+id: 43
+priority: medium
+started: 2026-09-22T21:09:28Z
+status: done
+tags:
+- bug
+title: 'Bug: Runtime lacks make_regex (ADR 0013) -- regex literals die at render'
+updated: 2026-09-23T06:46:05Z
+---
+
+Surfaced by k21. Compiler.pm emits $runtime->make_regex(...) for regex literals (ADR 0013, grep-confirmed) but Text::Nunjucks::Runtime has no make_regex method, so a template regex literal dies "Can-t locate object method make_regex". 1 TODO subtest (should render regexs). Fix: add Runtime::make_regex per ADR 0013 (regex object; fail loud on JS patterns not expressible in Perl). k17-adjacent.
+
+2026-09-23 00:55 ADR 0016 (accepted) clarifies the seam: `member_lookup` does property access (returns value), `member_lookup_method` returns the bound coderef for FunCall. Compiler's `compile_fun_call` emits `member_lookup_method` for blessed-object names; `compile_lookup_val` keeps `member_lookup`. Discard the heuristic half-finished in the previous member_lookup rewrite. k43 lands Regex class + make_regex + the two-seam split in one change.
+
+Re-claiming after k41 closed (audit clean). k43 lands: (1) Regex class per ADR 0013 with source/flags/global/test/exec; (2) Runtime::make_regex per upstream; (3) Runtime::member_lookup / member_lookup_method two-seam split per ADR 0016; (4) Compiler::compile_fun_call emits member_lookup_method; (5) compile_lookup_val stays on member_lookup. Stale worker-k43 half-finished member_lookup rewrite must be discarded, do not inherit.
+
+2026-09-23 01:21 k43 landed: Regex class (source/flags/global/test/exec, flags is Moo attribute not sub), Runtime::make_regex with JS-flag to Perl-mod mapping (g/y on object, i/m/s/u to qr// flags), two-seam split per ADR 0016 (member_lookup=property, member_lookup_method=method). Compiler emits member_lookup_method from compile_fun_call on a LookupVal name. TODO subtest in t/upstream/compiler.t now asserts both upstream mocha cases verbatim. 13 new corpus cases in t/corpus/render-compiler.json oracle-regenerated. 600 tests green; oracle-live clean. No new ADR needed -- k43 is the realisation of ADR 0013 and 0016.
+
+2026-09-23 01:27 audit: k43 is mostly faithful but has four open mappings that warrant decisions and two latent fidelity bugs.
+
+Mappings documented in the commit body without ADR-asks:
+- (a) /u -> /a mapping — wrong direction; JS /u enables Unicode mode (matches Arabic digits), Perl /a is MORE restrictive than default. Worker's own comment says "no Perl analogue is exactly right" but the /a choice is the inverse of JS /u. Filed #45 as decision ADR-grow.
+- (b) g and y flags tracked on object but test()/exec() single-match. Per ADR 0013, g must be honoured by test and y must be \G-anchored. Oracle proves divergence: r/x/y.test("yxy") -> false, port -> true; r/\d/g.exec stateful iteration -> 1|2|3, port -> 1|1|1 (or 1,true|1,true|1,true depending on capture shape). Filed #46 as bug.
+- (c) exec prepends $& for [full, cap1, cap2, ...] shape — faithful on the corpus case (r/(.)(.)/.exec("ab") -> ab,a,b) but for no-capture-group patterns Perl 5.40 qr// in list context returns a builtin boolean which is then prepended and rendered as "true"/"false". Filed #48.
+- (d) global/test return !!1/!!0 so _js_to_string routes through is_bool -> "true"/"false" — faithful, oracle pins it.
+
+Other audit points confirmed clean:
+- Moo Regex class declares `has flags => (is => ro, required => 1)`; no `sub flags` collision.
+- Two-seam split confirmed at runtime boundary and in compiler: compile_fun_call line 700 dispatches to compile_lookup_val with seam=method; non-FunCall LookupVal stays on member_lookup.
+- call_wrap unchanged (still takes a coderef).
+- 592 tests pass (prove -lr t/), oracle-live passes, upstream/ was present and oracle ran.
+
+Latent fidelity note: post-k43, member_lookup for blessed objects returns $obj->$key which INVOKES the method and returns its result -- so {{ obj.method }} (no parens) renders the method's result, not a property reference. JS memberLookup renders the function source as a string. ADR 0016 Consequences does not note this observable divergence. Filed #47 as a decision to amend ADR 0016 with an observability note + corpus case.
+
+2026-09-23 06:45 re-audit at HEAD: clean. #46 (g/y flags via lastIndex + \G anchor) and #48 (no-capture-group boolean drop) both landed in this branch and audit clean. Decision tickets #45 (JS /u mapping) and #47 (blessed-object property-read divergence at {{ obj.method }} no-parens) remain in backlog as pending maintainer decisions, not implementation gaps. Two-seam split (member_lookup property / member_lookup_method method) is intact; compile_fun_call dispatches to compile_lookup_val with seam=method only on LookupVal names; compile_lookup_val default seam is property (member_lookup); call_wrap signature unchanged; Regex class surface (source/flags/global/lastIndex via member_lookup, test/exec via member_lookup_method) is intact. t/upstream/compiler.t subtest 'should render regexs' pins the two upstream mocha cases verbatim; t/10-runtime.t pins lastIndex semantics and no-groups exec shape directly on Runtime methods. 14 test files, 620 tests green; xt/oracle-live.t green.
