@@ -329,22 +329,28 @@ sub index_of {
 
 sub keys {
   my ( $self, $obj ) = @_;
-  # own enumerable keys. Upstream preserves JS insertion order; Perl hashes do
-  # not, and object key order is the open k3 decision -- this returns Perl's
-  # hash order until k3 lands. _entries / _values / extend / async_for inherit it.
+  # own enumerable keys. ADR 0011 sets the ordering policy in one place:
+  #
+  #   * Hash::Ordered (template dict literal / engine-built object): own keys
+  #     in insertion order -- byte-identical to JS Object.keys.
+  #   * Plain caller hash: key-sorted, the documented divergence (Perl hashes
+  #     carry no insertion order to preserve; sorted gives a deterministic
+  #     cross-PERL_HASH_SEED iteration where JS would have shown insertion
+  #     order).
+  #
+  # _entries / _values / extend / async_for / member_lookup / the dump /
+  # dictsort / list / items filters (k17) all reach the iterator here, so this
+  # is the only seam the policy needs.
   #
   # Non-hash refs are an open latency: JS keys([10,20]) -> ['0','1'], but a
   # non-HASH ref dies here on the deref. The value model routes arrays through
   # async_iter / to_array, so this is believed unreachable; keys(undef) already
   # yields [] cleanly. Revisit if a k14/k17 call site reaches it.
-  #
-  # Ordered hash (template dict literal / engine-built object, ADR 0011): its
-  # own keys, in insertion order. (The rest of ADR 0011 -- sorting plain caller
-  # hashes -- is still open; this handles the ordered representation only.)
   return [ $obj->keys ] if blessed($obj) && $obj->isa('Hash::Ordered');
 
+  # Plain hash: sort CORE::keys (per-process-random Perl order) deterministically.
   my $arr = [];
-  for my $k ( CORE::keys %$obj ) {
+  for my $k ( sort CORE::keys %$obj ) {
     push @$arr, $k if $self->has_own_prop( $obj, $k );
   }
   return $arr;

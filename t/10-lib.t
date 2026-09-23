@@ -17,6 +17,8 @@ use_ok('Text::Nunjucks::Lib');
 use_ok('Text::Nunjucks::Lib::TemplateError');
 use_ok('Text::Nunjucks::Lib::Error');
 
+use_ok('Hash::Ordered');
+
 my $L = 'Text::Nunjucks::Lib';
 
 #### escape / lookupEscape  (oracle-confirmed: & " ' < > and backslash; backtick NOT escaped)
@@ -240,6 +242,47 @@ subtest 'keys / _entries / _values' => sub {
     '_entries (as set)'
   );
   is_deeply( [ sort @{ $L->_values($obj) } ], [ 1, 2 ], '_values (as set)' );
+};
+
+# ADR 0011 -- ordering policy at the keys() seam. The "as set" assertions above
+# cannot fail when the policy regresses, so pin the actual order here. Plain
+# caller hashes are key-sorted (the documented divergence from JS insertion
+# order); Hash::Ordered is honoured in its own order (template literals,
+# engine-built objects).
+subtest 'keys orders plain hashes key-sorted; Hash::Ordered in own order (ADR 0011)' => sub {
+  # Insertion order on the Perl side is { b, a, c } -- with PERL_HASH_SEED off,
+  # Perl's hash order is deterministic, but the canonical seed is on and the
+  # sort here is what every consumer of Lib::keys depends on.
+  my $plain = { b => 1, a => 2, c => 3 };
+  is_deeply( $L->keys($plain), [qw( a b c )], 'plain hashref -> key-sorted' );
+
+  # Reverse the insertion order to make sure it really is the keys' alphabetical
+  # order, not Perl's hash-iteration accident.
+  my $reversed = { z => 1, y => 2, m => 3 };
+  is_deeply( $L->keys($reversed), [qw( m y z )], 'plain hashref -> key-sorted, second sample' );
+
+  # Hash::Ordered is honoured in its own order.
+  my $ordered = Hash::Ordered->new( b => 1, a => 2 );
+  is_deeply( $L->keys($ordered), [qw( b a )], 'Hash::Ordered -> its own order' );
+
+  # The seam's callers inherit the policy. async_for / _entries / _values /
+  # extend / member_lookup all go through keys(); cover the first two directly.
+  # async_for's iter callback is (k, val, i, len, next) -- 5 args; a shorter
+  # destructure would bind $next to $len and crash on the first recursion.
+  my @seen;
+  $L->async_for(
+    $plain,
+    sub { my ( $k, $v, $i, $len, $next ) = @_; push @seen, "$k=$v"; $next->(); },
+    sub { },
+  );
+  is_deeply( \@seen, [ 'a=2', 'b=1', 'c=3' ], 'async_for iterates plain hashref key-sorted' );
+
+  is_deeply(
+    $L->_entries($plain),
+    [ [ 'a', 2 ], [ 'b', 1 ], [ 'c', 3 ] ],
+    '_entries follows keys() -> key-sorted'
+  );
+  is_deeply( $L->_values($plain), [ 2, 1, 3 ], '_values follows keys() -> key-sorted' );
 };
 
 #### extend / _assign

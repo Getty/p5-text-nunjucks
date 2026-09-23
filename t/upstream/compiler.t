@@ -364,10 +364,11 @@ subtest 'compiler' => sub {
           { items => { foo => 1, bar => 2 } }, '22' );
       };
       subtest 'should support include tags in the body of the loop' => sub {
-        # Hash::Ordered for the same reason as above: a plain hashref's order
-        # is not (yet) sorted deterministically either (Lib::keys's own
-        # comment: "the rest of ADR 0011 -- sorting plain caller hashes -- is
-        # still open"), so it would be flaky across runs, not just wrong.
+        # ADR 0011: plain caller hashes are key-sorted by Lib::keys -- still
+        # {foo, bar} in that order, so a plain hashref would render identically
+        # here. We use Hash::Ordered because the upstream it() is also
+        # asserting the JS-fidelity (insertion) path, and one pinned instance
+        # per branch is enough.
         my $items = Hash::Ordered->new( foo => 1, bar => 2 );
         if ( $block eq 'for' ) {
           equal( "{% $block item, v in items %}{% include \"item.njk\" %}{% $end %}",
