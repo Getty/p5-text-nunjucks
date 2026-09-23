@@ -1,0 +1,28 @@
+---
+class: standard
+created: 2026-09-23T01:26:29Z
+id: 45
+priority: medium
+status: backlog
+tags:
+- decision
+- regex
+- unicode
+title: 'Decision: JS /u flag mapping in user-facing regex literals (ADR-grow per k43)'
+updated: 2026-09-23T01:26:29Z
+---
+
+k43 (commit 900f3e5) implements Runtime::make_regex and maps JS flags to Perl inline modifiers. The mapping `/u` -> `/a` (ASCII-restricted) is documented in the commit body with the workers own note "no Perl analogue is exactly right" and "a future corpus case ... will motivate either a tailored translator or a documented divergence (k43 ADR-grown)".
+
+The mapping as it stands diverges from JS for any non-ASCII input:
+- JS `r/\d/.test("\x{0662}")` (Arabic-Indic digit 2) -> false (default ASCII).
+- JS `r/\d/u.test("\x{0662}")` -> **true** (Unicode mode).
+- Perl `/a/` -> `\d` matches ASCII only -> the JS `/u/` case renders `false` in Perl.
+- Perl `/u/` (Perl Unicode mode) -> `\d` matches Unicode -> matches JS `/u/` default.
+
+The correct translation of JS `/u` is therefore Perl `/u`, not `/a`. The corpus has no non-ASCII case today so the divergence is latent. Per ADR 0004 (a difference without an ADR is a bug), the choice should be on the board before k43 closes:
+1. Recommend: map JS `/u` -> Perl `/u` (correct semantics, matches JS Unicode mode).
+2. Alternative: ignore JS `/u` (Perl default `\d` ASCII matches JS-default `\d` ASCII; deliberately accept the divergence for any `\d`/`\s`/`\w` user wanted to be Unicode).
+3. Alternative: keep `/a` and file the resulting divergence explicitly.
+
+Status: open. Decides the JavaScript-perl mapping for the /u flag in template regex literals; informs the engine-internal ADR 0005 too if user `\p{...}` Unicode property classes are exposed.
