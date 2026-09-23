@@ -1,0 +1,23 @@
+---
+claimed_at: 2026-09-23T01:07:34Z
+claimed_by: p5-text-nunjucks
+class: standard
+completed: 2026-09-23T01:07:34Z
+created: 2026-09-22T20:24:44Z
+id: 41
+priority: high
+started: 2026-09-22T21:09:25Z
+status: done
+tags:
+- bug
+title: 'Bug: Lib::async_for dies on Hash::Ordered in asyncEach/asyncAll object iteration'
+updated: 2026-09-23T01:07:34Z
+---
+
+Surfaced by k21 (compiler.js suite). Lib::async_for (lib/Text/Nunjucks/Lib.pm ~line 296) fetches loop values with a raw $obj->{$k} hash-deref. A template dict literal and any caller-supplied ordered hash is a blessed Hash::Ordered (ADR 0011), not a plain hashref, so it dies "Not a HASH reference". Only affects {% asyncEach %}/{% asyncAll %} object/dict iteration (Runtime::async_each -> Lib::async_for non-array branch); plain {% for %} iterates such values fine. 6 TODO subtests in t/upstream/compiler.t pin it. Fix: read ordered-hash members via ->get/->keys (mirror the member_lookup/keys ordered branches). Reproduce via the TODO subtests, then add a corpus render case.
+
+Re-claiming after k42. k41 needs BOTH Lib::async_for AND Runtime::async_all Hash::Ordered branches (previous worker only fixed Lib::async_for; Runtime::async_all does its own direct $arr->{$k} deref). Stale claim released.
+
+2026-09-23 01:02 Fixed Lib::async_for (Hash::Ordered ->get branch) and Runtime::async_all (member_lookup). 6 TODO subtests in t/upstream/compiler.t now real assertions. Added k41 regression subtest to t/10-runtime.t and 2 corpus cases to render-compiler.json. prove -lr t/ green, 565 tests, 0 TODOs.
+
+2026-09-23 01:07 audit (k41): clean. async_each else-branch delegates to Lib::async_for (matches JS lib.asyncFor). async_all else-branch uses Lib::keys(arr||{}) + member_lookup(arr,k), 1:1 with JS lib.keys(arr||{}) + arr[k]. Both sites honour ADR 0011 ordering: Lib::async_for inline Hash::Ordered branch reads via ->get, member_lookup seam reads via ->get, Lib::keys returns Hash::Ordered->keys in insertion order / plain hashref key-sorted. 6 TODO subtests converted to equal() assertions (3 in asyncEach, 3 in asyncAll). prove -lr t/ green: 565 tests pass. xt/oracle-live.t green: 2 new corpus cases (asyncEach/asyncAll over dict literal) byte-identical to upstream JS oracle output (-one:1--two:2-). New regression subtest in t/10-runtime.t pins Hash::Ordered caller behaviour for both async_all and async_each. No divergences; no new TODOs. upstream fetched at v3.2.4 for the oracle check.
