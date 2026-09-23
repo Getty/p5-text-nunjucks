@@ -69,9 +69,20 @@ package Text::Nunjucks::Runtime::Regex {
     'bool' => sub { 1 },
     fallback => 1;
 
-  has source => ( is => 'ro', required => 1 );
-  has flags  => ( is => 'ro', required => 1 );
-  has _qr    => ( is => 'ro', required => 1 );
+  has source       => ( is => 'ro', required => 1 );
+  has flags        => ( is => 'ro', required => 1 );
+  has _qr          => ( is => 'ro', required => 1 );
+  # _qr_anchored is the same pattern with a leading \G so it can only match at
+  # the string's current pos(). ADR 0013 requires JS /y (sticky) to behave that
+  # way: match anchored at lastIndex, advance lastIndex past the match on
+  # success, reset to 0 on failure. Built unconditionally; test/exec pick which
+  # one to use from the g/y flags.
+  has _qr_anchored => ( is => 'ro', required => 1 );
+  # lastIndex is the JS RegExp's mutable match position. JS resets it on every
+  # successful match (g/y) and on every failed match (g/y); for non-g/non-y
+  # regexes it is left alone. The current value is template-visible
+  # ({{ r.lastIndex }}).
+  has lastIndex    => ( is => 'rw', default => 0 );
 
   # JS RegExp.global: true iff the g flag was set. Templates read it as a
   # property ({{ r.global }}); the g flag is also tracked separately on the
@@ -84,26 +95,132 @@ package Text::Nunjucks::Runtime::Regex {
     return ( index( $self->flags, 'g' ) >= 0 ) ? !!1 : !!0;
   }
 
-  # RegExp.prototype.test: true iff the qr matches anywhere in $str. The
-  # behaviour is identical to JS for non-global regexes; for g/y it is
-  # single-match too (stateful iteration would need lastIndex tracking and a
-  # corpus case to motivate it -- k43 keeps the surface honest and grows on
-  # demand per ADR 0013). Returns a Perl boolean for the same reason as
-  # global above.
+  # True iff the y (sticky) flag is set. Tracked as a separate predicate so
+  # test/exec don't re-scan flags on every call.
+  sub _is_sticky {
+    my ($self) = @_;
+    return index( $self->flags, 'y' ) >= 0 ? 1 : 0;
+  }
+
+  # RegExp.prototype.test -- ADR 0013 g/y semantics:
+  #   * y (sticky): match anchored at lastIndex via the \G-prefixed qr//. On
+  #     success, advance lastIndex by the match length. On failure, reset to 0.
+  #   * g (global, not y): match starting from lastIndex (set pos($str) before
+  #     matching). On success, advance lastIndex by the match length. On
+  #     failure, reset to 0.
+  #   * neither: stateless match; lastIndex is left alone (JS does not touch
+  #     it for non-g/non-y regexes -- oracle-checked).
+  # Returns a Perl boolean (!!1/!!0) so _js_to_string renders "true"/"false".
+  #
+  # Perl implementation note: pos() only advances on m//g matches (perldoc
+  # perlvar). The qr// we hold has no /g, so a plain `$str =~ $self->_qr`
+  # updates neither pos nor lastIndex. The stateful probe is therefore
+  # written as `$str =~ /$qr/g`, which interpolates the qr object and
+  # applies /g, advancing pos past the found match. The original k46 v1
+  # mistakenly used `=~ $self->_qr` and silently never advanced lastIndex.
+  #
+  # CAVEAT: $self overloads "" to render /source/flags (RegExp.prototype.
+  # toString). Interpolation of the qr through a method call (e.g.
+  # /$self->_qr/g) forces stringification of the qr and Perl sees a junk
+  # pattern like `/x/y->_qr`. Cache the qr in a local first.
   sub test {
     my ( $self, $str ) = @_;
     $str = defined($str) ? "$str" : '';
+    my $sticky = $self->_is_sticky;
+    my $global = index( $self->flags, 'g' ) >= 0;
+
+    if ($sticky) {
+      my $qr_a = $self->_qr_anchored;
+      my $start = $self->lastIndex;
+      pos($str) = $start;
+      if ( $str =~ /$qr_a/g ) {
+        $self->lastIndex( pos($str) );
+        return !!1;
+      }
+      $self->lastIndex(0);
+      return !!0;
+    }
+    if ($global) {
+      my $qr = $self->_qr;
+      my $start = $self->lastIndex;
+      pos($str) = $start;
+      if ( $str =~ /$qr/g ) {
+        $self->lastIndex( pos($str) );
+        return !!1;
+      }
+      $self->lastIndex(0);
+      return !!0;
+    }
     return ( $str =~ $self->_qr ) ? !!1 : !!0;
   }
 
-  # RegExp.prototype.exec: return an Array of [full match, cap1, cap2, ...]
-  # (JS renders an Array as 'a,b,c' via toString, which is what
-  # `{{ r/(.)(.).exec('ab') }}` wants). The Perl qr// match in list context
-  # returns only the capture groups; we prepend $& (the full match) so the
-  # array matches RegExp.prototype.exec's shape.
+  # RegExp.prototype.exec -- same g/y semantics as test. Returns an Array of
+  # [full match, cap1, cap2, ...] (JS renders as 'a,b,c' via toString; that
+  # is what `{{ r/(.)(.).exec('ab') }}` wants). On no-match returns null
+  # (undef, which the engine renders as empty). The Perl qr// match in list
+  # context returns only the capture groups; we prepend $& (the full match)
+  # so the array matches RegExp.prototype.exec's shape. NOTE: the no-capture-
+  # groups boolean quirk in list context (qr// with no groups returns a
+  # builtin::true prepended) is tracked separately as #48 and NOT addressed
+  # here -- this ticket is about g/y state, not about that surface detail.
+  #
+  # Implementation note: pos() is only honoured as a START position by
+  # m//g matches (perldoc perlop). So a plain list-context `$str =~ $qr`
+  # silently ignores pos() and always re-finds the first match from offset
+  # 0, breaking global/sticky iteration. Compounded: list-context
+  # `$str =~ /$qr/g` iterates ALL matches and returns ALL captures (perldoc
+  # perlop), not the captures from one anchored match. Two failure modes
+  # need two different probes:
+  #
+  # * Sticky (y): the prebuilt _qr_anchored pattern starts with \G, which
+  #   only matches at pos(). A non-/g list-context match against that
+  #   pattern is therefore pos-anchored; on success it returns the captures
+  #   from the one match starting at pos, with no skip-ahead. New lastIndex
+  #   is start + length of full match.
+  # * Global (g, no y): we cannot use a \G-anchored pattern (global skips
+  #   forward to the next match, sticky does not). Run the qr in scalar
+  #   /g context (which DOES honour pos as start AND advances it past the
+  #   found match, skipping non-matches); then substring the matched
+  #   region and run a fresh non-/g list-context match on it to grab the
+  #   captures. The slice is short (one match's width) so the cost is
+  #   bounded.
+  #
+  # CAVEAT (same as test above): Regex overloads "" to render /source/flags,
+  # so `$self->_qr` interpolates as a string. Cache in a local first.
   sub exec {
     my ( $self, $str ) = @_;
     $str = defined($str) ? "$str" : '';
+    my $sticky = $self->_is_sticky;
+    my $global = index( $self->flags, 'g' ) >= 0;
+
+    if ($sticky) {
+      my $qr_a  = $self->_qr_anchored;
+      my $start = $self->lastIndex;
+      pos($str) = $start;
+      my @captures = $str =~ $qr_a;   # non-/g; \G anchors at pos
+      if (@captures) {
+        $self->lastIndex( $start + length($&) );
+        return [ $&, @captures ];
+      }
+      $self->lastIndex(0);
+      return undef;
+    }
+    if ($global) {
+      my $qr     = $self->_qr;
+      my $start  = $self->lastIndex;
+      pos($str)  = $start;
+      if ( $str =~ /$qr/g ) {         # scalar /g: honours pos, advances it
+        my $full = $&;
+        my $end  = pos($str);
+        # Slice the matched region; non-/g list-context match returns
+        # exactly the captures from this one match.
+        my @captures = substr( $str, $start, $end - $start ) =~ $qr;
+        $self->lastIndex($end);
+        return [ $full, @captures ];
+      }
+      $self->lastIndex(0);
+      return undef;
+    }
     my @captures = $str =~ $self->_qr;
     return undef unless @captures;
     return [ $&, @captures ];
@@ -375,10 +492,23 @@ sub make_regex {
     $qr = $compiled;
   }
 
+  # k46: the sticky qr// is the same pattern with a leading \G. ADR 0013 maps
+  # JS /y to a pos-anchored Perl match (the only portable 1:1).
+  my $qr_anchored;
+  {
+    local $@;
+    my $compiled = eval { qr/(?$perl_mods:\G(?:$source))/ };
+    croak __PACKAGE__ . '->make_regex: cannot compile sticky pattern '
+      . $source . ': ' . ( $@ // 'unknown error' )
+      unless defined $compiled;
+    $qr_anchored = $compiled;
+  }
+
   return $self->Regex->new(
-    source => $source,
-    flags  => $flags,
-    _qr    => $qr,
+    source       => $source,
+    flags        => $flags,
+    _qr          => $qr,
+    _qr_anchored => $qr_anchored,
   );
 }
 
@@ -636,13 +766,16 @@ sub member_lookup {
 
   my $key = $self->_member_key($val);           # JS ToString of the lookup key
 
-  # Regex surface (ADR 0013): source / flags / global are property reads,
-  # not method calls. `test` and `exec` are method-shaped and go through
-  # member_lookup_method (FunCall path).
+  # Regex surface (ADR 0013): source / flags / global / lastIndex are property
+  # reads, not method calls. `test` and `exec` are method-shaped and go through
+  # member_lookup_method (FunCall path). lastIndex is template-visible
+  # ({{ r.lastIndex }}) and reflects the JS RegExp match position; it advances
+  # after a g/y match and resets to 0 on no-match.
   if ( $self->_is_regex($obj) ) {
-    return $obj->source if $key eq 'source';
-    return $obj->flags  if $key eq 'flags';
-    return $obj->global if $key eq 'global';
+    return $obj->source    if $key eq 'source';
+    return $obj->flags     if $key eq 'flags';
+    return $obj->global    if $key eq 'global';
+    return $obj->lastIndex if $key eq 'lastIndex';
     return undef;
   }
 

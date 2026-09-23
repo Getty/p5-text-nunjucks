@@ -604,6 +604,118 @@ subtest 're-exported lib helpers (isArray / keys / inOperator)' => sub {
   ok( $R->in_operator( 1, [ 1, 2 ] ), 'in_operator: array membership' );
 };
 
+# ADR 0013 / k46: RegExp.prototype.exec/test with the JS g/y flags honour
+# lastIndex on the Regex object (sticky matches anchored at lastIndex; global
+# advances lastIndex past the match on success and resets to 0 on failure;
+# non-g/non-y regexes leave lastIndex alone). These tests pin the behaviour
+# directly on the Runtime methods, complementing the end-to-end corpus cases
+# in t/corpus/render-compiler.json (k46-tagged).
+subtest 'Regex: JS g/y flag semantics honour lastIndex (k46, ADR 0013)' => sub {
+  # --- sticky /y -------------------------------------------------------
+  {
+    my $r = $R->make_regex( 'x', 'y' );
+
+    # default lastIndex is 0 (JS initial value)
+    is( $r->lastIndex, 0, 'sticky: fresh regex lastIndex = 0' );
+
+    # test: match advances lastIndex by the match length
+    ok( $r->test('xyx'), 'sticky: test match at pos 0' );
+    is( $r->lastIndex, 1, 'sticky: lastIndex advanced to 1 after match' );
+
+    # reset and try a no-match
+    $r->lastIndex(0);
+    ok( !$r->test('yxy'), 'sticky: test no-match at pos 0' );
+    is( $r->lastIndex, 0, 'sticky: lastIndex resets to 0 on no-match' );
+
+    # anchored: fails when pos is past the only match
+    $r->lastIndex(0);
+    ok( $r->test('xyx'), 'sticky: pos 0 match' );
+    is( $r->lastIndex, 1, 'sticky: lastIndex now 1' );
+    ok( !$r->test('xyx'), 'sticky: pos 1 anchored fails (only one x at pos 0)' );
+    is( $r->lastIndex, 0, 'sticky: lastIndex reset to 0 on anchored failure' );
+
+    # exec: sticky no-match returns undef
+    $r->lastIndex(0);
+    is( $r->exec('yxy'), undef, 'sticky: exec returns undef on no-match' );
+    is( $r->lastIndex, 0, 'sticky: exec no-match leaves lastIndex at 0' );
+
+    # exec: sticky match returns the array. Pattern uses a capture group
+    # so we do not entangle with the no-capture-groups list-context quirk
+    # tracked separately as #48.
+    $r->lastIndex(0);
+    my $rs = $R->make_regex( '(x)', 'y' );
+    my $m = $rs->exec('xyx');
+    is_deeply( $m, [ 'x', 'x' ], 'sticky: exec returns [full_match, cap] at pos 0' );
+    is( $rs->lastIndex, 1, 'sticky: exec advanced lastIndex' );
+  }
+
+  # --- global /g -------------------------------------------------------
+  {
+    my $r = $R->make_regex( '(\d)', 'g' );
+    is( $r->lastIndex, 0, 'global: fresh regex lastIndex = 0' );
+
+    # stateful iteration (matches what JS /g exec does)
+    my $e1 = $r->exec('1 2 3');
+    is_deeply( $e1, [ '1', '1' ], 'global: exec 1 returns [full, cap]' );
+    is( $r->lastIndex, 1, 'global: lastIndex = 1 after first match' );
+
+    my $e2 = $r->exec('1 2 3');
+    is_deeply( $e2, [ '2', '2' ], 'global: exec 2 advances to next match' );
+    is( $r->lastIndex, 3, 'global: lastIndex = 3 after second match' );
+
+    my $e3 = $r->exec('1 2 3');
+    is_deeply( $e3, [ '3', '3' ], 'global: exec 3 advances to next match' );
+    is( $r->lastIndex, 5, 'global: lastIndex = 5 after third match' );
+
+    # next call: nothing past pos 5, so no match; JS resets to 0
+    my $e4 = $r->exec('1 2 3');
+    is( $e4, undef, 'global: exec past end returns undef' );
+    is( $r->lastIndex, 0, 'global: lastIndex reset to 0 on no-match' );
+
+    # test also tracks lastIndex and resets on no-match
+    my $t = $R->make_regex( 'x', 'g' );
+    ok( $t->test('axb'), 'global: test match' );
+    is( $t->lastIndex, 2, 'global: test advances lastIndex' );
+    ok( !$t->test('abc'), 'global: test no-match at advanced pos' );
+    is( $t->lastIndex, 0, 'global: test resets lastIndex on no-match' );
+  }
+
+  # --- neither flag: lastIndex is left alone ---------------------------
+  {
+    my $r = $R->make_regex( 'x', '' );
+    $r->lastIndex(7);                                  # deliberately set
+    ok( $r->test('xyx'), 'plain: test match (stateless)' );
+    is( $r->lastIndex, 7, 'plain: lastIndex unchanged on match' );
+
+    $r->lastIndex(7);
+    ok( !$r->test('abc'), 'plain: test no-match (stateless)' );
+    is( $r->lastIndex, 7, 'plain: lastIndex unchanged on no-match' );
+
+    $r->lastIndex(7);
+    # Pattern with a capture group to avoid the no-capture-groups
+    # list-context quirk tracked separately as #48.
+    my $rp = $R->make_regex( '(x)', '' );
+    $rp->lastIndex(7);
+    my $m = $rp->exec('xyx');
+    is_deeply( $m, [ 'x', 'x' ], 'plain: exec returns [full, cap] (stateless)' );
+    is( $rp->lastIndex, 7, 'plain: exec leaves lastIndex unchanged' );
+
+    $r->lastIndex(7);
+    is( $r->exec('abc'), undef, 'plain: exec undef on no-match (stateless)' );
+    is( $r->lastIndex, 7, 'plain: exec no-match leaves lastIndex unchanged' );
+  }
+
+  # --- lastIndex is template-visible via member_lookup -----------------
+  {
+    my $r = $R->make_regex( 'x', 'g' );
+    is( $R->member_lookup( $r, 'lastIndex' ),
+      0, 'member_lookup exposes lastIndex (default 0)' );
+    $r->lastIndex(5);
+    is( $R->member_lookup( $r, 'lastIndex' ),
+      5, 'member_lookup reflects updated lastIndex' );
+  }
+};
+
 done_testing;
 
 # helper: look a member up and call it via call_wrap (the compiler's path)

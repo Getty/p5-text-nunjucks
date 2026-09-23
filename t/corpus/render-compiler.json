@@ -523,5 +523,77 @@
       "ok": true,
       "output": "YES"
     }
+  },
+  {
+    "name": "regex sticky y: test no-match at lastIndex=0 (k46)",
+    "template": "{{ r/x/y.test(\"yxy\") }}",
+    "expected": {
+      "ok": true,
+      "output": "false"
+    }
+  },
+  {
+    "name": "regex sticky y: exec at lastIndex=0 no-match (k46)",
+    "template": "{{ r/x/y.exec(\"yxy\") }}",
+    "expected": {
+      "ok": true,
+      "output": ""
+    }
+  },
+  {
+    "name": "regex sticky y: lastIndex resets to 0 on no-match (k46)",
+    "template": "{% set r = r/x/y %}{{ r.lastIndex }}{% if r.test(\"yxy\") %}T{% endif %}{{ r.lastIndex }}",
+    "expected": {
+      "ok": true,
+      "output": "00"
+    }
+  },
+  {
+    "name": "regex sticky y: test match advances lastIndex (k46)",
+    "template": "{% set r = r/x/y %}{% if r.test(\"xyx\") %}T{% endif %}{{ r.lastIndex }}",
+    "expected": {
+      "ok": true,
+      "output": "T1"
+    }
+  },
+  {
+    "name": "regex sticky y: {% if %} matches on first char (k40/k46)",
+    "template": "{% set r = r/x/y %}{% if r.test(\"xyx\") %}YES{% else %}NO{% endif %}",
+    "expected": {
+      "ok": true,
+      "output": "YES"
+    }
+  },
+  {
+    "name": "regex global g: stateful exec iteration (k46)",
+    "template": "{% set r = r/(\\d)/g %}{% set m1 = r.exec(\"1 2 3\") %}{% set m2 = r.exec(\"1 2 3\") %}{% set m3 = r.exec(\"1 2 3\") %}{{ m1 }}|{{ m2 }}|{{ m3 }}",
+    "expected": {
+      "ok": true,
+      "output": "1,1|2,2|3,3"
+    }
+  },
+  {
+    "name": "regex global g: lastIndex ends at 5 after three execs (k46)",
+    "template": "{% set r = r/\\d/g %}{% set m1 = r.exec(\"1 2 3\") %}{% set m2 = r.exec(\"1 2 3\") %}{% set m3 = r.exec(\"1 2 3\") %}{{ r.lastIndex }}",
+    "expected": {
+      "ok": true,
+      "output": "5"
+    }
+  },
+  {
+    "name": "regex global g: no-match resets lastIndex to 0 (k46)",
+    "template": "{% set r = r/\\d/g %}{{ r.exec(\"abc\") }}{{ r.lastIndex }}",
+    "expected": {
+      "ok": true,
+      "output": "0"
+    }
+  },
+  {
+    "name": "regex global g: test advances lastIndex, then resets on no-match (k46)",
+    "template": "{% set r = r/x/g %}{% if r.test(\"axb\") %}T{% endif %}{{ r.lastIndex }}{% if r.test(\"abc\") %}T{% endif %}{{ r.lastIndex }}",
+    "expected": {
+      "ok": true,
+      "output": "T20"
+    }
   }
 ]
