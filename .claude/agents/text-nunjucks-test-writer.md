@@ -7,7 +7,7 @@ briefing:
   skills:
     - text-nunjucks-core
     - getty-perl-core
-    - kanban-issues-karr-cli
+    - kanban-issues-karr-ticket
 ---
 
 You are the text-nunjucks-test-writer.

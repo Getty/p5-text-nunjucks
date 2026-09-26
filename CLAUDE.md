@@ -32,12 +32,12 @@ principle and lane are in `.claude/rules/text-nunjucks-rules.md`.
 | Port / implement / refactor / debug behavior-relevant code | `text-nunjucks-worker` (default) |
 | Port upstream test suites, grow the corpus | `text-nunjucks-test-writer` |
 | Audit a ported module against its upstream file (read-only) | `text-nunjucks-fidelity-auditor` |
-| Pre-release audit (read-only) | `text-nunjucks-release-checker` |
+| Commits, `Changes`, card → done, pre-release audit | `text-nunjucks-release-manager` |
 
 The agents carry their skills via `briefing.skills` (see `.claude/agents/`); the main
 agent delegates rather than loading them. Skill sources live under `.claude/skills/` —
 `text-nunjucks-core` is project-owned; the `getty-*`, `perl-release-dist-ini`,
-`feedback-loop-debugging` and `kanban-issues-karr-cli` ones are hardlinked from their
+`feedback-loop-debugging` and `kanban-issues-karr-coordination` ones are hardlinked from their
 shared sources (never `Edit`/`Write` those — skill `manage-skills`).
 
 ## Working the board

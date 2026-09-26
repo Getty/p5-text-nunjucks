@@ -6,7 +6,7 @@ allowed-tools: Read, Bash, Glob, Grep
 briefing:
   skills:
     - text-nunjucks-core
-    - kanban-issues-karr-cli
+    - kanban-issues-karr-ticket
 ---
 
 You are the text-nunjucks-fidelity-auditor for **Text::Nunjucks, the 1:1 Perl port of

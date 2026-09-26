@@ -33,7 +33,7 @@ This rule depends on whether the Agent/Task tool is available to you.
 
 - **You can spawn subagents** (orchestrating main agent): Do NOT touch behavior-relevant
   code yourself — delegate to `text-nunjucks-worker`. Your lane: coordinate, inspect,
-  plan, review diffs, run tests, manage git and the board, edit non-behavioral docs,
+  plan, review diffs, run tests, manage the board, edit non-behavioral docs,
   and put `decision` tickets in front of the maintainer. When in doubt, delegate. Why:
   only the `text-nunjucks-*` agents get the porting contract force-loaded via
   `briefing.skills`; you get no briefing and would port from memory.
@@ -43,7 +43,7 @@ This rule depends on whether the Agent/Task tool is available to you.
   | Port / implement / refactor / debug behavior-relevant code | `text-nunjucks-worker` (default) |
   | Port upstream test suites, grow the corpus, reproduce fidelity bugs | `text-nunjucks-test-writer` |
   | Compare a ported module against its upstream file (read-only) | `text-nunjucks-fidelity-auditor` |
-  | Pre-release audit (read-only) | `text-nunjucks-release-checker` |
+  | Commits, `Changes`, card → done, pre-release audit | `text-nunjucks-release-manager` |
 
   A porting ticket goes worker → fidelity-auditor → (findings back to worker) → done.
   Skipping the audit is how "looks right" replaces "is 1:1".
@@ -54,10 +54,13 @@ This rule depends on whether the Agent/Task tool is available to you.
 Behavior-relevant = everything under `lib/`, `t/`, `xt/`, `maint/`, plus `cpanfile` and
 `dist.ini`. Pure prose (README, ADR text, Changes wording, ticket bodies) is not.
 
+**Only `text-nunjucks-release-manager` commits.** A worker leaves a commit-ready tree and hands its card
+to `review`; you then dispatch `text-nunjucks-release-manager` to cut the commit and close the card.
+
 ## Coordination — karr board (always in scope)
 
 Ticket coordination is the orchestrating agent's job, so `karr` is always in scope —
-don't invoke the `kanban-issues-karr-cli` skill first, just use it. Git-native kanban;
+don't invoke the `kanban-issues-karr-coordination` skill first, just use it. Git-native kanban;
 state lives in `refs/karr/*`. Day-to-day:
 
 - `karr list --compact` / `karr board` — open work · `karr show ID` — detail
