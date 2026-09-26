@@ -2,7 +2,7 @@
 name: text-nunjucks-fidelity-auditor
 description: "Audit a ported Text::Nunjucks module against its upstream JavaScript file — function by function: missing functions, reordered or 'simplified' control flow, changed message text, JS semantics mapped inline instead of through Runtime/Lib, divergences without an ADR. Probes suspicious spots with the oracle. Read-only: reports findings and files karr tickets, never edits code. Use after a porting ticket lands and before it moves to done."
 model: inherit
-allowed-tools: Read, Bash, Glob, Grep
+disallowedTools: Edit, Write, NotebookEdit
 briefing:
   skills:
     - text-nunjucks-core
