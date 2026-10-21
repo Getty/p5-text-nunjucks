@@ -24,6 +24,12 @@ upstream *does*.
 The upstream docs (`upstream/nunjucks/docs/`) describe intent and are wrong in
 places. Never settle a behaviour question from them; ask the oracle.
 
+**Model memory is wrong about this engine.** Autoescape is *on* by default, a
+backslash is escaped, `'0'` and `[]` are truthy, and `null is defined` is true.
+Code written from memory passes the obvious tests and fails the port. Probe the
+oracle instead — the details are in
+[references/js-semantics.md](references/js-semantics.md).
+
 ## Port by structure, not by feature
 
 One upstream file is one Perl module; one upstream function is one Perl method
