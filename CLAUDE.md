@@ -25,7 +25,8 @@ skill `text-nunjucks-core`; the measured JS-semantics catalogue in its
 ## Delegation
 
 Delegate behavior-relevant code to the right agent instead of touching it yourself —
-principle and lane are in `.claude/rules/text-nunjucks-rules.md`.
+the principle is a shared house rule (skilletor bundle `getty-cpan-dist@getty`); lanes
+and hazards are in `.claude/rules/text-nunjucks-rules.md`.
 
 | Task | Agent |
 |---|---|
