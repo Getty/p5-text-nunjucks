@@ -1,6 +1,8 @@
 package Text::Nunjucks::Parser;
 # ABSTRACT: 1:1 port of Nunjucks src/parser.js -- the recursive-descent parser
 
+our $VERSION = '0.001';
+
 use strict;
 use warnings;
 use Text::Nunjucks::Lexer;

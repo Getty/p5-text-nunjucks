@@ -1,6 +1,8 @@
 package Text::Nunjucks::Lexer;
 # ABSTRACT: 1:1 port of Nunjucks src/lexer.js -- the template tokenizer
 
+our $VERSION = '0.001';
+
 use strict;
 use warnings;
 use Text::Nunjucks::Lib;

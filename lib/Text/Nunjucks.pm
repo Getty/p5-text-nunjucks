@@ -1,6 +1,8 @@
 package Text::Nunjucks;
 # ABSTRACT: Nunjucks templating engine, ported 1:1 from the JavaScript original
 
+our $VERSION = '0.001';
+
 use strict;
 use warnings;
 

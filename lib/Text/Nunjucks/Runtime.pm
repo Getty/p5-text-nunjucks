@@ -1,6 +1,8 @@
 package Text::Nunjucks::Runtime;
 # ABSTRACT: 1:1 port of Nunjucks src/runtime.js -- frames, macros, member lookup
 
+our $VERSION = '0.001';
+
 use strict;
 use warnings;
 use builtin qw( is_bool created_as_number true false );

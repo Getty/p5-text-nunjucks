@@ -1,6 +1,8 @@
 package Text::Nunjucks::Tests;
 # ABSTRACT: 1:1 port of Nunjucks src/tests.js -- the built-in `is` tests
 
+our $VERSION = '0.001';
+
 use strict;
 use warnings;
 use builtin qw( true false );

@@ -1,6 +1,8 @@
 package Text::Nunjucks::Lib;
 # ABSTRACT: 1:1 port of Nunjucks src/lib.js -- foundation utilities and escaping
 
+our $VERSION = '0.001';
+
 use strict;
 use warnings;
 use builtin qw( is_bool created_as_number true false );

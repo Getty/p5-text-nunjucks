@@ -1,6 +1,8 @@
 package Text::Nunjucks::Lib::Error;
 # ABSTRACT: Port representation of a JS built-in Error / TypeError (name + message)
 
+our $VERSION = '0.001';
+
 use Moo;
 use namespace::autoclean;
 

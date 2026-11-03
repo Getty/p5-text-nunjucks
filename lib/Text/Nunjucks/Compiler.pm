@@ -1,6 +1,8 @@
 package Text::Nunjucks::Compiler;
 # ABSTRACT: 1:1 port of Nunjucks src/compiler.js -- emits Perl source
 
+our $VERSION = '0.001';
+
 use strict;
 use warnings;
 use Scalar::Util qw( blessed );

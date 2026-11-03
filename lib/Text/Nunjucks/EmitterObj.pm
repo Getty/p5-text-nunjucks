@@ -1,6 +1,8 @@
 package Text::Nunjucks::EmitterObj;
 # ABSTRACT: the on/emit surface of src/object.js EmitterObj, as a Moo role (ADR 0002)
 
+our $VERSION = '0.001';
+
 use Moo::Role;
 use namespace::autoclean;
 

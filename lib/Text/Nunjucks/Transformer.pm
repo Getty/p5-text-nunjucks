@@ -1,6 +1,8 @@
 package Text::Nunjucks::Transformer;
 # ABSTRACT: 1:1 port of Nunjucks src/transformer.js -- the async CPS rewrite
 
+our $VERSION = '0.001';
+
 use strict;
 use warnings;
 use Scalar::Util qw( blessed refaddr );
