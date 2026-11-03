@@ -1,3 +1,17 @@
 Revision history for Text-Nunjucks
 
 {{$NEXT}}
+    - First release: Text::Nunjucks, a 1:1 Perl port of Nunjucks 3.2.4.
+      The same template, context and options are meant to give the same
+      output and the same error messages as the JavaScript original.
+    - The template pipeline is ported module by module: Lexer, Parser,
+      Nodes, Transformer, Compiler (emits Perl source), Runtime and
+      Environment with its Context and Template classes.
+    - Lib (foundation utilities, escaping, TemplateError), the base Loader
+      with path resolution, and the built-in "is" tests (Tests) are in.
+    - Every deliberate difference from Nunjucks is recorded as an ADR in
+      docs/adr/.
+    - The test suite ports the upstream compiler, lexer, parser and runtime
+      suites and runs a corpus of cases generated from the real Nunjucks.
+    - Not yet ported: the built-in filters; their upstream tests are
+      carried as TODO.
