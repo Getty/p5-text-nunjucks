@@ -50,6 +50,6 @@ A 1:1 port of Nunjucks C<src/loader.js>: the abstract base every loader extends.
 It supplies C<resolve> / C<is_relative> for relative template names and, through
 the C<Text::Nunjucks::EmitterObj> role, the C<on> / C<emit> event surface the
 Environment wires up (C<update> / C<load>). Concrete loaders
-(C<FileSystemLoader>, C<PrecompiledLoader>) are ported separately (k19).
+(C<FileSystemLoader>, C<PrecompiledLoader>) are not part of this module.
 
 =cut

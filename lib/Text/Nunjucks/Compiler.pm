@@ -1498,7 +1498,7 @@ hashref C<< { root => \&root, b_<name> => \&b_<name>, ... } >>.
 
 The emitted code calls into C<$runtime> (Text::Nunjucks::Runtime, class-method
 API) for every operator and value operation, C<$env> / C<$context> for the
-environment surface (implemented by Text::Nunjucks::Environment, k16), and uses
+environment surface (implemented by Text::Nunjucks::Environment), and uses
 C<$frame> / C<$cb> per the callback protocol.
 
 =cut
