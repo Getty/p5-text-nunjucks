@@ -38,8 +38,8 @@ and hazards are in `.claude/rules/text-nunjucks-rules.md`.
 The agents carry their skills via `briefing.skills` (see `.claude/agents/`); the main
 agent delegates rather than loading them. Skill sources live under `.claude/skills/` —
 `text-nunjucks-core` is project-owned; the `getty-*`, `perl-release-dist-ini`,
-`feedback-loop-debugging` and `kanban-issues-karr-coordination` ones are hardlinked from their
-shared sources (never `Edit`/`Write` those — skill `manage-skills`).
+`feedback-loop-debugging` and `kanban-issues-karr-*` ones are installed by skilletor from
+`.claude/skilletor.json` and change in their source repos.
 
 ## Working the board
 
