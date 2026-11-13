@@ -1,0 +1,20 @@
+---
+class: standard
+created: 2026-11-13T11:18:46Z
+id: 81
+priority: low
+status: backlog
+tags:
+- bug
+- lib
+title: 'Lib group_by: a key naming an Object.prototype member (toString, constructor,
+  __proto__) groups instead of throwing'
+updated: 2026-11-13T11:18:46Z
+---
+
+Found by the k51 fidelity audit (2026-11-13). upstream lib.js groupBy: `(result[key] || (result[key] = [])).push(value)` on `const result = {}` -- result[key] reads inherited Object.prototype members, so a key such as toString, constructor, __proto__, valueOf, hasOwnProperty is truthy and not an array, and .push throws.
+
+oracle: {% for k, v in items | groupby("t") %}{{k}}:{{ v | length }};{% endfor %} with context {"items":[{"t":"toString"},{"t":"b"}]} -> error "(unknown path)\n  TypeError: (result[key] || result[key]).push is not a function" (same text for "__proto__" and "constructor").
+port (Lib level, the groupby filter lands with k17 job 5): Text::Nunjucks::Lib->group_by([{t=>"toString"},{t=>"b"}], "t") returns groups toString:1|b:1 -- no error.
+
+Site: lib/Text/Nunjucks/Lib.pm group_by, `push @{ $result->get($hkey) // $result->set( $hkey, [] ) }, $value;`. Related but separate from the k17 job-5 must-fix (2) on group_by key ToString. Which inherited names count (the full Object.prototype member list, incl. __proto__) needs an oracle sweep; the error text is V8's, measured above.
