@@ -1,0 +1,14 @@
+---
+class: standard
+created: 2026-11-13T05:07:32Z
+id: 58
+priority: low
+status: backlog
+tags:
+- bug
+- runtime
+title: asyncEach over a string dies with a raw Perl error instead of the JS TypeError
+updated: 2026-11-13T05:07:32Z
+---
+
+Found by the k17 job 1 worker (2026-11-13). {% asyncEach c in '😀ab' %} fails in JS with 'TypeError: next is not a function'; the port dies with Perl's "Can't use string as a HASH ref" from Lib::keys. Not a UTF-16 issue. Fix: same error class/message as upstream (ADR 0010), corpus case.
