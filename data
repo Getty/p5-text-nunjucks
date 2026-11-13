@@ -1,0 +1,14 @@
+---
+class: standard
+created: 2026-11-13T07:27:56Z
+id: 68
+priority: low
+status: backlog
+tags:
+- performance
+title: 'Performance: per-call UTF-16 unit conversion makes replace and title slow
+  on large inputs'
+updated: 2026-11-13T07:27:56Z
+---
+
+Measured in k17 job 2 (2026-11-13). replace filter: ~80 µs per match on ASCII (20K matches 1.78 s, 80K 6.4 s), js_method_call ~24 µs vs 5 µs for the bare Lib seam; on astral strings quadratic (20K matches in a 60K-unit string 8.6 s string path, 7.5 s regex path). title ~100 µs per word. Cause: Lib unit conversion is O(n) per seam call. Not a fidelity issue; with k63/k25.
