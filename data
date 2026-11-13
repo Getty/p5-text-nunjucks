@@ -1,0 +1,19 @@
+---
+class: standard
+created: 2026-11-13T10:13:59Z
+id: 76
+priority: low
+status: backlog
+tags:
+- test
+- fidelity
+- release-should
+- release-0.001
+title: t/upstream/compiler.t ports upstream null context values as undef; TODO reasons
+  name no card
+updated: 2026-11-13T20:27:03Z
+---
+
+Found by the k17 job 4 fidelity audit (2026-11-13). ADR 0006: JS null is Runtime->None, JS undefined is undef. t/upstream/compiler.t (k21) translates upstream { foo: null } as { foo => undef } at: line 297 "should fail silently when looping over a null variable" (upstream tests/compiler.js:396 -- the it() title is about null, the port tests undefined) and line 1447 "{{ foo }}" with foo null (upstream :1883). The third site, line 1463 "{{ foo | safe }}" (upstream :1900), is reported to the k17 job 4 worker. Each renders the empty string either way, so the assertions pass but pin the undefined path instead of the null one. Fix: use Text::Nunjucks::Runtime->None (as t/upstream/filters.t does with none()). Same file: TODO reasons that name no card -- lines 361/367 "no Perl analogue for a JS ES6 Set/Map context value (no ADR)" and line 1457 "no ADR for JS-style toString() coercion of a plain hashref value" belong to k44 and should say so. Lane: text-nunjucks-test-writer.
+
+2026-11-13 20:24 Pre-release audit (scout): also compiler.t:360, 366, 1457 -- 7 of the 10 compiler TODO reasons say '(no ADR)' or name no card; runtime.t:118-121 says 'TODO once k16 lands' and k16 is done; the corpus run prints 118 TODO lines with karr ids (e.g. '# TODO k70: toString surface') that mean nothing to a CPAN tester. Release: low, not a blocker.
