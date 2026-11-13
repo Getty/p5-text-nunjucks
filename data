@@ -1,0 +1,14 @@
+---
+class: standard
+created: 2026-11-13T06:19:05Z
+id: 61
+priority: low
+status: backlog
+tags:
+- bug
+- compiler
+title: Single-name for loop reads arr.length once; upstream re-reads it every iteration
+updated: 2026-11-13T06:19:05Z
+---
+
+Found by the k17 job 1 worker (2026-11-13). Compiler compile_for (single name): the port computes $len before the loop and compares against it; upstream emits 'for(var i=0; i < arr.length; i++)', re-reading length per iteration. Observable only if the loop body changes the array's length (e.g. arr.push() in the body). Probe with the oracle, port 1:1, corpus case.
