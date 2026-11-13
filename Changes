@@ -35,3 +35,5 @@ Revision history for Text-Nunjucks
     - A filter given a value of the wrong kind throws V8's TypeError text
       ("str.toLowerCase is not a function").
     - Array lastIndexOf is native.
+    - The native String replace() takes the JS replacement patterns, a regex
+      pattern and a function replacer.

@@ -816,16 +816,24 @@ my %STRING_METHODS = (
     return $s;
   },
   replace => sub {
-    # string-pattern replace of the FIRST occurrence (regex patterns and $&/$1
-    # special replacement strings ride on the k7 regex decision -- not here).
+    # String.prototype.replace(searchValue, replaceValue): a regex pattern runs
+    # RegExp.prototype[Symbol.replace] (ADR 0013); a string pattern replaces its
+    # FIRST occurrence, with a coderef's result (called with matched, position,
+    # string) or the replacement string's $ patterns (GetSubstitution). Oracle:
+    # 'abc'.replace('b', '$&$&') -> abbc, 'a1b'.replace(r/\d/, '-') -> a-b.
     my ( $self, $s, $pattern, $repl ) = @_;
+    return $pattern->symbol_replace( $s, $repl ) if $self->_is_regex($pattern);
+    my $functional = Text::Nunjucks::Lib->is_function($repl);
     $pattern = $self->_js_to_string($pattern);
-    $repl    = $self->_js_to_string($repl);
+    $repl    = $self->_js_to_string($repl) unless $functional;
     my $idx = Text::Nunjucks::Lib->js_string_index_of( $s, $pattern );
     return $s if $idx < 0;
+    my $replacement = $functional
+      ? $self->_js_to_string( $repl->( $pattern, $idx, $s ) )
+      : Text::Nunjucks::Lib->js_get_substitution( $pattern, $s, $idx, [], undef, $repl );
     # preceding + replacement + following, joined in code units (ADR 0012)
     my $out = Text::Nunjucks::Lib->js_substring( $s, 0, $idx );
-    Text::Nunjucks::Lib->js_string_append( $out, $repl );
+    Text::Nunjucks::Lib->js_string_append( $out, $replacement );
     Text::Nunjucks::Lib->js_string_append( $out,
       Text::Nunjucks::Lib->js_substring( $s, $idx + Text::Nunjucks::Lib->js_string_length($pattern) ) );
     return $out;

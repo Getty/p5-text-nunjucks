@@ -131,5 +131,48 @@
         "message": "(unknown path)\n  Error: Unable to call `--expression--[\"foo\"]`, which is undefined or falsey"
       }
     }
+  },
+  {
+    "name": "native String replace: a string pattern's replacement takes the $ patterns (k56)",
+    "template": "{{ 'abc'.replace('b', '$&$&') }}|{{ 'abc'.replace('b', '$$') }}|{{ 'abc'.replace('b', '[$`]') }}|{{ 'abc'.replace('b', \"[$']\") }}|{{ 'abc'.replace('b', '$1$<n>$') }}",
+    "expected": {
+      "ok": true,
+      "output": "abbc|a$c|a[a]c|a[c]c|a$1$&lt;n&gt;$c"
+    }
+  },
+  {
+    "name": "native String replace with a regex pattern (k57)",
+    "template": "{{ 'a1b2'.replace(r/\\d/, '-') }}|{{ 'a1b2'.replace(r/\\d/g, '-') }}|{{ 'a1b2'.replace(r/(\\d)/g, '<$1>') }}|{{ 'aaa'.replace(r/a*/g, '-') }}",
+    "expected": {
+      "ok": true,
+      "output": "a-b2|a-b-|a&lt;1&gt;b&lt;2&gt;|--"
+    }
+  },
+  {
+    "name": "native String replace with a macro as the replacer",
+    "template": "{% macro m(x, p, s) %}[{{ x }}@{{ p }}/{{ s }}]{% endmacro %}{{ 'abcb'.replace('b', m) }}|{{ 'abcb'.replace(r/b/g, m) }}",
+    "expected": {
+      "ok": true,
+      "output": "a[b@1/abcb]cb|a[b@1/abcb]c[b@3/abcb]"
+    }
+  },
+  {
+    "name": "native String replace: $` and $' cut at code-unit positions",
+    "template": "{{ s.replace('b', '[$`|$\\']') }}|{{ s.replace(r/b/g, '[$`]') }}",
+    "context": {
+      "s": "😀ab😀b"
+    },
+    "expected": {
+      "ok": true,
+      "output": "😀a[😀a|😀b]😀b|😀a[😀a]😀[😀ab😀]"
+    }
+  },
+  {
+    "name": "native String replace: missing and non-string arguments",
+    "template": "{{ 'abc'.replace('b') }}|{{ 'abc'.replace(r/b/) }}|{{ 'a1c'.replace(1, null) }}|{{ 'abc'.replace() }}",
+    "expected": {
+      "ok": true,
+      "output": "aundefinedc|aundefinedc|anullc|abc"
+    }
   }
 ]
