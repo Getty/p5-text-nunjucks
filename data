@@ -1,0 +1,25 @@
+---
+class: standard
+created: 2026-11-13T14:40:44Z
+id: 91
+priority: medium
+status: backlog
+tags:
+- bug
+- runtime
+title: 'member_lookup_method ignores array indices: {{ a[0]() }} on a function element
+  says ''undefined or falsey'''
+updated: 2026-11-13T14:40:44Z
+---
+
+Found by the k18 fidelity audit (2026-11-13), predates k18 (HEAD has the same member_lookup_method).
+
+Oracle vs port:
+- {% macro m() %}x{% endmacro %}{% set a = [m] %}{{ a[0]() }} -> upstream `x`; port `Template render error: (unknown path)\n  Error: Unable to call `a["0"]`, which is undefined or falsey`
+- {% set j = [joiner("-")] %}[{{ j[0]() }}][{{ j[0]() }}] -> upstream `[][-]`; port the same Unable-to-call error
+- {% set c = cycler("a","b") %}{% set p = c | dictsort %}{{ p[1][1]() }} -> upstream `a`; port `Unable to call `p["1"]["1"]`...`
+- control: {% set f = a[0] %}{{ f() }} works in both (symbol call).
+
+Cause: Runtime.pm member_lookup_method, Array branch (lib/Text/Nunjucks/Runtime.pm:1152-1156) returns only %ARRAY_METHODS and never the element at an index key. Upstream runtime.js:230-240 memberLookup reads obj[val] for any key and returns a bound wrapper when typeof obj[val] === "function"; the FunCall site then calls it.
+
+Fix: in the Array branch of member_lookup_method, for _is_index_key($key) return the element when Lib is_function (like the hash branch), else undef so call_wrap gives the upstream text. Add the three probes as corpus cases. Related: k65 (non-callable member message), ADR 0016 (the two seams).
