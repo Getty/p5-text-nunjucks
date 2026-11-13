@@ -1,0 +1,15 @@
+---
+class: standard
+created: 2026-11-13T10:14:37Z
+id: 77
+priority: low
+status: backlog
+tags:
+- test
+- harness
+- numbers
+title: 'corpus.t: context JSON integers beyond the 64-bit range decode as Perl strings'
+updated: 2026-11-13T10:14:37Z
+---
+
+Found by the k17 job 4 fidelity audit (2026-11-13). t/corpus.t decodes cases with JSON::MaybeXS (Cpanel::JSON::XS here), which returns an integer literal outside IV/UV range as a string: -9223372036854775809 and 123456789012345678901234567890 come back created_as_string (1e400 is a number). normalize() passes them through, so the port sees a JS string where node sees a Number. Probe: context {"x": -9223372036854775809}, template "{{ x|string }}|{{ x|escape }}" -- oracle -9223372036854776000|-9223372036854776000, port (through the corpus.t path) -9223372036854775809|-9223372036854775809. No committed case hits it yet; any future corpus case with such a number would fail for a harness reason, not a port one. Fix in the harness boundary (normalize: numify an integer-looking string that the decoder produced from a JSON number, or decode with allow_bignum and convert to NV), xt/oracle-live.t likewise. Lane: text-nunjucks-test-writer.
