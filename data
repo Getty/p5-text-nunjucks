@@ -1,0 +1,242 @@
+---
+class: standard
+completed: 2026-11-13T13:48:19Z
+created: 2026-09-21T22:47:06Z
+depends_on:
+- 16
+- 3
+- 4
+- 5
+id: 17
+priority: high
+started: 2026-11-13T13:48:19Z
+status: done
+tags:
+- port
+title: Port filters.js → Text::Nunjucks::Filters
+updated: 2026-11-13T13:48:20Z
+---
+
+src/filters.js (648 lines): every builtin filter under its upstream name, same argument order, same kwargs, same edge cases — abs, batch, capitalize, center, default/d, dictsort, dump, escape/e, safe, first, forceescape, groupby, indent, join, last, length, list, lower, nl2br, random, reject, rejectattr, replace, reverse, round, select, selectattr, slice, sort, string, striptags, sum, title, trim, truncate, upper, urlencode, urlize, wordcount, float, int. SafeString-ness must propagate exactly as upstream (copy_safeness). Port tests/filters.js → t/upstream/filters.t; add an oracle corpus file per filter family with the nasty inputs (undefined, null, numbers-as-strings, SafeString in, unicode). Port per skill text-nunjucks-core: same functions, same order, snake_case names, upstream control flow kept. Probe surprises with the oracle and commit them as corpus cases. Any deliberate difference needs an ADR in the same change.
+
+FROM k14 AUDIT — two things this ticket owns: (1) ADR 0012 UTF-16 retrofit: build the js-utf16 code-unit seams (js_string_length/js_substr/js_char_at/js_reverse family) in Lib, and retrofit Runtime::member_lookup's string surface (.length/index/slice/substring/charAt/split('')/reverse) AND SafeString.length to use them -- not just the filters. String filters (length/truncate/center/wordcount/batch/slice) are the bulk of consumers. Astral corpus cases: oracle-generated (UTF-16) expected only; they fail loud until this lands (correct signal) -- never pin Perl code-point values. (2) parseInt/parseFloat/Math.round belong here (k14 deferred them, no runtime caller) -- one home for the int/float/round filters.
+
+Tests.pm (builtin is-tests) already ported under k16 (commit 81043a9) — environment required it for render (get_test('null')). Reduce k17 scope to filters + globals + the ADR-0012 UTF-16 retrofit into Lib/Runtime::member_lookup; reconcile the existing Tests.pm + its suite (k35) rather than re-porting. Guarded-require bridge for filters/tests/globals in Environment::init becomes a hard use once k17 lands.
+
+From k16 audit (F3, needs-fix here): Tests.pm lower/upper on non-strings uses lc/uc (Tests.pm:98-101,146-149); upstream value.toLowerCase()/toUpperCase() THROW on non-strings (TypeError). '5 is lower' errors in JS, port yields false. Fix when reconciling the brought-forward Tests.pm + t/upstream/tests.t (k35).
+
+Scope 2026-11-13 run: filters.js + ADR 0012 UTF-16 seams (Lib + Runtime::member_lookup + SafeString.length) + parseInt/parseFloat/Math.round. Globals stay with k18 (its title); Tests.pm F3 lower/upper fix stays with k35 as the card text says.
+
+DECISION NEEDED (maintainer) A — integer-like object keys. JS orders own keys as array-index keys ascending first, then string keys by insertion (OrdinaryOwnPropertyKeys); ADR 0011 only says insertion order (Hash::Ordered) for literals/engine-built objects and sorted for plain caller hashes. Oracle: groupby over years gives 9|10|2018|2019|b|a. Options: (1) amend ADR 0011 — the one ordering seam applies the JS rule to literal and engine-built dicts, and plain caller hashes sort array-index keys numerically first, then the rest by key; (2) amend for literal/engine-built only, plain hashes stay purely sorted; (3) keep pure insertion order and record the integer-key divergence. Recommendation: (1) — matches JS wherever the information exists and narrows the plain-hash divergence. Until decided: groupby/dump/list/dictsort/urlencode ported with insertion order, the 2 groupby integer-key assertions in t/upstream/filters.t stay TODO, integer-key corpus cases go in as TODO.
+
+DECISION NEEDED (maintainer) B — Array.prototype.sort with an inconsistent comparator (sort/dictsort over mixed kinds, e.g. [1,'a',true,null]). ES2019 sort is stable, so every consistent comparator gives the same result in a stable Perl sort; only inconsistent comparators expose V8's algorithm (oracle: sort-mixed ',1,true,2,9,10,a'). Options: (1) port V8's Array.prototype.sort (TimSort with binary insertion for short runs) as one Lib seam, pinned to the oracle's Node, oracle corpus for mixed arrays; (2) use Perl's stable sort and record a divergence limited to inconsistent comparators. Recommendation: (1) — fits the maintainer's fidelity stance in ADR 0007/0012 ('Aufwand ist immer ok'), but it ports V8 code rather than Nunjucks code, so it is the maintainer's call. Until decided: sort/dictsort ported with stable Perl sort for consistent comparators; mixed-kind inputs go in as TODO corpus cases.
+
+DECISION NEEDED (maintainer) C — JS values with no Perl form, used by the upstream 'length' tests: new String('...') (wrapper object) and an Array with user-defined properties (Map/Set and the custom-toString object belong to k44). Options: (1) one ADR recording them as inexpressible-input divergences, the tests stay skipped citing it (could cover k44's Map/Set too); (2) Perl shims (a Runtime String-wrapper class, an array-with-properties object) that length & co. recognise. Recommendation: (1) — no Perl caller produces these values naturally, and shims would be API surface nobody uses. Until decided: the 4 length tests stay skipped (as committed by the test-writer).
+
+ORCHESTRATOR CALL (not a maintainer decision, overrule if wrong): builtins that read this.env (groupby/sort: opts.throwOnUndefined; select/reject: getTest) get the Environment by closure — Filters exports are built per Environment at registration — instead of a this-binding. Reason: ADR 0009 calls Context-as-this engine-internal plumbing and gives every sync filter (@args) only; a closure keeps that call shape and is unobservable from templates. Also: globals stay with k18 for this run (the run's instruction names filters only); the k17 body and ADR 0015 say globals at k17 — conflict flagged, ADR 0015 prose to be aligned.
+
+CORRECTION to decision A (after the k34 fidelity audit): ADR 0011 already decides literal and engine-built dicts are 1:1 with JS, so JS array-index-first key order there is a bug in the mechanism, not an open mapping — filed as k51 (bug, high). The only open maintainer question left from A is k51's last paragraph: should plain caller hashes (sorted per ADR 0011) also sort array-index keys numerically first? Recommendation unchanged: yes. Decision C is folded into k44 (inexpressible JS inputs).
+
+2026-11-13 04:15 job 1/5 (UTF-16 seams + retrofit + per-case corpus TODO) started by worker. Baseline prove -lr t/: 15 files, 621 tests, 0 failed, 0 top-level TODO/skip; nested 3997 assertions, 373 nested TODO (348 filters.t untracked, 24 upstream/compiler.t, 1 upstream/runtime.t), 0 nested skip.
+
+2026-11-13 04:37 MAINTAINER DECISION (Getty, 2026-11-13) on B: port V8's Array.prototype.sort (TimSort with binary insertion) as one Lib seam, pinned to the oracle's Node; mixed-kind corpus cases become real expectations. Record as ADR. Decision B is closed. Decision A's remaining question is answered on k51 (yes).
+
+2026-11-13 job 1/5 (UTF-16 seams + retrofit + per-case corpus TODO) finished by worker, tree uncommitted and commit-ready. Lib seams (ADR 0012): js_string_length, js_char_at, js_string_slice, js_substring, js_substr, js_string_index_of, js_string_last_index_of, js_split, js_string_compare; no js_reverse (upstream reverse = list/split('') + Array reverse + join('')). Retrofit: member_lookup index/.length, STRING_METHODS (replace/slice/substring/split/indexOf/charAt, plus substr and lastIndexOf added per ADR 0008), Array sort, SafeString length, _less_than, Lib to_array and in_operator. Corpus: t/corpus/render-strings-utf16.json, 33 cases (25 real, 8 todo). prove -lr t/: 15 files, 655 tests, 0 failed, 381 TODO at all levels (8 corpus), 0 skipped; xt/oracle-live.t passes. OPEN MAPPING (decision): JS turns a lone high and a lone low surrogate glued together by ~, +, concat, join, replace or the output buffer back into a valid pair; the port keeps two surrogate characters (output and eq differ). 4 todo corpus cases pin it. Needed for |reverse|reverse and replace('') in jobs 2-5. DRIFT, for this board: (D1) the Lexer counts code points for colno and error Column (oracle: '😀😀{{ a b }}' is Column 10, port gives 8); (D2) regex lastIndex and non-u atoms count code points (r/b/g on 'a😀b': lastIndex 4 vs 3; r/^.b$/ on '😀b' is false vs true), ADR 0013 territory; (D3) asyncEach over a string: JS gives 'TypeError: next is not a function', the port dies with a raw Perl HASH-ref error from Lib::keys; (D4, for k35) Tests.pm lower/upper lc/uc warn on a lone surrogate.
+
+2026-11-13 job 1 audit (fidelity-auditor): seams correct (~130 oracle probes agree). Finding 1: lone surrogates glued by ~, +, concat, join, replace, output do not re-pair (oracle (e[0]~e[1])=='😀' true, port false). Orchestrator call: ADR 0012 already decides this (byte-identical, strings stay ordinary Perl character strings, reverse 1:1 with JS), so it is a needs-fix in job 1, not a maintainer decision; mechanism: one Lib re-pair seam at every string join point. Drift ticketed: k52 lexer colno, k53 regex code points, k54 in-operator key ToString, k55 array slice NaN, k56 String replace patterns, k57 split/replace with regex arg, k58 asyncEach over string error. Add-on to decision B: [undefined,'z','a'].sort() -> JS a,z,(undefined last, never compared), port a,,z -- the sort ADR must cover undefined-last too.
+
+2026-11-13 06:17 2026-11-13 job 1 fix round (after the audit) finished by worker. The tree is uncommitted and commit-ready; the card was not moved.
+F1: added one seam, Lib js_string_append($buf, $str). It appends in place through the $_[1] alias and returns nothing. It re-pairs only at the boundary, in O(1): it tests $str's first char, then chops the buffer's last char and puts it back. It does not use a \z regex, because COW would copy the buffer. Runtime has a delegator, $runtime->js_string_append. The invariant (no engine-built string holds a pair as two surrogate chars, so eq and hash keys equal JS ==, === and keys) is documented in the Lib header.
+F1 join sites: op_concat, op_add, String concat, replace (both joins), _array_join (sep and elem), async_all output join, Lib repeat. In emitted code: output expr, output literal, block, include, asyncAll append, CallExtension sync and async.
+F1 mutation check: each site reverted alone in a scratch lib copy, and all 17 mutants are KILLED.
+F1 corpus: the 4 re-pair todos are now real. 8 cases were added and the replace case was extended (both joins). Perl-side tests were added for the cases the corpus cannot carry: 10-lib js_string_append and repeat; 10-environment output literal and extension sync/async; 10-runtime uc/lc no-warn and _for_code_units.
+F2: added one case with the negative fractional slice/substr and split limit mod 2^32.
+F3: pair-interior case extended; the case-mapping case is renamed to 'does not die on a lone surrogate'.
+F4: the reverse todo names both blockers.
+F5: the _slice_bounds comment is fixed.
+F6: for-in over a primitive string splits it once (Runtime _for_code_units, upstream loop shape kept). member_lookup does a single js_char_at. Lib _js_to_units memoizes the last astral string.
+F7: js-semantics.md now says 'decided by ADR 0012'.
+Timings, render only (HEAD / now):
+- output path, 14k appends: 0.114 / 0.134 s;
+- for over 20k items: noise (2.47-2.75 s both);
+- for c in s, 20k units: ascii 1.78 / 1.82 s, BMP 2.56 / 1.76 s, astral 1.16 / 1.91 s (2x the iterations, since HEAD iterated code points). Before the fix round: ascii 5.35 s, BMP 13.5 s, astral over 200 s.
+- {{ s[i] }} loop, 20k astral: 431.7 s before the memo, 4.17 s after (HEAD 3.19 s).
+prove -lr t/: 15 files, 669 tests, 0 failed, 0 skipped. Nested TODO 377 (corpus 4: safe, length, select, reverse are filters; upstream/compiler 24; upstream/filters 348; upstream/runtime 1). 0 TODO passing. prove -l xt/: green.
+DRIFT for this board (not fixed):
+(a) {% for k, v in 'ab' %}: JS gives 0=a;1=b;, the port dies with a raw Perl HASH-ref error in Lib::keys.
+(b) for over a SafeString: JS fromIterator iterates code points, giving [a][😀][b]|4 for a macro result 'a😀b'; the port's from_iterator is inert and gives [][][][].
+(c) the single-name for loop snapshots $len where upstream re-reads arr.length per iteration.
+(d) the Lexer _parse_string backslash escape joins non-contiguous source chars; it is reachable only with a lone-surrogate template source.
+(e) compile time is about 130 us per source char (linear).
+(f) for doc-writer: ADR 0012 prose should name js_string_append and the invariant.
+Jobs 2-5: every filter join (join, reverse, center, truncate, ...) must go through js_string_append.
+
+2026-11-13 job 1 fix round done (worker): F1 re-pair seam Lib js_string_append at every join site (Runtime op_add/op_concat/concat/replace/_array_join/async join, Lib repeat, Compiler output/block/include/extension/asyncAll), F2-F7 fixed, for over a string splits once (_for_code_units). Main agent check: prove -lr t/ 15 files 669 tests 0 failed 0 skipped, 377 nested TODO (corpus 4, filters.t 348, compiler.t 24, runtime.t 1); prove -l xt/ 9/9. Drift ticketed: k59 for k,v over string, k60 for over SafeString, k61 for-loop length re-read, k62 lexer escape join, k63 compile time.
+
+Job 1 committed as 5624ab4 (UTF-16 seams, Runtime retrofit, surrogate re-pair, per-case corpus todo, ADR 0012 implementation section). Jobs 2-5 open.
+
+2026-11-13 jobs 2-5 cut (orchestrator, from the scout's split): job 2 strings + Filters.pm skeleton + Environment hard use for filters (capitalize center indent lower nl2br replace striptags title trim truncate upper wordcount); job 3 sequences + length (batch first join last length list random reverse slice sum); job 4 numbers, escaping, URLs (abs default/d escape/e safe forceescape float int round string urlencode urlize; parseInt/parseFloat/Math.round seams); job 5 ordering + predicates (dictsort dump groupby reject rejectattr select selectattr sort; k51 fix, decision B gates mixed-kind sort). Per job: worker ports in parallel with test-writer writing the family corpus file (t/corpus/render-filters-<family>.json) -> fidelity-auditor -> worker fixes -> release-manager commits. Orchestrator calls (overrule if wrong): JS toLowerCase/toUpperCase semantics incl. Final_Sigma are the 1:1 default, implemented in one Lib seam, not a decision; JSON.stringify for dump is a hand-written Lib seam 1:1 with JS, not a divergence; Math.random in random needs no ADR (upstream asserts membership only).
+
+job 2: t/corpus/render-filters-strings.json written (354 oracle cases, 11 todo k17 job 4 safe/escape). Fail in Perl run with filter not found until the port lands. {% autoescape %} block tag does not exist in 3.2.4 (unknown block tag), so autoescape variation is via opts.autoescape only.
+
+Job 2 (Filters.pm + string family) done, NOT committed; card not moved. New lib/Text/Nunjucks/Filters.pm (upstream order, class methods, exports($env) -> {name => closure}; Environment now hard-loads it, ADR 0015; tests/globals still guarded). Ported: normalize, capitalize, center, indent, lower, nl2br, replace, striptags, title, trim, truncate, upper, wordcount. New seams: Lib js_to_lower_case/js_to_upper_case (Final_Sigma per ICU), js_get_substitution, js_word_class; Runtime js_method_call/js_string_this (V8 TypeError text), Regex->symbol_replace, Array lastIndexOf; member_lookup_method no longer dies on a Hash::Ordered. filters.t: 11 %TODO entries removed; replace kept (2 asserts need safe, job 4). compiler.t: 5 TODOs (title/replace) passed and were dropped. k56/k57 replace-member wiring is in the tree as a separable patch /tmp/k17j2/k56-k57.patch. Oracle: 300+ probes, all SAME except known k53 (empty regex match inside a surrogate pair) and the Unicode 15 (Perl 5.40) vs 17 (Node 24 ICU) case-map gap -- open mapping. Test-writer corpus render-filters-strings.json has 2 red cases that need todo: 'regex dot on astral...' (k53) and 'regex u flag...' (k52 column). Drift for the dispatcher to file: member_lookup_method returns undef for non-callable members ('o.f()' with f=2 gives 'undefined or falsey', JS 'not a function'); make_regex ^/$ under m and '.' ignore JS line terminators \r U+2028 U+2029; Function ToString (JS prints the source) unmapped; Tests.pm still guarded require; ADR 0015 status prose.
+
+2026-11-13 07:41 Job 2 fix round (after the audit) done by worker; NOT committed, card not moved.
+F1: Regex gets _group_names (named groups in source order, each once; first place wins for a duplicate name), recorded in make_regex from one walker _capture_groups (replaces _count_capture_groups; _captures_count = its size). _regexp_exec builds the groups object through Runtime make_dict (Hash::Ordered, engine-built per ADR 0011) in that order, undef for a group that did not take part. Lib js_get_substitution reads $<name> with ->get. Probe '{% macro f(m,a,b,p,s,g) %}...{{ 'ab'|replace(r/(?<z>a)(?<b>b)/, f) }}' now z=a;b=b; (oracle z=a;b=b;). Corpus: 2 cases in t/corpus/runtime.json (inserted before the k56/k57 block; the /tmp/k17j2/k56-k57*.patch files still reverse-apply). Tests: 10-runtime.t pins group order, undefined group, duplicate name, class; classifier tests moved to _capture_groups. Mutants (sorted names; old plain hash) killed by corpus and unit tests.
+exec: the port's exec has no groups/index at all (oracle '[a]z=a;b=b;|0', port '[]|') -- for k67, which gets the ordered groups for free once exec runs on _regexp_exec.
+F7: Filters.pm header now says exports ignores $env today and job 5 must weaken it (Environment -> filters -> closure -> env cycle).
+C: js-semantics.md gained 5 oracle-backed entries: wrong-receiver TypeError, case mapping (k64 open), GetSubstitution (filter string old is literal), Symbol.replace empty match / lastIndex / groups, \w ASCII (template-literal \w is k49).
+Verified: prove -lr t/ 15 files 1062 tests, 0 failed, 0 skipped; TODO 272 (corpus 20, upstream/filters 232 nested, upstream/compiler 19 nested, upstream/runtime 1 nested), 0 TODO passing. prove -l xt/ green (oracle-live 10/10).
+Also found: 'Deep recursion on Lib::async_iter' warning from t/upstream/compiler.t (Environment.pm:393) exists at HEAD too; untracked nytprof.out (08:19, not from this round) must not be committed.
+Forward note for jobs 3-5: escape/safe/forceescape (str.toString()), sum (arr.reduce), selectattr/rejectattr (arr.filter) would throw false TypeErrors via the ADR 0008 surface. Recommendation in the hand-back: grow the surface (oracle: {toString: f}|escape calls f, so resolution must stay member lookup); Boolean surface and Object.prototype toString fallback want an ADR 0008 amendment.
+
+2026-11-13 job 2 fix round done: F1 named-groups object ordered (Regex records group names in source order), F7 comment, js-semantics.md entries; test-writer F4: replace it() real with 2 nested TODO (|safe, job 4). Main agent check: prove -lr t/ 15 files 1062 tests 0 failed 0 skipped; TODO 272 (corpus 20 per case, filters.t 232 nested, compiler.t 19, runtime.t 1); xt 10/10. ORCHESTRATOR CALL for job 4 (overrule if wrong): escape/safe/forceescape's str.toString() is ported as JS ToString (Runtime _js_to_string) -- identical for every value with a Perl form; the only differing JS inputs (own toString member, null-prototype objects) are k44's open decision, so job 4 is not blocked; template-level x.toString() is ticketed separately (k70). Jobs 3/5: Array map/filter/reduce may join the ADR 0008 surface (growth on demand is allowed) for the wrong-receiver TypeError texts. Stray nytprof.out (scratch, 08:19) in the tree root: not to be committed.
+
+Job 2 (string filters) committed as c7e8cad. Jobs 3-5 open.
+
+job 3 (sequences corpus): t/corpus/render-filters-sequences.json written, 339 oracle cases for batch/first/join/last/length/list/random/reverse/slice/sum; 6 per-case todos (4x k51, 2x k17 job 4 safe). All non-todo cases fail with 'filter not found' until the sequence filters land; then drop the strings-file todo 'length filter not ported' (1 case). Oddities: k44 inexpressible Set/Map/String-wrapper/sparse-array/native-function inputs left out.
+
+2026-11-13 08:21 job 3 (sequence filters) port done by worker; NOT committed, card not moved. Filters.pm: batch first join last length(length_filter) list random reverse slice sum at upstream positions + exports. Seams: Lib is_object (+Hash::Ordered, SafeString), map (full lib.map incl. array-like branch + RangeError 'Invalid array length'; calls up into Runtime member_lookup/op_lt -- layering choice flagged), keys/_entries/_values on SafeString (val, length), js_math_floor; Runtime js_member_read + _js_read_error (V8 'Cannot read properties of X (reading K)' key rendering), Array reduce (+ _js_not_callable_text). k55 fixed in passing (slice filter runs through _slice_bounds): ToIntegerOrInfinity, NaN bound -> 0. filters.t: family %TODO entries removed (nested k44 TODOs kept); compiler.t reverse todo_equal passed -> equal; render-strings-utf16.json 2 passing todos dropped; runtime.json +9 cases (reduce, k55 slice). Verified: prove -lr t/ 15 files 1415 tests, 1 FAIL = test-writer's untracked render-filters-sequences.json 'list: context object' (plain-hash ctx order, ADR 0011/k51 -- needs a todo or ordered ctx); same file has 3 k51 todos passing by sort coincidence; strings file 'probe rep-regex-g' todo should be re-pointed to k53. Without that file: 1076 tests all pass, 0 skip. TODO: corpus 24 (3 passing, all in the sequences file), upstream/filters 104 nested, upstream/compiler 18, upstream/runtime 1. xt/ 11/11. Drift for the dispatcher (see hand-back): Function.length (macro|length -> 0 upstream, '' here), SafeString .val member read (m().val), in_operator on SafeString is own-key only, Template init with a Hash::Ordered src dies (Environment.pm:628 reads ->{type}), reduce/map holes vs undefined, k69 Infinity loops in batch/slice.
+
+job 3 follow-up: sequences corpus reworked (no order-dependent multi-key context objects; k51 cases use b/10/9 keys, literal-dict variants added), rep-regex-g todo now k53, oracle probes for reverse/join added
+
+2026-11-13 08:49 Job 3 fix round (after the audit) done by worker; NOT committed, card not moved. (1) Lib.pm: top-level use Text::Nunjucks::Runtime (circular, both load orders checked) with the caveat comment: Runtime must never call Lib at file scope (shown on a copy: a file-scope Lib call in Runtime dies when Lib loads first). _runtime resolver kept as the getty-perl-core named-once resolver, comment fixed. t/10-lib.t: the two require Runtime lines dropped, so the map array-like subtest pins Lib-alone loading (red without the use, green with). (2) js-semantics.md: wrong-receiver section gains js_member_read/_js_read_error key rendering, Array reduce on the ADR 0008 surface + _js_not_callable_text, lib.map array-like walk + RangeError; every value re-measured (43 oracle probes, port identical). runtime.json +6 corpus cases (reduce undefined/boolean/NaN callbackfn; read-error key regex/SafeString/kwargs). (3) Filters.pm random comment: different PRNG, never byte-comparable, upstream asserts membership, ledger k24. render-strings-utf16.json: select todo reason no longer names length. prove -lr t/: 15 files, 1435 tests, 0 failed, 0 skipped; TODO 150 (corpus 27, upstream/filters 104 nested, upstream/compiler 18 nested, upstream/runtime 1 nested), 0 TODO passing. prove -l xt/: 11/11. k55 split: /tmp/k17j3-k55/k55.patch (Runtime _slice_bounds, 6 asserts in t/10-runtime.t, 2 runtime.json cases); reverse-applied tree is green (1433 tests) and _slice_bounds equals HEAD.
+
+Job 3 (sequence filters) committed as 0cf8d2c
+
+Job 4 corpus: t/corpus/render-filters-values.json (1882 cases, expected from maint/corpus-regen) covers abs, default/d, escape/e, safe, forceescape, round, string, urlencode, urlize, float, int. 30 cases carry todo (k70 toString surface, k51 integer-like string keys). Perl run fails 'filter not found' until the port lands; todo keys naming job 4 in other corpus files left for the worker.
+
+Correction: the values corpus has 28 todo cases (26 k70, 2 k51), not 30.
+
+2026-11-13 job 4 (numbers, escaping, URLs) port done by worker; NOT committed, card not moved. Filters.pm: abs, isNaN (is_nan), default_ (+alias d), escape (+alias e), safe, forceescape, round, string, urlencode, urlize (puncRe/emailRe/httpHttpsRe/wwwRe/tldRe as explicit ES regexes), float, intFilter (do_int wrapped by Runtime make_macro in exports), each at its upstream position; aliases d/e at the end of exports. New seams: Lib js_math_ceil/js_math_round (V8 Float64Round)/js_math_abs/js_math_pow (NaN exponent, +-1 ** +-Infinity), js_parse_int (ToInt32 radix, 0x, V8 Strtod / InternalStringToIntDouble / HandleGenericCase digit values), js_parse_float, _js_to_int32, js_encode_uri_component (+_js_utf8_percent_encode; lone surrogate -> URIError: URI malformed), js_digit_class (ADR 0005 \d); Lib keys returns [] for undefined/null/number/boolean/function. Runtime: js_array_destructure (iteration protocol, V8 'X is not iterable' text), _js_not_callable_text gains 'function', copy_safeness throws V8 TypeError on an undefined/null target (undefined|string), op_pow now Lib js_math_pow (fixes 1 ** Infinity -> NaN). Oracle: ~170 template probes all SAME except m|escape with a macro m (Function toString prints JS source; open mapping); parseInt 30000 + parseFloat 20000 fuzz bit-identical to node (NaN sign bit aside). Tests: filters.t family %TODO removed (8 job-5 entries left) + replace nested TODO unwrapped; compiler.t 8 nested k17 TODOs passed and dropped, 1 relabelled to k44 ({toString: f}|safe); 15 corpus todos (job 4 / safe) dropped; runtime.json +5 seam cases; 10-lib.t +9 subtests, 10-runtime.t +1 subtest and asserts. Verified: prove -lr t/ 15 files 3331 tests, 1 FAIL = test-writer's untracked render-filters-values.json 'urlencode: context object keys order-independent via sort' (uses dictsort, job 5; needs a todo); that file also has 8 k70 'object with own valueOf' todos passing (non-callable valueOf is skipped in JS too). Without that file: 1449 tests all pass, 0 skip; TODO 60 (corpus 12, upstream/filters 37 nested, upstream/compiler 10 nested, upstream/runtime 1 nested), 0 TODO passing. prove -l xt/ 12/12. Drift/open mappings in the hand-back: Math.pow V8 vs glibc on exact-tie integer powers above 2^53 (template **), Function ToString.
+
+Job 4 follow-up: render-filters-values.json now 1910 cases (+28 probes: urlize emailRe/u-flag, digit class, split points, astral cut; round; int radix kwargs; float edge strings). 8 valueOf k70 todos lifted (pass); dictsort urlencode case todo'd to job 5. Astral urlize(5)|safe not addable: cuts a surrogate, corpus-regen refuses lone surrogates (length covers it). compiler.t header comment updated. prove -lr t/: 15 files, 3359 tests, PASS.
+
+2026-11-13 job 4 audit (fidelity-auditor, read-only): no wrong output in scope. Oracle run: 4116 render cases + urlize fuzz 1500 + filter fuzz 2500 identical; seam fuzz vs node 0 diffs (parseFloat/parseInt 8613 strings, parseInt radix 2-36 6300, Math.round/ceil/floor/abs 4020, Math.pow 2019 pairs, encodeURIComponent 3004). 12/12 in-scope functions ported in upstream order, 5/5 regex constants, aliases d/e at the end. Values corpus expected verified current by xt/oracle-live. Verdict: ready to commit after 3 small fixes, none changes output. F1 (low, worker): js-semantics.md lacks job 4 entries (Float64Round -0 / 0.49999999999999994, abs(-0), 1**Inf and 1**NaN = NaN, parseInt ToInt32 radix and '-0', parseFloat case-sensitive Infinity, URIError on lone surrogate, 'X is not iterable' texts, for-in over primitives empty, undefined|string TypeError, emailRe /i ASCII-only fold, \d ASCII). F2 (low, test-writer): t/upstream/compiler.t:1463 '{{ foo | safe }}' uses foo => undef, upstream compiler.js:1900 uses null -> Runtime->None (ADR 0006). F3 (nit): stale comments Lib.pm:517 (\d now js_digit_class) and compiler.t:26-28,54 (no k17 TODO left). Drift filed by the auditor: k76 (compiler.t null-as-undef at 297/1447, card-less TODO reasons 361/367/1457 -> k44), k77 (corpus.t decodes integers outside int64 as strings). Function ToString already folded into k44. Fix round: dispatch failed 3x with API 403 authentication_failed (worker + test-writer), tree untouched.
+
+job 4 fix round: compiler.t safe-null case now uses Runtime->None (oracle gives empty string), stale k17 comments fixed; compiler.t green
+
+2026-11-13 10:36 Job 4 fix round (worker, after the audit) done; NOT committed, card not moved. F3: Lib.pm whitespace-class comment now names js_digit_class (no stale '\d when first needed'). Also fixed: Lib js_math_abs comment claimed 'Perl's abs keeps -0' -- measured false on 5.40 (abs(-0.0) gives IV 0), sentence dropped. F1: js-semantics.md gained 5 oracle-backed entries: 'Math.round, Math.abs, Math.pow' (Float64Round, -0 on [-0.5,-0], 0.49999999999999994, 2^52+1, abs(-0), 1**Inf / 1**NaN = NaN, k74 open with 942**6), 'parseInt and parseFloat' (ToInt32 radix, 0x only for radix 0/16, '-0' -> -0, V8 per-radix values: radix 10 and powers of 2 correctly rounded, others chunked and off by an ulp; parseFloat Infinity case-sensitive), copySafeness paragraph in the wrong-receiver section (undefined|string / none|string TypeError), '\d is ASCII, /i without u folds only ASCII' (emailRe: U+0663, U+017F, U+212A, U+0131, e-acute), 'urlencode: encodeURIComponent, destructuring, for-in' (URIError on a lone surrogate, the 7 'X is not iterable' renderings, for-in over primitives/functions empty). Every cited value re-measured: 30 doc-literal probes through oracle and port, all identical except 942**6 (k74). Oracle probes that became corpus cases: 11 new cases at the end of t/corpus/runtime.json (parseInt ToInt32 radix; non-power-of-two radix chunked value; radix 2/10 ties; keys over a function/number; Math.round Float64Round; Math.pow tie as todo k74; parseInt sign/0x; parseFloat Infinity case; encodeURIComponent marks; iteration protocol by element/code point; [1.5] not iterable; emailRe dotless i). Mutation-checked: ToInt32 removed, generic radix correctly rounded, function guard removed in Lib keys -- each kills its case. Verified: prove -lr t/ 15 files 3371 tests PASS, 0 skipped; TODO 82 (corpus 34 = values 21, sequences 7, strings 4, utf16 1, runtime 1 [k74 new]; upstream/filters 37 nested; upstream/compiler 10 nested; upstream/runtime 1 nested), 0 TODO passing. prove -l xt/ 12/12 PASS, 0 skip. 'Deep recursion on Lib::async_iter' warning from t/upstream/compiler.t persists (pre-existing). nytprof.out untouched.
+
+Job 4 (number, escaping and URL filters) committed as 409bd64; job 5 still open, card not moved.
+
+Orchestrator: Changes bullet from 409bd64 lists isNaN as a filter; upstream does not export it (module-local helper, filters.js:17). Fix in the job 5 commit, which rewrites that bullet anyway. Job 5 starts with k51 (own card, own commit), then the V8 sort seam (decision B) and the 8 filters.
+
+Job 5 must-fix (from the k51 worker, 2026-11-13): (1) Lib get_attr_getter and has_own_prop do not read Hash::Ordered items: [{"t":"b"},{"t":"a"}]|groupby("t") oracle b|a|, port undefined| -- also hits sort(attribute) and selectattr over template dicts; check the existing callers (join/sum attr) too. (2) group_by stringifies keys the Perl way: true -> 1, null -> None sentinel, JS gives true / null (oracle 4294967294|1.5|01|true|null|4294967295|). k51 is in review (key order seam in Lib keys, group_by result via make_dict, extend via _own_value). Orchestrator call on k51: a caller-supplied Hash::Ordered follows the JS rule over its insertion order (seam cannot tell it from an engine-built one), pending maintainer confirmation; Tie::IxHash gap filed as k78; kwargs-object-as-value filed as k79.
+
+Job 5 forward notes from the k51 audit: (3) group_by number keys need the ADR 0007 number-to-string seam (0.3 vs 0.30000000000000004 merge in the port; oracle 0.3:1|0.30000000000000004:1). (4) dictsort's raw for-in (filters.js:92) also walks inherited enumerable keys: m()|dictsort over a SafeString gives length;toString;val;valueOf; in the oracle, Lib keys gives val,length; {b:1,"10":2,"9":3}|dictsort -> 10;9;b;. (5) dump (JSON.stringify) must read keys through the same seam.
+
+k51 committed as 25c0576 (key order); k17 stays in-progress, job 5 next
+
+2026-11-13 12:07 2026-11-13 job 5 step 5b (V8 Array.prototype.sort seam, decision B) done by the worker. It is NOT committed and the card has not been moved.
+
+Seam: Text::Nunjucks::Lib->js_array_sort($arr, $comparefn). It sorts in place and returns $arr; $comparefn undef means the default comparator. It ports third_party/v8/builtins/array-sort.tq at V8 tag 13.6.233.17 in .tq order (SortState as a hash): run detection, binary insertion, minimum run length, merge_collapse with the deeper invariant, merge_lo/merge_hi with gallops and min_gallop adaptation. Spec prelude: the TypeError comes first, even on an empty array, with V8's NoSideEffectsToString text (new Runtime _js_no_side_effects_to_string); undefined values are counted out, never compared, and written last; the default comparator is ToString plus js_string_compare; a user comparator's result goes through ToNumber, NaN counts as +0, -0 is not below 0; exceptions propagate as is; the receiver is written index by index at the end. Left out, each with a reason in the header comment: elements-kind accessors, holes (ADR 0001), the Smi fast path, the Smi clamps and overflow guards.
+
+Wiring: the Runtime Array 'sort' member now delegates to the seam, with or without a comparefn.
+
+Tests: maint/js-array-sort-fixtures (node, refuses V8s other than 13.6.233.17) writes t/data/js-array-sort.json: 1042 cases, 342023 recorded comparator calls, deterministic, 779 KB. It holds consistent and inconsistent comparators, mixed-kind default sorts, and tailored runs (last run of one, merge_lo 1+1, the deeper stack invariant). t/10-lib.t replays the call sequence and the result for every case. Its prelude subtest pins node-measured values. t/10-runtime.t got 3 member asserts.
+
+Mutations: 17 of 19 caught. The 2 survivors are equivalent at that point: the merge_hi Succeed guard >0 vs >1, and the merge_lo initial last MERGE when both runs have length 1. Devel::Cover: every branch of the block is covered except 3 that V8's own callers cannot reach.
+
+prove -lr t/: 15 files, 4177 tests. 534 failures, all in the test-writer's 2 new corpus files, all 'filter not found'. render-array-sort.json: dump 12, dictsort 1, sort 1. render-filters-ordering.json: sort 127, dump 101, groupby 79, select 78, dictsort 62, selectattr 39, reject 17, rejectattr 17. 0 skipped. TODO: corpus 38, upstream/filters 37 nested, upstream/compiler 10 nested, upstream/runtime 1 nested; 0 TODO passing. prove -l xt/: 15/15.
+
+Timing, old Perl sort vs the seam: default comparator, 10k numbers 5.0 s vs 5.5 s, 100k numbers 69.5 s vs 79.2 s (Runtime ToString(number) costs 18 us per call either way); default, 100k strings 9.7 s vs 14.6 s; comparefn a-b at 100k 0.35 s (Perl sort with a callback) vs 8.4 s.
+
+Drift for the dispatcher:
+- Array toSorted is not on the ADR 0008 surface (oracle: [3,1,2].toSorted() gives 1,2,3; the port dies).
+- The Deep recursion warning from t/upstream/compiler.t is pre-existing.
+
+The open mappings are in the hand-back.
+
+2026-11-13 job 5 step 5c (ordering and predicate filters) is done by the worker. It is NOT committed and the card has not been moved. The step 5b tree (js_array_sort, the Runtime sort wiring, the fixtures, t/data, the 5b subtests) is left as it was.
+
+Filters.pm: these are at their upstream positions and in exports:
+- dictsort;
+- dump;
+- groupby;
+- get_select_or_reject, with reject and select;
+- rejectattr;
+- selectattr;
+- sort_filter, wrapped by make_macro(['value','reverse','case_sensitive','attribute']).
+
+The filters that read this.env (groupby, sort, select, reject) take $env as their first argument. It comes from exports' closure, and exports now weakens $env. The header comment is updated.
+
+Every filter in upstream's exports is now in the bag.
+
+New seams:
+- Lib js_json_stringify, a port of V8 JsonStringifier:
+  - The gap follows V8 InitializeGap. A number in (0,1) gives an empty gap that still breaks lines, so [1]|dump(0.5) is "[\n1\n]".
+  - QuoteJSONString escapes lone surrogates.
+  - toJSON(key) is supported.
+  - Circular structures throw V8's message: prefix 2, '...', postfix 1, 'index N' / "property 'k'" / '<anonymous>'.
+  - Keys go through Lib keys / _own_value; joins go through js_string_append.
+- Lib js_for_in_keys: Lib keys plus SafeString.prototype's enumerable valueOf and toString. It is the dictsort for-in seam, so Lib keys stays the one ordering seam (k51).
+- Runtime Array filter, on the ADR 0008 surface.
+
+Rewritten to be JS-faithful:
+- Lib has_own_prop: ToPropertyKey, a TypeError on undefined/null, every kind including Hash::Ordered.
+- get_attr_getter: reads go through member_lookup.
+- group_by: obj.length and obj[i] are JS reads; keys go through ToPropertyKey; the message uses ${val} ToString.
+- to_array: Array.prototype.slice.call, with ToLength, holes left out, and RangeError 'Invalid array length'.
+- Lib keys: [] for any other blessed object.
+- Environment get_test: ToPropertyKey of the name.
+
+Tests:
+- filters.t: %TODO is now empty and the nested groupby TODO is unwrapped. 5 nested k44 TODOs remain.
+- The 2 corpus todos are lifted (values, utf16); both cases pass.
+- t/10-lib.t: has_own_prop, get_attr_getter, group_by and to_array got new assertions; 4 new subtests cover js_for_in_keys and js_json_stringify (values, gap, circle).
+- t/10-runtime.t: an Array filter subtest.
+- Mutation check: 8/8 Lib mutants and 4/4 Array filter mutants are red.
+- Every unit expectation was measured with the oracle (about 120 probes). The lib-only facts were measured with upstream lib.js in node.
+
+prove -lr t/: 15 files, 4211 tests, 1 file failing: t/corpus.t, 23 of 3743. 0 skipped. TODO: corpus 38, upstream/compiler 10, upstream/filters 5, upstream/runtime 1. 0 TODOs passing.
+
+All 23 failures are in render-filters-ordering.json, which I was told not to edit, so they need todos:
+- 11 depend on plain caller-hash order (ADR 0011):
+  - dictsort: by key default case-insensitive, by key explicit, dump of result, unicode keys, astral keys uppercase fold Deseret, toUpperCase sharp s;
+  - dump: integer-like keys context hash, context hash caller key order, context array of hashes, dump of context object with toJSON string key;
+  - groupby: dump of result.
+- 1 is k80: dump of loop object.
+- 2 are k72: dictsort SafeString input enumerates inherited keys (val gives null); selectattr item val property of SafeString.
+- 3 are the Tests module (k18 or a new card): select iterable (oracle: TypeError: object null is not iterable (cannot read property Symbol(Symbol.iterator))), select upper on number errors (oracle: TypeError: value.toUpperCase is not a function), select lower on null errors (oracle: Cannot read properties of null (reading 'toLowerCase')).
+- 4 are the open mapping below: select error test name constructor/toString/hasOwnProperty/__proto__.
+- 2 are prototype-chain reads, ADR 0014/0016: selectattr attribute inherited constructor is truthy, and attribute toString on primitives is truthy (expected 3, got 0).
+
+prove -l xt/: 15/15 PASS; the corpus is not stale.
+
+OPEN MAPPING, not decided: the env registries are plain JS objects, so Object.prototype member names resolve.
+- Oracle values:
+  - select('constructor'/'toString'/'hasOwnProperty'/'valueOf') gives '';
+  - select('__proto__') gives TypeError: test.call is not a function;
+  - {{ 1 is constructor }} gives false;
+  - {{ 1|constructor }} gives 1;
+  - {{ 1|toString }} gives [object Object];
+  - {{ 1|__proto__ }} gives TypeError: env.getFilter(...).call is not a function.
+- The port gives 'test not found: X' / 'filter not found: X' for all of these.
+- Options: (a) emulate the Object.prototype members on both registries; (b) an ADR that treats registry lookup as own-key, like ADR 0014; (c) decide it with k81, the same Object.prototype-name problem as the group_by result.
+- Recommendation: (c).
+
+Drift for new cards:
+- A function's own length/name: [m]|groupby('length') gives 0 and groupby('name') gives 'macro'; the port gives undefined.
+- On a SafeString, toString/valueOf read as functions in JS (dictsort values, is callable); the port gives undefined (k70 surface).
+- kwargs as a value (k79): dictsort of a kwargs object gives oracle [["a",2],["b",1],["__keywords",true]]; dump gives oracle {"b":1,"a":2,"__keywords":true}, port {}.
+- Tests iterable/upper/lower do not follow JS member semantics (see above).
+- ADR 0008's list does not name Array filter, reduce or map (doc-writer).
+- Proposed js-semantics.md entries: JSON.stringify (V8 gap, circle text, toJSON, SafeString as an object), hasOwnProperty (ToPropertyKey before ToObject), for-in over a SafeString, Array filter, slice.call ToLength/RangeError.
+- The 'Deep recursion on async_iter' warning from t/upstream/compiler.t is pre-existing (at HEAD too).
+
+nytprof.out is untouched.
+
+Job 5 step 5c done (worker): dictsort dump groupby reject rejectattr select selectattr sort ported; seams js_json_stringify (V8 JsonStringifier), js_for_in_keys (dictsort for-in incl. SafeString.prototype valueOf/toString), Runtime Array filter; has_own_prop/get_attr_getter/group_by/to_array rewritten to JS; Environment get_test ToPropertyKey; exports weaken($env). Step 5b (js_array_sort V8 13.6.233.17 TimSort, maint/js-array-sort-fixtures, t/data/js-array-sort.json) and ADR 0017 + ADR 0015 alignment in the tree. 23 corpus failures routed: 11 corpus design (plain caller hash order, ADR 0011) -> test-writer rewrites; k80 1, k72 2, k35 3 (Tests lower/upper/iterable), k87 6 (new decision card, Object.prototype names; recommendation extend ADR 0014). New cards: k84 toSorted, k85 number ToString perf, k86 splice, k87 decision, k88 function length/name. Next: audit of job 5 (5b+5c).
+
+2026-11-13 13:39 Job 5 fix round after the fidelity audit (worker), uncommitted:
+F2: Runtime _js_no_side_effects_to_maybe_string ports V8 NoSideEffectsToMaybeString. Rules: own toString key -> no form; an own constructor that is a named function -> #<name>, any other own constructor -> no form; otherwise #<Object>. _js_no_side_effects_to_string falls back to [object Class]. _js_read_error now uses the MaybeString variant too, so 'reading' is dropped for {'toString': 1} and {'constructor': 1}. The oracle gives the same rule ([u]|join(',', {'toString': 1}) has no clause). A function's name comes only from the new Runtime _js_function_name, which reads member_lookup(fn, 'name'); that is '' until k88. #<macro> cannot be right without k88; the corpus case is already todo'd against k88.
+F1: _js_json_quote re-pairs with _js_from_units before escaping (value and key).
+G1: t/10-environment.t checks that the Environment is freed (fresh, and after select/reject/groupby/sort). Mutation check: removing weaken turns it red.
+C: js-semantics.md has new sections (Array sort + NoSideEffectsToString, JSON.stringify, hasOwnProperty/groupby/toArray, for-in over a SafeString, Object.prototype registry names k87), an Array filter paragraph, and the read-error key paragraph corrected.
+Mutation checks: 6/6 F2 mutants red, F1 red.
+prove -lr t/: 15 files, 4309 tests, 0 failed, 0 skipped. TODO: corpus 54, upstream/compiler 10, upstream/filters 5, upstream/runtime 1; 0 passing TODOs. prove -l xt/: PASS.
+Also found, needs a card: a dict literal's '__proto__' key sets the prototype upstream ({'__proto__': {'a': 1} }.a -> 1, sort({'__proto__': {'toString': 1} }) -> [object Object]); in the port it is an own key ('' / #<Object>).
+Also found: [u]|groupby({'toString': m}) -> TypeError: Cannot convert object to primitive value upstream (ToPropertyKey runs an own toString); the port throws the ToObject text (k44 per the catalogue).
+
+Job 5 of 5 committed as e1fd27d (ordering and predicate filters plus the V8 Array sort seam, ADR 0017). Earlier: 409bd64, 0cf8d2c and the string family. Every built-in filter is ported; k17 complete.
