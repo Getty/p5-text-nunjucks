@@ -1,0 +1,22 @@
+---
+class: standard
+created: 2026-11-13T16:58:43Z
+id: 104
+priority: low
+status: backlog
+tags:
+- adr
+- environment
+- fidelity
+title: ADR 0003/0009 promise a callback-less deferred render fails loud; port and
+  upstream return undef/null silently
+updated: 2026-11-13T16:58:43Z
+---
+
+Found in the k20 fidelity audit (2026-11-13). ADR 0003 (Consequences: "it must fail loud if a template deferred and no callback was given") and ADR 0009 (Decision, Public API: "a plain render that deferred with no callback fails loud") promise something the code does not do -- and upstream does not do either.
+
+Measured: an async filter that keeps its callback and returns, `$env->render_string('a{{ 1 | later }}b', {})` without a callback: port returns undef, no die; upstream (node, same filter) returns null, no throw. Same with an async loader whose get_source never calls back: `$env->render('x.njk', {})` returns undef. Port Environment.pm render/render_string and Template render = upstream environment.js:296-330 / 445-508 (syncResult stays null).
+
+The k20 POD of Environment render copied the ADR wording ("a render without a callback that does defer fails"); the audit asks the doc-writer to describe the real behaviour (returns undef).
+
+Options: (a) correct the two ADR sentences to what upstream and the port do (returns undef where upstream returns null; the deferred result is lost) -- no behaviour change; (b) make it fail loud -- a deliberate divergence from upstream, maintainer's call, its own ADR. No corpus or t/ case pins the callback-less deferred render.
