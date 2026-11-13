@@ -1,0 +1,18 @@
+---
+class: standard
+created: 2026-11-13T07:27:55Z
+id: 67
+priority: medium
+status: backlog
+tags:
+- bug
+- regex
+- runtime
+title: 'Regex exec with g re-matches on a substring: lookahead, ^ and \b see the wrong
+  context'
+updated: 2026-11-13T07:28:05Z
+---
+
+Found in the k17 job 2 audit (2026-11-13). Runtime Regex::exec (~230) with the g flag re-matches the captures on substr($str, lastIndex, ...), losing lookahead context and moving ^/\b to the slice start. Oracle vs port: {{ r/(a)(?=b)|(a)/g.exec('ab') }} a,a, vs a,,a; {% set r = r/(^a)|(a)/g %}{{ r.exec('aa') }}|{{ r.exec('aa') }} a,a,|a,a, vs a,,a (port shown first where it differs -- re-probe); same with r/(\ba)|(a)/g. k17 job 2 added Regex::_regexp_exec (RegExpBuiltinExec, correct, used by symbol_replace); fix by building test (~135) and exec (~201) on it, so there is one RegExpBuiltinExec. Oracle corpus cases.
+
+Correction to the body: oracle first, port second, as measured: {% set r = r/(^a)|(a)/g %}{{ r.exec('aa') }}|{{ r.exec('aa') }} oracle a,a,|a,,a, port a,a,|a,a,; {{ r/(a)(?=b)|(a)/g.exec('ab') }} oracle a,a, port a,,a.
