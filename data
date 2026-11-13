@@ -1,0 +1,27 @@
+---
+class: standard
+created: 2026-11-13T11:18:37Z
+id: 80
+priority: medium
+status: backlog
+tags:
+- bug
+- runtime
+- ordering
+title: 'Engine-built loop object and import namespace are plain hashes: iterate key-sorted,
+  not insertion order (ADR 0011)'
+updated: 2026-11-13T11:18:37Z
+---
+
+Found by the k51 fidelity audit (2026-11-13). ADR 0011: everything the engine builds is insertion-ordered (Hash::Ordered via Runtime make_dict). Two engine-built objects are still plain Perl hashes, so Lib keys takes the plain-hash branch (indices first, rest key-sorted) instead of JS order:
+
+1. Frame set (lib/Text/Nunjucks/Runtime.pm:490, `$obj->{$id} = {}`) -- upstream runtime.js Frame.set `obj[id] = {}`. This builds the `loop` object from compiled `frame.set("loop.index", ...)`.
+   oracle: {% for x in [1] %}{% for k, v in loop %}{{k}};{% endfor %}{% endfor %} -> index;index0;revindex;revindex0;first;last;length;
+   port:   first;index;index0;last;length;revindex;revindex0;
+   Same for asyncEach/asyncAll bodies, and {% for x in ["a"] %}{{ loop | urlencode }}{% endfor %} -> oracle index=1&amp;index0=0&amp;revindex=1&amp;revindex0=0&amp;first=true&amp;last=true&amp;length=1, port first=true&amp;index=1&amp;...
+
+2. Context get_exported (lib/Text/Nunjucks/Environment.pm:572, `my $exported = {}`) -- upstream environment.js getExported `var exported = {}` filled in addExport order.
+   oracle: templates {"m.njk": "{% macro zz() %}{% endmacro %}{% macro aa() %}{% endmacro %}{% set q = 1 %}{% set b = 2 %}"}, template {% import "m.njk" as m %}{% for k, v in m %}{{k}};{% endfor %} -> zz;aa;q;b;   port: aa;b;q;zz;
+   {% import "m.njk" as m %}{{ m | urlencode }} with set zz, aa -> oracle zz=1&amp;aa=2, port aa=2&amp;zz=1.
+
+Fix direction: build both with make_dict and read/write them through the ordered-dict accessors (Frame set walks obj[id] -- it must handle a Hash::Ordered at each step). The k51 Runtime make_dict comment ("the engine's other objects come from here too") should then hold. Add the probes above as corpus cases.
