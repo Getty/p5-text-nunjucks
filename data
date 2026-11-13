@@ -1,0 +1,24 @@
+---
+class: standard
+created: 2026-11-13T16:59:02Z
+id: 106
+priority: low
+status: backlog
+tags:
+- tests
+- corpus
+- errors
+title: Render-time errors report 0-based Line/Column (upstream quirk, ported); unpinned,
+  and js-semantics says 1-based
+updated: 2026-11-13T16:59:02Z
+---
+
+Found in the k20 fidelity audit (2026-11-13). Port and upstream agree; what is missing is the pin and a correct catalogue entry.
+
+Upstream compiler.js emits `lineno = node.lineno; colno = node.colno;` (0-based AST positions) and runtime.js handleError builds `new TemplateError(error, lineno, colno)` with them unchanged, so an error raised while rendering reports a 0-based Line/Column; parser fail() and ensureDefined (throwOnUndefined) add 1. Oracle:
+- `a\nb {{ foo() }}` -> `(unknown path) [Line 1, Column 8]\n  Error: Unable to call `foo`, which is undefined or falsey` (the call is on line 2)
+- `{{ foo() }}` -> `(unknown path)\n  Error: ...` (lineno 0 is falsy, so no [Line])
+- `a\n {% if %}` -> `(unknown path) [Line 2, Column 8]\n  unexpected token: %}` (parser, 1-based)
+The port prints the same three, and with dev its TemplateError->lineno is 1 for the first case.
+
+Gaps: no corpus case has a render-time error past line 1 (grep shows only parse / throwOnUndefined messages with [Line ..]); .claude/skills/text-nunjucks-core/references/js-semantics.md "Errors" says Line/Column are 1-based in messages, which is true only for the parser and throwOnUndefined paths. Add the three cases above to the corpus and correct the catalogue sentence. The k20 POD of Lib::TemplateError lineno/colno ("counting from 1") gets the same correction there.
