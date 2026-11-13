@@ -1,0 +1,15 @@
+---
+class: standard
+created: 2026-11-13T07:05:37Z
+id: 64
+priority: medium
+status: backlog
+tags:
+- decision
+- unicode
+title: 'Decision: Unicode version of case mapping (Node ICU/Unicode 17 vs Perl 5.40
+  Unicode 15)'
+updated: 2026-11-13T07:05:37Z
+---
+
+Found by the k17 job 2 worker (2026-11-13). JS toLowerCase/toUpperCase follow the engine's ICU tables: the oracle's Node 24 has ICU 78 / Unicode 17, Perl 5.40 has Unicode 15. Upstream upper/lowercases U+0264, U+A7CD, U+A7DB, U+019B and the Garay letters; the port (Lib js_to_lower_case/js_to_upper_case, k17) does not. Upstream's own output already varies with the Node version that runs it. Options: (1) record a divergence: case mapping (and any other Unicode-table-driven behaviour) follows the Unicode version of the running perl; corpus avoids characters newer than Unicode 15; (2) ship case-mapping tables generated from the oracle's Node and pin them to ADR 0004's Node version; (3) require a perl whose Unicode matches. Recommendation: (1) -- upstream itself is not stable across Node versions, and (2) is a table to maintain for characters templates almost never meet. Maintainer call; record as ADR.
