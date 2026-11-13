@@ -117,15 +117,24 @@ subtest 'get_attr_getter' => sub {
 subtest 'group_by' => sub {
   my $items = [ { k => 'x', n => 1 }, { k => 'y', n => 2 }, { k => 'x', n => 3 } ];
   my $grouped = $L->group_by( $items, 'k' );
-  is( scalar( @{ $grouped->{x} } ), 2, 'two items under x' );
-  is( scalar( @{ $grouped->{y} } ), 1, 'one item under y' );
-  is( $grouped->{x}[1]{n}, 3, 'preserves item order within a group' );
+  is( scalar( @{ $grouped->get('x') } ), 2, 'two items under x' );
+  is( scalar( @{ $grouped->get('y') } ), 1, 'one item under y' );
+  is( $grouped->get('x')->[1]{n}, 3, 'preserves item order within a group' );
 
   my $with_undef = $L->group_by( [ { k => 'a' }, {} ], 'k' );
-  ok( exists $with_undef->{undefined}, 'undefined key coerces to "undefined"' );
+  ok( $with_undef->exists('undefined'), 'undefined key coerces to "undefined"' );
 
   my $by_fn = $L->group_by( [ 1, 2, 3, 4 ], sub { $_[0] % 2 } );
-  is_deeply( [ sort keys %$by_fn ], [ 0, 1 ], 'function iterator groups by return value' );
+  is_deeply( $L->keys($by_fn), [ 0, 1 ], 'function iterator groups by return value' );
+
+  # The result is an engine-built object (ADR 0011, k51): groups in first-seen
+  # order, array-index keys first. oracle, groupby('t') over t = b, 2019, a,
+  # 10, 2018, 9 -> 9|10|2018|2019|b|a|; over green, blue, (none), green ->
+  # green|blue|undefined|
+  my $years = $L->group_by( [ map { { t => $_ } } qw( b 2019 a 10 2018 9 ) ], 't' );
+  is_deeply( $L->keys($years), [qw( 9 10 2018 2019 b a )], 'ordered dict, JS key order' );
+  my $colours = $L->group_by( [ { t => 'green' }, { t => 'blue' }, { x => 1 }, { t => 'green' } ], 't' );
+  is_deeply( $L->keys($colours), [qw( green blue undefined )], 'groups in first-seen order, not sorted' );
 
   my $err;
   eval { $L->group_by( [ {} ], 'k', true ); 1 } or $err = $@;
@@ -325,7 +334,8 @@ subtest 'keys over a primitive or a function enumerates nothing' => sub {
 # cannot fail when the policy regresses, so pin the actual order here. Plain
 # caller hashes are key-sorted (the documented divergence from JS insertion
 # order); Hash::Ordered is honoured in its own order (template literals,
-# engine-built objects).
+# engine-built objects). Keys here are never array indices; those come first
+# in both, see the k51 subtests below.
 subtest 'keys orders plain hashes key-sorted; Hash::Ordered in own order (ADR 0011)' => sub {
   # Insertion order on the Perl side is { b, a, c } -- with PERL_HASH_SEED off,
   # Perl's hash order is deterministic, but the canonical seed is on and the
@@ -362,6 +372,74 @@ subtest 'keys orders plain hashes key-sorted; Hash::Ordered in own order (ADR 00
   is_deeply( $L->_values($plain), [ 2, 1, 3 ], '_values follows keys() -> key-sorted' );
 };
 
+# ADR 0011 amendment (k51): JS enumerates own keys in OrdinaryOwnPropertyKeys
+# order -- array indices (canonical integers 0 .. 2^32 - 2) first, ascending,
+# then the other keys in insertion order. Every expected order below is the
+# oracle's, for a dict literal with the same keys in the same insertion order:
+#   {% for k, v in {...} %}{{ k }};{% endfor %}
+subtest 'keys: array-index keys first, ascending, on an ordered dict (ADR 0011, k51)' => sub {
+  my @order = ( map { ( $_ => 1 ) } qw( b 2 1 ) );
+  is_deeply( $L->keys( Hash::Ordered->new(@order) ), [qw( 1 2 b )], '{b, 2, 1} -> 1;2;b;' );
+
+  # oracle: 9;10;4294967294;a;01;-1;4294967295;1.5;
+  my $boundary = Hash::Ordered->new( map { ( $_ => 1 ) } qw( a 10 9 01 -1 4294967295 4294967294 1.5 ) );
+  is_deeply(
+    $L->keys($boundary),
+    [qw( 9 10 4294967294 a 01 -1 4294967295 1.5 )],
+    '2^32 - 2 is the last index; 2^32 - 1, 01, -1, 1.5 keep insertion order',
+  );
+
+  # oracle: 0;x;00;-0;+1; 1;1 ;1e3;0x1;;٣;１;
+  my @zero = ( 'x', '0', '00', '-0', '+1', ' 1', '1 ', '1e3', '0x1', '', "\x{663}", "\x{FF11}" );
+  is_deeply(
+    $L->keys( Hash::Ordered->new( map { ( $_ => 1 ) } @zero ) ),
+    [ '0', 'x', '00', '-0', '+1', ' 1', '1 ', '1e3', '0x1', '', "\x{663}", "\x{FF11}" ],
+    'only canonical ASCII decimal strings are indices: 0 is, 00 -0 +1 1e3 0x1 and non-ASCII digits are not',
+  );
+  # oracle: {"x":1,"1٣":2,"2":3,"1１":4} iterates [2][x][1٣][1１]
+  is_deeply(
+    $L->keys( Hash::Ordered->new( x => 1, "1\x{663}" => 2, 2 => 3, "1\x{FF11}" => 4 ) ),
+    [ '2', 'x', "1\x{663}", "1\x{FF11}" ],
+    'a non-ASCII digit after an ASCII one is not an index either',
+  );
+
+  # oracle: 2147483647;2147483648;4294967293;x;4294967296;99999999999;
+  # 9007199254740993;18446744073709551616;10000000000;
+  my @big = qw(
+    x 4294967293 4294967296 99999999999 9007199254740993 2147483648 2147483647
+    18446744073709551616 10000000000
+  );
+  is_deeply(
+    $L->keys( Hash::Ordered->new( map { ( $_ => 1 ) } @big ) ),
+    [qw( 2147483647 2147483648 4294967293 x 4294967296 99999999999 9007199254740993 18446744073709551616 10000000000 )],
+    '2^32 and longer digit strings are not indices, whatever digit they start with',
+  );
+
+  # oracle: {"x":1,"1\n":2,"2":3} iterates [2][x][1\n] -- ToString(ToUint32("1\n")) is "1"
+  is_deeply( $L->keys( Hash::Ordered->new( x => 1, "1\n" => 2, 2 => 3 ) ), [ '2', 'x', "1\n" ], 'a trailing newline is not an index' );
+
+  # The value readers follow the seam's order.
+  my $d = Hash::Ordered->new( b => 'B', 10 => 'T', 9 => 'N' );
+  is_deeply( $L->_entries($d), [ [ 9, 'N' ], [ 10, 'T' ], [ 'b', 'B' ] ], '_entries in key order' );
+  is_deeply( $L->_values($d), [qw( N T B )], '_values in key order' );
+  my @seen;
+  $L->async_for( $d, sub { my ( $k, $v, $i, $len, $next ) = @_; push @seen, "$k=$v"; $next->() }, sub { } );
+  is_deeply( \@seen, [qw( 9=N 10=T b=B )], 'async_for in key order' );
+};
+
+# Maintainer decision on k51 (ADR 0011 amendment): a plain caller hash puts its
+# array-index keys first, numerically ascending, and sorts only the rest by key.
+subtest 'keys: a plain hash puts array-index keys first, then sorts the rest (ADR 0011, k51)' => sub {
+  is_deeply( $L->keys( { b => 1, 10 => 2, 9 => 3, a => 4, 2 => 5 } ), [qw( 2 9 10 a b )], '9 before 10, then a, b' );
+  is_deeply(
+    $L->keys( { map { ( $_ => 1 ) } qw( a 10 9 01 -1 4294967295 4294967294 1.5 ) } ),
+    [qw( 9 10 4294967294 -1 01 1.5 4294967295 a )],
+    'non-index keys (01, -1, 1.5, 2^32 - 1) sort as strings after the indices',
+  );
+  is_deeply( $L->keys( { zeta => 1, alpha => 2, Beta => 3 } ), [qw( Beta alpha zeta )], 'no index keys: plain key sort' );
+  is_deeply( $L->_values( { b => 'B', 10 => 'T', 9 => 'N' } ), [qw( N T B )], '_values in key order' );
+};
+
 #### extend / _assign
 
 subtest 'extend / _assign' => sub {
@@ -371,6 +449,10 @@ subtest 'extend / _assign' => sub {
   is_deeply( $a, { x => 1, y => 2 }, 'merged' );
 
   is_deeply( $L->extend( undef, { z => 3 } ), { z => 3 }, 'undef target -> new hash' );
+
+  # obj2[k] for an ordered dict (a caller's Hash::Ordered context reaches
+  # Context's lib.extend({}, ctx)) is read through the seam, not dereferenced
+  is_deeply( $L->extend( {}, Hash::Ordered->new( b => 1, 1 => 2 ) ), { b => 1, 1 => 2 }, 'ordered dict source' );
 
   is( $L->can('_assign'), $L->can('extend'), '_assign is an alias for extend' );
 };

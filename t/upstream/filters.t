@@ -304,10 +304,10 @@ describe 'filter' => sub {
     # The next two expect JS's integer-key ordering of the engine-built result
     # object (2018 before 2019 although 2019 is inserted first; 'undefined'
     # after the integer keys). ADR 0011 makes engine-built objects 1:1 with JS;
-    # the insertion-order mechanism not reproducing integer-key order is a bug
-    # (k51), TODO'd until fixed.
+    # k51 fixed the ordering seam (Lib keys, Lib group_by's ordered result), so
+    # they wait only on the groupby filter itself.
     TODO: {
-      local $TODO = 'JS integer-like key ordering of engine-built objects: ADR 0011 + k51';
+      local $TODO = 'k17 job 5: groupby filter not ported yet (ordering fixed by k51)';
       equal(
         '{% for year, posts in posts | groupby("date.year") %}'
           . ':{{ year }}:'

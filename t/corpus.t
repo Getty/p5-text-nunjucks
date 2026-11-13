@@ -167,7 +167,8 @@ sub render_supported {
 # boundary (the oracle hands upstream real JS values): JSON booleans become
 # native booleans (ADR 0001) and JSON null becomes the None sentinel (ADR 0006).
 # Numbers/strings pass through; containers are rebuilt so caller hashes stay
-# plain (ADR 0011 gives them key-sorted iteration, not this harness's concern).
+# plain (ADR 0011 gives them array indices first, then key-sorted iteration;
+# not this harness's concern).
 sub normalize {
   my ($v) = @_;
   return Text::Nunjucks::Runtime->None if !defined $v;            # JS null

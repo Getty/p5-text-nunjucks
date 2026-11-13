@@ -11,8 +11,9 @@ use POSIX ();
 use Scalar::Util qw( blessed refaddr );
 use Text::Nunjucks::Lib::TemplateError;
 use Text::Nunjucks::Lib::Error;
-# Circular with Runtime's `use Text::Nunjucks::Lib`; map's array-like branch is
-# the one Lib function that calls up into it. Caveat: when Lib loads first,
+# Circular with Runtime's `use Text::Nunjucks::Lib`; map's array-like branch
+# and groupBy's result object (make_dict) are the Lib calls up into it -- from
+# inside their subs, run time. Caveat: when Lib loads first,
 # this line compiles and runs all of Runtime before the rest of Lib is even
 # compiled -- the Lib subs below this line do not exist yet and its file-scope
 # lexicals (%ESCAPE_MAP, $JS_WORD_CLASS, $NUM_POS_INF, ...) are still unset. So
@@ -29,7 +30,7 @@ no warnings 'experimental::builtin';
 # ADR 0001 designates this module the single home for value-kind checks.
 
 # The collaborator class, named once (getty-perl-core resolver), for map's
-# array-like branch.
+# array-like branch and groupBy's engine-built result.
 sub _runtime { 'Text::Nunjucks::Runtime' }
 
 #### module constants (var escapeMap / escapeRegex)
@@ -180,7 +181,9 @@ sub get_attr_getter {
 
 sub group_by {
   my ( $self, $obj, $val, $throw_on_undefined ) = @_;
-  my $result   = {};
+  # const result = {} -- an engine-built object, so an ordered dict from
+  # Runtime's make_dict (ADR 0011): groups iterate in JS key order
+  my $result   = $self->_runtime->make_dict;
   my $iterator = $self->is_function($val) ? $val : $self->get_attr_getter($val);
 
   for my $i ( 0 .. $#$obj ) {
@@ -203,7 +206,8 @@ sub group_by {
     # non-string keys (booleans, objects) follow JS string coercion, whose
     # mechanism is k6/Runtime -- numbers already stringify identically here.
     my $hkey = defined($key) ? $key : 'undefined';
-    push @{ $result->{$hkey} //= [] }, $value;
+    # (result[key] || (result[key] = [])).push(value)
+    push @{ $result->get($hkey) // $result->set( $hkey, [] ) }, $value;
   }
 
   return $result;
@@ -286,7 +290,7 @@ sub map {
   # Anything else is read as an array-like. obj.length and obj[i] are JS
   # property reads and `i < obj.length` a JS comparison: Runtime's
   # member_lookup and op_lt, the one home of both (ADR 0008 / 0007), so this
-  # branch calls up into Runtime -- the one Lib function that does. Oracle: a
+  # branch calls up into Runtime (as groupBy does for make_dict). Oracle: a
   # SafeString has a length but no index access ('abc' from a macro, |reverse
   # -> ',,'), {length: '2', 0: 'x', 1: 'y'} maps x, y, a number or a plain
   # object without length maps nothing. A primitive string cannot change under
@@ -348,7 +352,7 @@ sub async_for {
   # Value lookup mirrors the ordering policy of keys() above (ADR 0011): a
   # Hash::Ordered (template dict literal / engine-built object) reads via ->get;
   # a plain hashref reads via ->{}. asyncFor doesn't reach Runtime->member_lookup
-  # (map's array-like branch is Lib's one call up into Runtime),
+  # (Lib calls up into Runtime only in map and groupBy),
   # so this is the single seam -- the Runtime side mirrors it for its own
   # async_all loop.
   my $lookup = ( blessed($obj) && $obj->isa('Hash::Ordered') )
@@ -394,14 +398,17 @@ sub index_of {
 
 sub keys {
   my ( $self, $obj ) = @_;
-  # own enumerable keys. ADR 0011 sets the ordering policy in one place:
+  # own enumerable keys. ADR 0011 (amended on k51) sets the ordering policy in
+  # one place:
   #
   #   * Hash::Ordered (template dict literal / engine-built object): own keys
-  #     in insertion order -- byte-identical to JS Object.keys.
-  #   * Plain caller hash: key-sorted, the documented divergence (Perl hashes
-  #     carry no insertion order to preserve; sorted gives a deterministic
-  #     cross-PERL_HASH_SEED iteration where JS would have shown insertion
-  #     order).
+  #     in JS order -- _ordinary_own_property_keys over its insertion order,
+  #     byte-identical to JS Object.keys.
+  #   * Plain caller hash: the array-index keys first, ascending, then the
+  #     rest key-sorted -- the documented divergence is only in that rest
+  #     (Perl hashes carry no insertion order to preserve; sorted gives a
+  #     deterministic cross-PERL_HASH_SEED iteration where JS would have shown
+  #     insertion order).
   #
   # _entries / _values / extend / async_for / member_lookup / the dump /
   # dictsort / list / items filters (k17) all reach the iterator here, so this
@@ -417,7 +424,7 @@ sub keys {
   # '' -- lib._entries(obj) is []). A primitive string's indices are k59.
   return [] if !defined($obj) || ( !ref($obj) && !$self->is_string($obj) );
   return [] if $self->_runtime->_is_none($obj) || $self->is_function($obj);
-  return [ $obj->keys ] if blessed($obj) && $obj->isa('Hash::Ordered');
+  return $self->_ordinary_own_property_keys( [ $obj->keys ] ) if blessed($obj) && $obj->isa('Hash::Ordered');
 
   # A SafeString (engine-built): its own properties in the order its
   # constructor creates them, this.val then this.length.
@@ -428,7 +435,35 @@ sub keys {
   for my $k ( sort CORE::keys %$obj ) {
     push @$arr, $k if $self->has_own_prop( $obj, $k );
   }
-  return $arr;
+  return $self->_ordinary_own_property_keys($arr);
+}
+
+# Port addition (ADR 0011, k51): the order JS's for-in gives an ordinary
+# object's own string keys, ECMAScript OrdinaryOwnPropertyKeys -- every array
+# index first, in ascending numeric order, then the other keys in the order
+# given (insertion order for an ordered dict, key-sorted for a plain hash).
+# oracle: {"a":1,"10":2,"9":3,"01":4,"-1":5,"4294967295":6,"4294967294":7,"1.5":8}
+# iterates 9;10;4294967294;a;01;-1;4294967295;1.5;
+sub _ordinary_own_property_keys {
+  my ( $self, $keys ) = @_;
+  my ( @index, @rest );
+  for my $k (@$keys) {
+    if ( $self->_is_array_index($k) ) { push @index, $k }
+    else                               { push @rest,  $k }
+  }
+  return [ ( sort { $a <=> $b } @index ), @rest ];
+}
+
+# An array index is a String P with ToString(ToUint32(P)) === P and
+# ToUint32(P) !== 2^32 - 1: the canonical ASCII decimal form of an integer
+# 0 .. 4294967294. oracle: '0' and '4294967294' are indices; '4294967295',
+# '00', '01', '-0', '-1', '+1', '1.5', '1e3', ' 1', '0x1', '' and non-ASCII
+# digits are not. At most ten digits pass the pattern; a ten-digit one is
+# compared with 4294967294 as a string.
+sub _is_array_index {
+  my ( $self, $k ) = @_;
+  return 0 unless $k =~ /\A(?:0|[1-9][0-9]{0,9})\z/;
+  return ( length($k) < 10 || $k le '4294967294' ) ? 1 : 0;
 }
 
 #### _entries
@@ -458,7 +493,7 @@ sub extend {
   my ( $self, $obj1, $obj2 ) = @_;
   $obj1 = {} unless $obj1;    # JS obj1 || {} (obj1 is hashref|undef; refs are truthy)
   for my $k ( @{ $self->keys($obj2) } ) {
-    $obj1->{$k} = $obj2->{$k};
+    $obj1->{$k} = $self->_own_value( $obj2, $k );
   }
   return $obj1;
 }

@@ -638,7 +638,6 @@
     "name": "sequences: list: integer-like keys come first numerically",
     "template": "{% for p in {\"b\":1,\"10\":2,\"9\":3}|list %}{{ p.key }};{% endfor %}",
     "context": {},
-    "todo": "k51: array-index key order",
     "expected": {
       "ok": true,
       "output": "9;10;b;"
@@ -654,7 +653,6 @@
         "b": 1
       }
     },
-    "todo": "k51: array-index key order (open question: should plain hashes put array-index keys first)",
     "expected": {
       "ok": true,
       "output": "9=3;10=2;b=1;"
@@ -1235,7 +1233,6 @@
         "b": 1
       }
     },
-    "todo": "k51: array-index key order (open question: should plain hashes put array-index keys first)",
     "expected": {
       "ok": true,
       "output": "b;10;9;"
@@ -1245,7 +1242,6 @@
     "name": "sequences: reverse: reverse of integer keyed literal dict list",
     "template": "{% for p in {\"b\":1,\"10\":2,\"9\":3}|list|reverse %}{{ p.key }};{% endfor %}",
     "context": {},
-    "todo": "k51: array-index key order",
     "expected": {
       "ok": true,
       "output": "b;10;9;"
@@ -2736,7 +2732,6 @@
         "b": 1
       }
     },
-    "todo": "k51: array-index key order (open question: should plain hashes put array-index keys first)",
     "expected": {
       "ok": true,
       "output": "9,10,b"
@@ -2746,7 +2741,6 @@
     "name": "sequences: join: joining integer keyed literal dict list keys",
     "template": "{{ {\"b\":1,\"10\":2,\"9\":3}|list|join(\",\", \"key\") }}",
     "context": {},
-    "todo": "k51: array-index key order",
     "expected": {
       "ok": true,
       "output": "9,10,b"

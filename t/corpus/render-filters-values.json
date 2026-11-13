@@ -15713,7 +15713,6 @@
     "name": "values: urlencode: literal dict with integer-like string keys",
     "template": "{{ {\"b\": 1, \"2\": \"x\", \"1\": \"y\", \"a\": 3}|urlencode }}",
     "context": {},
-    "todo": "k51: array-index key order",
     "expected": {
       "ok": true,
       "output": "1=y&amp;2=x&amp;b=1&amp;a=3"
@@ -15723,7 +15722,6 @@
     "name": "values: urlencode: literal dict with only integer-like string keys",
     "template": "{{ {\"3\": \"c\", \"1\": \"a\", \"2\": \"b\"}|urlencode }}",
     "context": {},
-    "todo": "k51: array-index key order",
     "expected": {
       "ok": true,
       "output": "1=a&amp;2=b&amp;3=c"

@@ -41,6 +41,25 @@ Measured: `'0'`, `[]`, `{}` → truthy; `0`, `''` → falsy; `{{ z or 'd' }}` wi
 `{% for k, v in {b:1, a:2} %}` → `b=1;a=2;` (insertion order). `dump` →
 `{"b":1,"a":2}`. `dictsort|join(',')` → `a,2,b,1`.
 
+Not pure insertion order (ADR 0011 amendment, k51): own keys enumerate array
+indices first, ascending, then the rest in insertion order. `{"b":1, "2":2,
+"1":3}` → `1;2;b;` · keys `a 10 9 01 -1 4294967295 4294967294 1.5` →
+`9;10;4294967294;a;01;-1;4294967295;1.5;`. An index is the canonical ASCII
+decimal of 0 … 4294967294: `0` is one; `00`, `-0`, `+1`, `' 1'`, `1e3`, `0x1`,
+`''`, `"1\n"`, `٣`, `1٣` and `4294967296` and above are not. groupby's result
+follows it: years `b 2019 a 10 2018 9` → `9|10|2018|2019|b|a|`. A plain caller
+hash puts its indices first too and sorts only the rest (maintainer, k51):
+`{b, 10, 9, a, 2}` → `2 9 10 a b`. Seam: Lib `keys` →
+`_ordinary_own_property_keys` / `_is_array_index`. A caller-supplied
+`Hash::Ordered` gets the JS rule too, indices first, then its own insertion
+order (ADR 0011 "Caller-supplied ordered hashes", orchestrator call pending
+the maintainer's confirmation, k51). Open: a `Tie::IxHash`-tied hash is
+sorted like a plain one, its own order is not honoured (k78). A kwargs object
+as a value (`u | default(b=1, a=2)`) iterates `b=1;a=2;__keywords=true;`
+upstream, nothing in the port (KwArgs is not an object to Lib/member_lookup;
+k79). The `loop` object and an import namespace are plain hashes and iterate
+key-sorted, not in JS order (k80).
+
 ## Numbers — decided, ADR 0007
 
 `1/3` → `0.3333333333333333` · `0.1+0.2` → `0.30000000000000004` · `1e21` →

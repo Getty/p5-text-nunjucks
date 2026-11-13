@@ -610,8 +610,14 @@ sub make_keyword_args {
 # $runtime->make_dict(k1, v1, ...) for every template `{...}` literal so that
 # JS insertion order survives (a plain Perl hash does not preserve it). The
 # representation is Hash::Ordered; member_lookup / keys / in_operator below read
-# it. NOTE: this wires only what the compiler's own dicts need; the rest of
-# ADR 0011 (sorted plain caller hashes, dump/dictsort/list/items) is still open.
+# it. Most of the engine's other objects come from here too (Lib group_by's
+# result, the list filter's {key, value}, a regex match's groups). Their key
+# order -- JS's, array indices first -- is Lib keys' (ADR 0011, k51), not this
+# constructor's. Two engine-built objects do not come from here and are plain
+# hashes, so they iterate key-sorted: the object Frame set creates for a dotted
+# name such as `loop` (upstream runtime.js Frame.set, `obj[id] = {}`) and the
+# import namespace (Environment get_exported, upstream environment.js:403) --
+# open, k80.
 sub make_dict {
   my ( $self, @kv ) = @_;
   return Hash::Ordered->new(@kv);

@@ -52,3 +52,7 @@ Revision history for Text-Nunjucks
       gives NaN for 1 ** Infinity.
     - Array destructuring follows JS; copy_safeness on undefined or null
       throws V8's TypeError text.
+    - Object keys iterate in JS order: array-index keys first, numerically
+      ascending, for template dict literals, engine-built objects (the
+      groupby result included) and plain caller hashes, whose other keys stay
+      key-sorted (ADR 0011). A Hash::Ordered render context no longer dies.
