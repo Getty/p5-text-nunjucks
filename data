@@ -1,0 +1,14 @@
+---
+class: standard
+created: 2026-11-13T08:22:07Z
+id: 71
+priority: low
+status: backlog
+tags:
+- bug
+- environment
+title: Template->new with a Hash::Ordered source dies reading $src->{type}
+updated: 2026-11-13T08:22:07Z
+---
+
+Found by the k17 job 3 worker (2026-11-13). Since Lib::is_object is true for Hash::Ordered (k17 job 3), Template->new(Hash::Ordered->new(type=>'string', obj=>'x')) dies with 'Not a HASH reference' at Environment.pm ~629, which reads $src->{type} directly (before, the object was wrongly treated as a string). Upstream: if (lib.isObject(src)) { switch (src.type) ... }. Fix: read through the member/own-key seam; unit test.
