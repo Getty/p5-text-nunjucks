@@ -1,0 +1,15 @@
+---
+class: standard
+created: 2026-11-13T09:36:03Z
+id: 74
+priority: low
+status: backlog
+tags:
+- bug
+- runtime
+- numbers
+title: Math.pow / template ** differs from V8 on exact-tie integer powers above 2^53
+updated: 2026-11-13T09:36:03Z
+---
+
+Found by the k17 job 4 worker (2026-11-13). Lib js_math_pow (k17 job 4) handles the JS NaN cases and otherwise calls POSIX::pow (glibc); V8's Math.pow differs on exact-tie integer powers above 2^53: in a 20000-case sample 10 differ, e.g. 942**6 JS 698723607368084608 vs Perl 698723607368084480; 463**6 JS 9851127637605410 vs Perl ...408. Affects the template ** operator (C pow before k17 too); round's 10^n factor agrees for every integer and half-integer n in -400..400. Options: port V8's pow (ieee754::pow) as the Lib seam, pinned to the oracle's Node, or record the divergence. Like decision B (V8 sort) it ports V8 code rather than Nunjucks code -- maintainer call; recommendation: port it (fidelity stance of ADR 0007/0012).
