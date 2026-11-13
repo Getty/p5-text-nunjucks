@@ -1,0 +1,14 @@
+---
+class: standard
+created: 2026-11-13T12:08:31Z
+id: 85
+priority: low
+status: backlog
+tags:
+- performance
+- runtime
+title: 'Performance: Runtime JS ToString of a number costs ~18 us per call'
+updated: 2026-11-13T12:08:31Z
+---
+
+Measured by the k17 job 5 sort worker, 2026-11-13: Runtime _js_to_string on a number ~18 us/call vs ~1.2 us for a string. Default-comparator sort of 100k numbers takes 79 s (old Perl sort 69.5 s) because ToString runs on every comparison, faithful to V8 array-sort.tq. Fix the cost at the source (number-to-string seam, ADR 0007 shortest round-trip), not by caching inside js_array_sort, which would break the .tq structure; caching for primitives is unobservable but needs a decision if ever wanted. Related: k63, k68.
