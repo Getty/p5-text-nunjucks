@@ -1,0 +1,15 @@
+---
+class: standard
+created: 2026-11-13T07:05:37Z
+id: 65
+priority: low
+status: backlog
+tags:
+- bug
+- runtime
+title: o.f() on a non-callable member says 'undefined or falsey' where JS says 'not
+  a function
+updated: 2026-11-13T07:05:37Z
+---
+
+Found by the k17 job 2 worker (2026-11-13), predates k17. Runtime member_lookup_method returns undef for a member that exists but is not callable, so {{ o.f() }} with o = {f: 2} reports the undefined-or-falsey call error; JS (and upstream's callWrap) report that f is not a function. Probe the exact upstream message with the oracle, fix, corpus case.
