@@ -1,0 +1,15 @@
+---
+class: standard
+created: 2026-11-13T11:06:27Z
+id: 79
+priority: medium
+status: backlog
+tags:
+- bug
+- runtime
+title: Keyword-argument object as a template value is opaque (iterate, length, member
+  read)
+updated: 2026-11-13T11:06:27Z
+---
+
+Upstream makeKeywordArgs gives a plain object with __keywords: true. When a filter or macro returns it, templates see an ordinary object. Oracle vs port (found by the k51 worker, 2026-11-13), x = u | default(b=1, a=2) (default returns its def argument, the kwargs object): for k, v in x -> upstream b=1;a=2;__keywords=true; port renders nothing; x|length -> upstream 3, port empty; x.b -> upstream 1, port empty; x.__keywords -> upstream true, port empty. Cause: the port kwargs object is a blessed plain hashref (ADR 0009) that Lib keys / member_lookup do not treat as an object. Upstream key order: insertion order with __keywords last (the JS array-index rule of ADR 0011 still applies). Fix: Lib keys / _own_value / member_lookup recognise the kwargs class as an ordinary object with that order; oracle corpus cases. Check ADR 0009 first -- if it decided kwargs are opaque on purpose, this becomes a decision card instead.
