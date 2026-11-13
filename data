@@ -1,0 +1,53 @@
+---
+block_reason: 'Waits on decision k101 (Perl calling convention of configure/reset/compile/render/render_string
+  + default env). Done so far: k38 (80b744c), public POD + tested SYNOPSIS (1a9a608).
+  Also waiting: install_jinja_compat on k22, precompile/precompile_string on k23,
+  configure''s express branch on an ADR for express-app.js (noted on k24).'
+blocked: true
+class: standard
+created: 2026-09-21T22:47:07Z
+depends_on:
+- 16
+- 17
+- 18
+- 19
+id: 20
+priority: medium
+status: todo
+tags:
+- port
+- api
+title: Port index.js → Text::Nunjucks top-level API + POD
+updated: 2026-11-13T17:09:36Z
+---
+
+nunjucks/index.js: configure (module-level default environment), reset, compile, render, render_string, precompile hooks, install_jinja_compat, plus exports of the component classes. Public POD for the whole surface in the [@Author::GETTY] conventions (skill getty-perl-release-author-getty: =attr/=method). SYNOPSIS must be a tested example. Port tests/api.js → t/upstream/api.t. Port per skill text-nunjucks-core: same functions, same order, snake_case names, upstream control flow kept. Probe surprises with the oracle and commit them as corpus cases. Any deliberate difference needs an ADR in the same change.
+
+Started 2026-11-13 on the maintainer's instruction. Scout cut: the index.js functions (configure, reset, compile, render, render_string) wait on decision k101 (Perl calling convention + default env); install_jinja_compat waits on k22, precompile/precompile_string on k23; configure's express branch hangs on express-app.js being out of scope without an ADR (noted on k24). Taken now, independent of k101: k38 (tests/api.js → t/upstream/api.t; every it() builds its own Environment, none uses the top-level API) with the 7 missing relative/ fixtures; POD for the public component classes in the house shape; Text::Nunjucks DESCRIPTION + a tested SYNOPSIS over the Environment API (ADR 0009). The DIFFERENCES FROM NUNJUCKS section is k24's.
+
+2026-11-13 16:38 doc-writer (2026-11-13): POD written; card stays in-progress (top-level API open on k101). Text::Nunjucks SYNOPSIS/DESCRIPTION/module map; public POD for Environment+Template (in Environment.pm), Loader, Loader::FileSystem, Loader::Precompiled, EmitterObj, Lib::Error, Lib::TemplateError; short DESCRIPTION for the internal modules. Removed 5 hand-written NAME sections (dzil build showed NAME twice). prove -lr t/ pass, podchecker OK on all 18 built .pm.
+
+test-writer: t/00-synopsis.t + t/corpus/render-synopsis.json (SYNOPSIS runs, output == oracle-generated expected, template/context/opts == corpus case). Break-tested 4 ways; lib/ untouched.
+
+2026-11-13 17:00 Fidelity audit of the uncommitted k20 + k38 tree (2026-11-13). Code: git diff lib/ is POD only, plus `__END__` after the final `1;` in 8 modules (no code after it, no DATA use) -- verified by diffing code with POD and comments stripped. Fixtures: all 7 relative/ files and the whole t/upstream/templates tree byte-identical to upstream. api.t: 6/6 titles, order, assertions faithful; the callback-once adaptation (ADR 0003) and the skip-guard comments are there.
+In-scope findings, for the doc-writer / test-writer:
+MUST-FIX 1. Environment.pm:987 async filter example `my ( $value, @args, $cb ) = @_` -- @args swallows the callback, so $cb is always undef (tried it). Use `my $cb = pop; my ( $value, @args ) = @_;`.
+SHOULD-FIX 2. Environment.pm:1100 says the callback "may be given in place of any of the optional arguments". Wrong: in the ignore_missing slot it counts as ignore_missing and is never called (get_template returns a no-op Template for a missing name). It replaces eager_compile or parent_name only, or goes 5th.
+3. Environment.pm:1126 "With a callback it never dies": a non-string name dies before the callback (`render(undef, {}, $cb)`), as upstream. :1129 "a render without a callback that does defer fails": it returns undef silently, as upstream returns null (k104). :1130 with dev, a template-not-found error is still a Lib::Error.
+4. Environment.pm:1222 Template compile "dies with the prettified Lib::Error": it dies with the raw TemplateError (`unexpected token: %}`, no path or line prefix), as upstream compile() does. TemplateError.pm:90 "already prefixed by update" is not true of that error, nor of the one get_exported passes to its callback (upstream getExported does cb(e) raw too, so the doc-writer's flag is no bug).
+5. TemplateError.pm:104/:110 "counting from 1": render-time errors carry 0-based lineno/colno, as upstream (`a\nb {{ foo() }}` gives lineno 1, message [Line 1, Column 8]). Only parser and throwOnUndefined errors are 1-based (k106).
+6. Environment.pm:1164 `load` fires "each time a loader's get_source returns a source": only when the loader emits it. FileSystem does; Precompiled does not, upstream neither.
+7. Environment.pm:993 kwargs "a trailing Runtime keyword-arguments hash": name the class Text::Nunjucks::Runtime::KwArgs; for an async filter it comes before the callback. Nunjucks.pm:56 points users at Runtime's None but does not say how to reach it (Text::Nunjucks::Runtime->None), while Runtime.pm:1884 calls the whole module not an interface for applications. Carve None and KwArgs out there.
+8. Nunjucks.pm:48 "the difference is a recorded decision, not an accident" is false today: there are open fidelity bugs (k49, k52, k53, k64, k74, k99, k103). Make it a policy sentence ("a deliberate difference is a recorded decision; any other difference is a bug"), or drop it until k24.
+9. Precompiled.pm:71 "not part of the distribution yet" is roadmap wording for k23. Drop "yet" or the sentence.
+10. t/00-synopsis.t does not check the "This prints" block (Nunjucks.pm:29). Changing it to `- B<C` in a scratch build still passed 10/10. Compare that block with the output too. :89 `>/dev/null` -> File::Spec->devnull.
+11. t/upstream/api.t:29 local norm_eol: t/lib/Test/Nunjucks/Util.pm:18-21 says each util.js helper is ported there with its first caller, and api.t is that caller. Move it to Util.pm (EXPORT_OK norm_eol), keep upstream's `if (!str) return str` guard, update the Util.pm header.
+Nits: Environment.pm:1061 get_extension returns undef, not nothing (a 1-element list in list context); :1089 caches under the resolved name; :931 opts is the caller's hash, changed in place (as upstream); Error.pm:37/:60 names miss RangeError and URIError; :896 autoescape wording needs to match k103 once fixed.
+Drift filed: k103 autoescape '0'/NaN (wrong output), k104 ADR 0003/0009 fail-loud wording, k105 skip_all guards, k106 0-based render-time Line/Column unpinned. Already carded: k99 (template names must be a string), k100 (MetaProvides warning, seen again), k102.
+Runs: prove -lr t/ PASS, 21 files, 4621 tests, 0 skipped, 89 TODO (corpus 59, compiler 10, loader 9, filters 5, tests 4, globals 1, runtime 1; api.t and 00-synopsis 0). One "Deep recursion on async_iter" warning (k83). prove -l xt/ PASS 18/18 (render-synopsis.json oracle-identical). dzil build to /tmp: podchecker OK on all 18 built .pm, one NAME and one DESCRIPTION each. The 4 new test paths are untracked, so they are not in the build until git add. 00-synopsis.t copied into the scratch build passes 10/10 against the woven =head1 SYNOPSIS.
+
+POD fixes for audit done
+
+test-writer: t/00-synopsis.t now also asserts the POD 'This prints' block equals corpus expected (12 tests); devnull via File::Spec; normEOL moved to t/lib/Test/Nunjucks/Util.pm (EXPORT_OK), used by t/upstream/api.t. Break-tested on a temp copy of lib/t (B&lt;C -> B<C and '- A' -> '- X' both FAIL). prove -lr t/: 21 files, 4623 tests PASS, 89 TODO not-ok, 0 skipped, 0 unexpected passes.
+
+public POD and tested SYNOPSIS committed in 1a9a608; top-level API waits on k101, install_jinja_compat/precompile on k22/k23; card stays open
