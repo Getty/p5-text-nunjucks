@@ -1,0 +1,13 @@
+---
+class: standard
+created: 2026-11-13T06:19:07Z
+id: 63
+priority: low
+status: backlog
+tags:
+- performance
+title: Compile time ~130 µs per template source character
+updated: 2026-11-13T06:19:07Z
+---
+
+Measured by the k17 job 1 worker (2026-11-13): compile time is linear at about 130 µs per source character. Not a fidelity bug; belongs with the benchmark work (k25).
