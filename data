@@ -1,0 +1,25 @@
+---
+class: standard
+created: 2026-09-22T20:24:45Z
+id: 44
+priority: low
+status: backlog
+tags:
+- decision
+title: 'Decision: ES6 Set/Map as context values -- no Perl analogue'
+updated: 2026-11-13T14:43:10Z
+---
+
+Surfaced by k21. ES6 Set and Map as context VALUES have no Perl analogue to construct at all (unlike the iterable/mapping tests on ordinary values, ADR 0008). 6 TODO subtests (Set/Map builtin across for/asyncEach/asyncAll). Decide: accept as unsupportable-input divergence (record ADR, keep out of corpus) or provide a Perl Set/Map shim. Maintainer call. Also fold in here (no ADR yet): a plain hashref carrying a toString coderef is not coerced on stringify -> [object Object] (coincidentally the correct JS default for an object WITHOUT a custom toString; the override step is missing). Decide whether js_to_string should honor a toString member.
+
+Fold-in from k17/k34 (2026-11-13): the upstream 'length' filter tests also use new String('...') (JS String wrapper object) and an Array with user-defined properties — no Perl form, no ADR (ADR 0001 'no wrapper classes' comes closest). Options: (1) one ADR recording Set, Map, String wrapper and array-with-properties as inexpressible-input divergences, tests stay TODO/skip citing it; (2) Perl shims for each. Recommendation: (1). Also record which Perl shape the custom-toString object takes if js_to_string honours it: an overloaded '""' object or a hashref with a toString coderef — t/upstream/filters.t uses the overload as a placeholder under TODO.
+
+Fold-in from k17 job 2 (2026-11-13): a macro (JS function) used as a string value prints its function source text in JS ('abc'|replace('b', macro) -> source text of the compiled macro); the port prints [object Object]. No Perl form of 'function source' -- candidate for the same inexpressible-values ADR.
+
+Fold-in from the k17 job 2 audit (2026-11-13): the named-groups object a regex function replacer receives has a null prototype upstream, so {{ g }} raises 'TypeError: val.toString is not a function'; the port renders [object Object]. Null-prototype objects have no Perl image either -- same inexpressible-values ADR.
+
+Fold-in from k17 job 3 (2026-11-13): (1) macro|length gives 0 upstream (Function.length of the compiled macro) and empty in the port -- no Perl form for Function.length; (2) a function used as the key in a property-read TypeError prints its JS source in V8; (3) sparse-array holes map to undef, so reduce/map cannot skip holes as JS does. Candidates for the same inexpressible-values ADR.
+
+From k17 job 4 (2026-11-13): the function-source-text item (job 2 fold-in above) also covers macro|escape, |safe, |forceescape, |string and a function inside urlencode values: JS prints the compiled function's source, the port [object Object].
+
+Fold-in from the k18 audit (2026-11-13), same function-source-text item: {{ range }} prints the escaped source of globals.js range upstream; {{ cycler().next }} prints memberLookup's wrapper '(...args) =&gt; obj[val].apply(obj, args)'; cycler|dictsort|join prints both method sources. Port: [object Object]. No ADR yet (ADR 0017:80 only names the default-sort case).
