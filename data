@@ -1,0 +1,18 @@
+---
+class: standard
+completed: 2026-11-13T07:44:29Z
+created: 2026-11-13T05:07:31Z
+id: 56
+priority: medium
+started: 2026-11-13T07:44:29Z
+status: done
+tags:
+- bug
+- runtime
+title: String replace() ignores JS replacement patterns ($&, $$, $`) for string patterns
+updated: 2026-11-13T07:44:29Z
+---
+
+Found in the k17 job 1 audit (2026-11-13). Runtime STRING_METHODS replace (~700-710), template-level 'abc'.replace(...): JS GetSubstitution applies to string patterns too, so the comment's 'rides on k7' is wrong. Oracle vs port: 'abc'.replace('b','$&$&') abbc vs a$&amp;$&amp;c; '$$' -> a$c vs a$$c; '$`' -> aac vs a$`c. (The replace FILTER does not use String.replace for string patterns, so k17 is not blocked; its regex branch is.) Fix: one GetSubstitution seam in Lib, oracle corpus.
+
+Fixed in 6e78d3b.
