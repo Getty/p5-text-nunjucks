@@ -1,0 +1,14 @@
+---
+class: standard
+created: 2026-11-13T05:07:29Z
+id: 54
+priority: medium
+status: backlog
+tags:
+- bug
+- runtime
+title: in operator converts its key the Perl way (true, null, arrays)
+updated: 2026-11-13T05:07:29Z
+---
+
+Found in the k17 job 1 audit (2026-11-13). Lib::in_operator (Lib.pm ~416-418) stringifies the key with Perl rules; its comment says it rides on k6, which is done. Oracle vs port: {{ true in 'xtrue' }} true vs false; {{ n in 'xnull' }} (n = null) true vs false; {{ [1,2] in 'x1,2' }} true vs false. Fix: ToString via the Runtime/Lib JS stringify seam; oracle corpus cases.
