@@ -1,0 +1,18 @@
+---
+class: standard
+created: 2026-11-13T15:39:12Z
+id: 97
+priority: low
+status: backlog
+tags:
+- loader
+- portability
+- release-limitation
+- release-0.001
+title: node path helpers model POSIX only; node on Windows uses path.win32
+updated: 2026-11-13T20:26:59Z
+---
+
+k19 ported node path.resolve/normalize/dirname (Lib node_path_*) from node lib/path.js posix only (ADR 0018). Node on win32 uses path.win32 (drive letters, backslashes, UNC), so FileSystemLoader search paths, the containment guard and Loader resolve would differ from node on Windows. The oracle runs on Linux, so this is not measurable here today; needs a win32 port of the same functions keyed on $^O, or a recorded divergence in ADR 0018.
+
+2026-11-13 20:24 Pre-release audit: what the dist says and how tests behave on Windows is k112 (decision: document + gate MSWin32 for 0.001, or port path.win32 here first).
