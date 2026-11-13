@@ -1,0 +1,21 @@
+---
+class: standard
+created: 2026-11-13T15:39:03Z
+id: 95
+priority: low
+status: backlog
+tags:
+- upstream-bug
+- loader
+- decision
+- release-0.001
+- release-limitation
+title: 'Ported upstream bug: FileSystemLoader containment guard is a string-prefix
+  test (views admits ../views2/)'
+updated: 2026-11-13T20:27:08Z
+---
+
+node-loaders.js:66 guards with `p.indexOf(basePath) === 0 && fs.existsSync(p)`, a string prefix, not a path-segment test: search path views + name ../views2/x.njk resolves to <cwd>/views2/x.njk, which starts with <cwd>/views and is served. Ported as is in k19 (ADR 0004: upstream bugs are ported), pinned by t/corpus/render-loaders.json (sibling views2 passes, ../outside.njk refused). Reporting it upstream (mozilla/nunjucks) is the maintainer's call (publish gate). A segment-safe guard would be a divergence and need an ADR.
+
+2026-11-13 20:23 Pre-release audit (fidelity-auditor, probes port vs oracle; main agent reproduced on the port). Port == upstream on every case, search path 'views', cwd app: served ../views2/x.njk, ../views/../views2/x.njk, sub/../../views2/x.njk, ../views.bak/config.njk and the sibling FILE ../views.env (db_password=...); absolute <app>/views2/x.njk served; /etc/hostname, ../outside, NUL names refused; search path '.' serves the whole cwd plus ../app-secrets/, ../app.env; symlinks inside the search path followed. Needs an attacker-controlled name (include/extends/import with a variable, render(user input), untrusted template authors).
+Release: not a blocker once the SECURITY note is in the POD (k24). Decision for the maintainer: keep 1:1 (ADR 0004) or diverge to a segment-safe check (e.g. index($path, $base.'/') as Skilletor::Render::Loader does) -- needs an ADR and re-pins the render-loaders corpus case 'views2 passes'. skilletor does not use FileSystemLoader.
