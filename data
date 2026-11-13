@@ -1,0 +1,15 @@
+---
+class: standard
+created: 2026-11-13T13:40:49Z
+id: 89
+priority: low
+status: backlog
+tags:
+- bug
+- runtime
+title: A '__proto__' key in a dict literal sets the prototype upstream; the port stores
+  an own key
+updated: 2026-11-13T13:40:49Z
+---
+
+Found by the k17 job 5 fix-round worker, 2026-11-13. JS object literals treat a __proto__: value property as [[SetPrototypeOf]] (Annex B), so upstream {{ {"__proto__": {"a": 1} }.a }} renders 1 and [2,1].sort({"__proto__": {"toString": 1} }) reports [object Object]; the port keeps __proto__ as an own key of the Hash::Ordered (renders empty, #<Object>), and it also shows up in for/dump/keys where JS hides it. Closest to the k87 decision (Object.prototype names) -- decide together: emulate the literal-__proto__ prototype link, or record it under the same own-key divergence. Corpus case to add once decided.
