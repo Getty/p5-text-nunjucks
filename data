@@ -1,0 +1,32 @@
+---
+class: standard
+created: 2026-11-13T15:50:08Z
+id: 99
+priority: medium
+status: backlog
+tags:
+- bug
+- environment
+- fidelity
+- release-should
+- release-0.001
+title: 'getTemplate ''template names must be a string: '' + name concatenates the
+  Perl way, not JS ToString'
+updated: 2026-11-13T20:26:31Z
+---
+
+Found in the k19 fidelity audit (pre-existing, outside the k19 diff).
+
+Upstream environment.js:213 `throw new Error('template names must be a string: ' + name)` -- `+` runs JS ToString on name. Port lib/Text/Nunjucks/Environment.pm:318 concatenates with Perl `.`.
+
+Oracle (renderString, any loader):
+- `{% include u %}` (u missing) -> `template names must be a string: undefined`; port: `... string: ` (empty, plus a "Use of uninitialized value" warning)
+- `{% include n %}` with n = null -> `... string: null`; port: `... string: Text::Nunjucks::Runtime::None=SCALAR(0x...)`
+- `{% include true %}` -> `... string: true`; port: `... string: 1`
+- `{% include [1,2] %}` -> `... string: 1,2`; port: `... string: ARRAY(0x...)`
+- `{% include {} %}` -> `... string: [object Object]`; port: `... string: Hash::Ordered=ARRAY(0x...)`
+- `{% include 5 %}` -> `... string: 5` in both.
+
+Fix: build the message with Runtime's JS ToString (the seam copy_safeness / _js_to_string uses) instead of Perl concatenation. No corpus case pins it (grep "template names must be" t/corpus/ is empty): add the five cases above to t/corpus/ via maint/corpus-regen.
+
+2026-11-13 20:24 Pre-release audit (fidelity-auditor): ordinary trigger -- {% include u %} with u undefined. Port: 'Use of uninitialized value $name ... Environment.pm line 321' on STDERR and message 'template names must be a string: '; upstream '...: undefined'. A null name gives '...: Text::Nunjucks::Runtime::None=SCALAR(0x...)'. Under a die-on-warn handler the render error becomes the warning text. Release: should-fix, not a blocker.
