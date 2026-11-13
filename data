@@ -1,0 +1,20 @@
+---
+class: standard
+created: 2026-11-13T11:06:16Z
+id: 78
+priority: medium
+status: backlog
+tags:
+- bug
+- runtime
+- ordering
+- release-limitation
+- release-0.001
+title: Tie::IxHash-tied caller hashes iterate like plain hashes (ADR 0011 promises
+  their own order)
+updated: 2026-11-13T20:26:45Z
+---
+
+ADR 0011 (Decision) says caller-supplied ordered hashes -- Hash::Ordered or a Tie::IxHash-tied hash -- are honoured in their own order. Hash::Ordered is (since k51: JS rule over its insertion order, orchestrator call pending maintainer confirmation). A Tie::IxHash-tied hash was never detected: Lib keys sends it through the plain-hash branch, so a tie of b,10,9,a iterates 9,10,a,b (before k51: 10,9,a,b). Fix: detect a tied hash (tied(%$h) isa Tie::IxHash, or any tie?) in the one ordering seam Lib keys and apply the JS rule over the tie order, like Hash::Ordered; Perl-side tests in t/10-lib.t (the corpus harness cannot express a tied context). Open for the maintainer only if the scope question (Tie::IxHash only vs any tied hash) has no obvious answer. Found by the k51 worker, 2026-11-13. Recorded as a known gap in the ADR 0011 amendment.
+
+2026-11-13 20:24 Pre-release audit (fidelity-auditor): a Tie::IxHash-tied (z,a,m) iterates a;m;z; and dumps sorted; Hash::Ordered gives z;a;m;. Release: documented limitation -- POD note 'pass ordered hashes as Hash::Ordered' (k24) until fixed.
