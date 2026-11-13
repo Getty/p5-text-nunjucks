@@ -1,0 +1,29 @@
+---
+class: standard
+created: 2026-11-13T16:58:34Z
+id: 103
+priority: medium
+status: backlog
+tags:
+- bug
+- runtime
+- fidelity
+- release-should
+- release-0.001
+title: 'suppress_value tests autoescape with Perl truthiness: autoescape ''0'' turns
+  escaping off, NaN keeps it on'
+updated: 2026-11-13T20:26:36Z
+---
+
+Found in the k20 fidelity audit (2026-11-13), outside the k20 diff.
+
+upstream runtime.js:212 `if (autoescape && !(val instanceof SafeString))` is a JS truthiness test; the value comes from environment.js:55 `opts.autoescape != null ? opts.autoescape : true` and the compiled `${autoescape} && env.opts.autoescape` (compiler.js:258/262/1114). Port lib/Text/Nunjucks/Runtime.pm:781 `if ( $autoescape && ... )` tests it with Perl truthiness (Compiler.pm:375/380/1395 pass the raw opts value through Perl `&&`).
+
+Measured, `{{ x }}` with x = '<':
+- autoescape => '0' (string): upstream `&lt;` (oracle: {"template":"{{ x }}","context":{"x":"<"},"opts":{"autoescape":"0"}}), port `<`
+- autoescape => NaN: upstream `<` (node, new Environment([], {autoescape: NaN})), port `&lt;`
+- 0, '', [] agree.
+
+Fix: `$self->_truthy($autoescape)` in suppress_value (the one seam). Pin: the '0' case as a corpus case (render-environment.json); NaN cannot travel through JSON, so a Perl-side test. No corpus case pins either today.
+
+2026-11-13 20:24 Pre-release audit (fidelity-auditor): probe {{ x }} with x='<' and opts autoescape '0': upstream &lt;, port < (escaping off). 0, '', [], 'false' and false agree; trimBlocks/lstripBlocks/throwOnUndefined given '0' agree. One-line fix. Release: should-fix.
