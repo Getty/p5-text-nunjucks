@@ -1,0 +1,34 @@
+---
+class: standard
+created: 2026-09-23T01:26:43Z
+depends_on:
+- 43
+id: 47
+priority: medium
+status: backlog
+tags:
+- decision
+- fidelity
+- member-lookup
+- adr-0016
+title: 'Decision: blessed-object property-read result diverges from JS at {{ obj.method
+  }} (no parens)'
+updated: 2026-11-13T07:05:40Z
+---
+
+k43 (commit 900f3e5) implements member_lookup / member_lookup_method per ADR 0016. For blessed Perl objects, the property-read seam (member_lookup) now returns $obj->$key which INVOKES the method and returns its result. This means {{ obj.method }} in templates renders whatever the method returned on invocation, not the property reference.
+
+JS memberLookup is one seam: if typeof obj[val] is "function" it returns a bound closure, otherwise returns obj[val] directly. So {{ obj.method }} (no parens) in JS renders the function source (e.g. "(...args) => obj['method'].apply(obj, args)") because that closure is the value JS sees.
+
+Per ADR 0016 / pre-k43 the Perl port bound the method and returned a coderef (different from JS, observable). Post-k43 it invokes the method and returns its result (also different from JS, observable in a different way). Neither behaviour matches JS at the template-visible site {{ obj.greet }} for blessed objects.
+
+ADR 0016 acknowledges the split is "deliberate" but its Consequences section does not note the JS mismatch: "Templates calling user-defined methods on blessed Perl objects ({{ obj.greet() }}, the k17-test scaffolding pattern) keep working" is true for the parens case; the no-parens case ({{ obj.greet }} returning "hi world" vs the JS function source) is unmentioned.
+
+The current corpus has no case for {{ obj.method }} (no parens) on a blessed user object, so the divergence is latent. Per ADR 0004 (a difference without an ADR is a bug), the right move is either:
+
+1. extend ADR 0016 Consequences to record this JS-vs-Perl mismatch at the property-read site explicitly, and add a corpus case pinning the Perl behaviour;
+2. or restructure member_lookup_method so its returned coderef is what {{ obj.method }} yields too (workable but cosmetic since JS renders function source as a string).
+
+Recommend option 1 for now: an observability note in ADR 0016 plus a pinned corpus case. Otherwise k43 has changed blessed-object property semantics in a way that downstream templates can observe without any ADR recording it.
+
+Related, from k17 job 2 (2026-11-13): filters call methods on their input (str.replace/match/split/toLowerCase); a user object that brings its own callable member of that name is used by JS, the port treats any non-string as TypeError at those calls. Same blessed/plain-object member question as this card.
