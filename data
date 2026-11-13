@@ -1,0 +1,15 @@
+---
+class: standard
+created: 2026-11-13T05:07:28Z
+id: 52
+priority: medium
+status: backlog
+tags:
+- bug
+- lexer
+- utf16
+title: Lexer colno / error Column count code points, not UTF-16 code units (ADR 0012)
+updated: 2026-11-13T05:07:28Z
+---
+
+Found in the k17 job 1 audit (2026-11-13). ADR 0012: string positions reckon in UTF-16 code units. The Lexer counts code points for colno and the error Column. Oracle vs port: '😀😀{{ foo( }}' -> Column 13 (oracle) vs 11 (port); '😀😀{{ a b }}' -> Column 10 vs 8. Fix in Lexer.pm (k10 area) through the Lib UTF-16 seams (js_string_length & co., k17 job 1), oracle corpus case in lex/render-error mode.
