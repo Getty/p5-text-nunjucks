@@ -1,0 +1,20 @@
+---
+class: standard
+created: 2026-11-13T11:18:53Z
+id: 82
+priority: low
+status: backlog
+tags:
+- bug
+- compiler
+title: compile_set on a dotted target ({% set x.b = 1 %}) dies with a raw Perl error
+  instead of the JS TypeError
+updated: 2026-11-13T11:18:53Z
+---
+
+Found by the k51 fidelity audit (2026-11-13). parseSet takes parsePrimary(), so `{% set x.b = 1 %}` gives a LookupVal target. upstream compiler.js compileSet reads `target.value` (undefined on a LookupVal) and then `name.charAt(0)` throws.
+
+oracle: {% set x = {} %}{% set x.b = 1 %}{% for k, v in x %}{{k}};{% endfor %}| -> error "(unknown path)\n  TypeError: Cannot read properties of undefined (reading 'charAt')"
+port: Template render error: (unknown path)\n  Can't locate object method "value" via package "Text::Nunjucks::Nodes::LookupVal" at lib/Text/Nunjucks/Compiler.pm line 763
+
+Site: lib/Text/Nunjucks/Compiler.pm compile_set (`my $name = $target->value;`, ~763). Upstream reaches frame.lookup(undefined) first and fails only at name.charAt(0) in the second targets loop -- keep that order so the message is the same. Add the probe as a corpus case.
