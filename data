@@ -1,0 +1,46 @@
+---
+class: standard
+created: 2026-10-06T19:47:38Z
+id: 49
+priority: medium
+status: backlog
+tags:
+- bug
+- runtime
+- regex
+- divergence
+- review-2026-10-06
+- release-should
+- release-0.001
+title: 'make_regex: \d, \w and \s do not follow JS semantics, with or without the
+  u flag (k45 starts from a wrong premise)'
+updated: 2026-11-13T20:26:41Z
+---
+
+`Runtime::make_regex` (`lib/Text/Nunjucks/Runtime.pm:525-570`) compiles the JS pattern body under Perl inline modifiers and adds `a` (ASCII classes) only when the JS `u` flag is present (`:551`). The comment above it (`:520-524`) says the body is compiled under `/a` because JS classes are ASCII-only by default, which is the opposite of what the code does: without `u` there is no `/a`.
+
+In ECMAScript `\d` is `[0-9]` and `\w` is `[A-Za-z0-9_]` regardless of the `u` flag, and `\s` always includes the Unicode white space set (NBSP, U+2028, ...). Measured with node on this machine:
+
+    node -e 'console.log(/^\d$/u.test("\u0663"), /^\d$/.test("\u0663"), /^\w$/u.test("\u00e9"), /^\s$/.test("\u00a0"))'
+    # false false false true
+
+The port, same inputs:
+
+    perl -Ilib -MText::Nunjucks::Runtime -e '
+      my $R="Text::Nunjucks::Runtime"; my $e="\x{e9}"; utf8::upgrade($e); my $n="\x{a0}"; utf8::upgrade($n);
+      print $R->make_regex(q{^\d$},q{})->test("\x{0663}")?1:0,   # 1  (JS: false)
+            $R->make_regex(q{^\w$},q{})->test($e)?1:0,           # 1  (JS: false)
+            $R->make_regex(q{^\s$},q{u})->test($n)?1:0, "\n"'    # 0  (JS: true)
+
+So three divergences, two of them on the common no-flag path:
+- no flag: `\d` matches any Unicode digit, `\w` any Unicode word character (JS: ASCII only);
+- `u` flag: `\s` stops matching NBSP and the other Unicode spaces (JS: still matches).
+
+k45 (backlog, decision) discusses only the `u` mapping and recommends JS `/u` -> Perl `/u`, on the premise that JS `/\d/u` matches Unicode digits. It does not (see the node line), so that recommendation would add a divergence rather than remove one. This card is the bug behind it; k45 needs the corrected premise before anyone decides.
+
+Done when `\d`/`\w` are ASCII and `\s` is the ECMAScript WhiteSpace+LineTerminator set on every flag combination (ADR 0005 already asks for explicit ECMAScript sets for engine-internal regexes; the same translation of the three escapes in the user pattern would do it), with corpus cases for the three lines above, and the comment at `:520-524` says what the code does.
+
+---
+Fleet review 2026-10-06 · kind: bug · confidence: verified
+
+2026-11-13 20:24 Pre-release audit (fidelity-auditor): silent wrong output on a common slugify idiom, and it depends on the string's internal UTF8 flag: {{ t | lower | replace(r/[^\w]+/g, '-') }} with t='Crème Brûlée' -> upstream cr-me-br-l-e; port the same for a native string, but crème-brûlée for the same string utf8::upgrade'd (as from JSON, DBI, :encoding). r/^\d+$/ on Arabic-Indic digits: upstream no match, port match. Release: should-fix.
