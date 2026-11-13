@@ -1,0 +1,15 @@
+---
+class: standard
+created: 2026-11-13T09:36:04Z
+id: 75
+priority: low
+status: backlog
+tags:
+- bug
+- runtime
+title: SafeString->new(non-string) returns the value; JS new SafeString(5) gives an
+  empty SafeString
+updated: 2026-11-13T09:36:04Z
+---
+
+Found by the k17 job 4 worker (2026-11-13). Runtime SafeString->new on a non-string returns the value itself, and a test comment claims 'JS: new SafeString(5) === 5' -- wrong: new ignores a primitive return and yields an (empty) SafeString. No current caller reaches it (markSafe checks isString, copySafeness passes strings or the SafeString). Probe upstream runtime.js SafeString with node, port 1:1, fix the comment.
