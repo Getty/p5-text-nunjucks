@@ -1,0 +1,25 @@
+---
+class: standard
+completed: 2026-11-13T16:24:38Z
+created: 2026-09-22T05:00:32Z
+depends_on:
+- 19
+id: 37
+priority: medium
+started: 2026-11-13T14:57:43Z
+status: done
+tags:
+- port
+- tests
+- upstream-suite
+title: Port tests/loader.js → t/upstream/loader.t (11 it)
+updated: 2026-11-13T16:24:48Z
+---
+
+Port upstream/nunjucks/tests/loader.js to t/upstream/loader.t. Some loader tests may need Perl-side fixtures rather than the oracle; adapt, don't drop.
+
+Promoted from backlog on the maintainer's instruction (2026-11-13): worked together with k19.
+
+t/upstream/loader.t ported (uncommitted): 11/11 it(). it1+it2 TODO k19 (Environment init_loaders calls loader->cache(...) on a non-Loader duck-typed class, dies with no method cache; upstream JS just assigns loader.cache = {}). FileSystemLoader x2 TODO k19. WebLoader x2 + NodeResolveLoader x5 TODO ADR 0018 placeholders. prove -lr t/: 18 files, 4558 tests, PASS.
+
+Committed in a59ce7f
