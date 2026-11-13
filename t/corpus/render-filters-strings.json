@@ -219,7 +219,6 @@
     "opts": {
       "autoescape": true
     },
-    "todo": "k17: safe/escape filters not ported yet (job 4)",
     "expected": {
       "ok": true,
       "output": "<b>x</b>"
@@ -451,7 +450,6 @@
     "opts": {
       "autoescape": true
     },
-    "todo": "k17: safe/escape filters not ported yet (job 4)",
     "expected": {
       "ok": true,
       "output": "[   <b>   ]"
@@ -731,7 +729,6 @@
     "opts": {
       "autoescape": true
     },
-    "todo": "k17: safe/escape filters not ported yet (job 4)",
     "expected": {
       "ok": true,
       "output": "<b>\n  <i>"
@@ -985,7 +982,6 @@
     "opts": {
       "autoescape": true
     },
-    "todo": "k17: safe/escape filters not ported yet (job 4)",
     "expected": {
       "ok": true,
       "output": "&lt;b&gt;"
@@ -1164,7 +1160,6 @@
     "opts": {
       "autoescape": true
     },
-    "todo": "k17: safe/escape filters not ported yet (job 4)",
     "expected": {
       "ok": true,
       "output": "<a><br />\nb"
@@ -1501,7 +1496,6 @@
     "opts": {
       "autoescape": true
     },
-    "todo": "k17: safe/escape filters not ported yet (job 4)",
     "expected": {
       "ok": true,
       "output": "a<i>c"
@@ -2222,7 +2216,6 @@
     "opts": {
       "autoescape": true
     },
-    "todo": "k17: safe/escape filters not ported yet (job 4)",
     "expected": {
       "ok": true,
       "output": "x & y"
@@ -2452,7 +2445,6 @@
     "opts": {
       "autoescape": true
     },
-    "todo": "k17: safe/escape filters not ported yet (job 4)",
     "expected": {
       "ok": true,
       "output": "<b> X</b>"
@@ -2690,7 +2682,6 @@
     "opts": {
       "autoescape": true
     },
-    "todo": "k17: safe/escape filters not ported yet (job 4)",
     "expected": {
       "ok": true,
       "output": "[<b>]"
@@ -3225,7 +3216,6 @@
     "opts": {
       "autoescape": true
     },
-    "todo": "k17: safe/escape filters not ported yet (job 4)",
     "expected": {
       "ok": true,
       "output": "<b>te..."
@@ -3471,7 +3461,6 @@
     "opts": {
       "autoescape": true
     },
-    "todo": "k17: safe/escape filters not ported yet (job 4)",
     "expected": {
       "ok": true,
       "output": "&lt;B&gt;"
@@ -3871,7 +3860,6 @@
   {
     "name": "strings: replace: probe repl-regex-safe-in",
     "template": "{{ ('<a>b'|safe)|replace(r/b/, '<i>') }}",
-    "todo": "k17: safe/escape filters not ported yet (job 4)",
     "expected": {
       "ok": true,
       "output": "&lt;a&gt;&lt;i&gt;"

@@ -23,11 +23,10 @@ no warnings 'experimental::builtin';
 # port run synchronously (ADR 0003) and render()/equal() simply return once
 # fired.
 #
-# Filters (title/replace/reverse/safe/join/default, ...) are k17 and not
-# ported yet (no lib/Text/Nunjucks/Filters.pm) -- every it() that needs one is
-# TODO, naming k17. compile_filter's own comment marks two further upstream
-# behaviours as ADR 0009 (accepted 2026-09-22) *decided divergences*, not
-# bugs: a bare/member user coderef gets no JS-style `this` binding, and a sync
+# Filters.pm exists (k17); every filter this file uses is ported, so no it() here is TODO
+# for a missing filter. compile_filter's own comment
+# marks two further upstream behaviours as ADR 0009 (accepted 2026-09-22)
+# *decided divergences*, not bugs: a bare/member user coderef gets no JS-style `this` binding, and a sync
 # filter is called with plain (@args), not (context, @args) -- both are TODO'd
 # citing ADR 0009, not fixed here.
 plan skip_all => 'Text::Nunjucks::Environment not available'
@@ -51,7 +50,7 @@ sub err_to_string {
     : "$err";
 }
 
-# equal(), but the render is known to die (a missing k17 filter, most often) --
+# equal(), but the render is known to die (an unported feature or a decided divergence) --
 # render with noThrow + a direct is() under TODO instead of relying on subtest
 # to isolate a die from equal()'s croak. It does not: in this Test::More/Test2
 # version a die inside a subtest still aborts the whole file (verified while
@@ -129,11 +128,8 @@ subtest 'compiler' => sub {
   };
 
   subtest 'should compile none as null, not undefined' => sub {
-  TODO: {
-      local $TODO = 'default filter is k17 (Filters not ported yet)';
-      my ( $err, $res ) = render( '{{ none|default("d", false) }}', undef, { noThrow => 1 } );
-      is( $res, '', 'default filter distinguishes null from undefined' );
-    }
+    my ( $err, $res ) = render( '{{ none|default("d", false) }}', undef, { noThrow => 1 } );
+    is( $res, '', 'default filter distinguishes null from undefined' );
   };
 
   subtest 'should compile function calls' => sub {
@@ -1251,26 +1247,23 @@ subtest 'compiler' => sub {
       '{{ block_content }}',
       'showing 1 showing 2 showing 3 ' );
 
-  TODO: {
-      local $TODO = 'safe filter is k17 (Filters not ported yet)';
-      my ( $err, $res ) = render(
-        '{% set block_content %}' .
-        '{% set inner_block_content %}' .
-        '{% for i in [1, 2, 3] %}' .
-        'item {{ i }} ' .
-        '{% endfor %}' .
-        '{% endset %}' .
-        '{% for i in [1, 2, 3] %}' .
-        'inner {{i}}: "{{ inner_block_content }}" ' .
-        '{% endfor %}' .
-        '{% endset %}' .
-        '{{ block_content | safe }}',
-        undef, { noThrow => 1 } );
-      is( $res,
-        'inner 1: "item 1 item 2 item 3 " ' .
-        'inner 2: "item 1 item 2 item 3 " ' .
-        'inner 3: "item 1 item 2 item 3 " ' );
-    }
+    my ( $err, $res ) = render(
+      '{% set block_content %}' .
+      '{% set inner_block_content %}' .
+      '{% for i in [1, 2, 3] %}' .
+      'item {{ i }} ' .
+      '{% endfor %}' .
+      '{% endset %}' .
+      '{% for i in [1, 2, 3] %}' .
+      'inner {{i}}: "{{ inner_block_content }}" ' .
+      '{% endfor %}' .
+      '{% endset %}' .
+      '{{ block_content | safe }}',
+      undef, { noThrow => 1 } );
+    is( $res,
+      'inner 1: "item 1 item 2 item 3 " ' .
+      'inner 2: "item 1 item 2 item 3 " ' .
+      'inner 3: "item 1 item 2 item 3 " ' );
 
     equal(
       '{% set x,y,z %}' .
@@ -1445,8 +1438,7 @@ subtest 'compiler' => sub {
       { autoescape => true },
       '&amp;&gt;&lt;&#39;&quot;' );
 
-    todo_equal( 'reverse/safe filters are k17 (Filters not ported yet)',
-      '{{ foo|reverse|safe }}',
+    equal( '{{ foo|reverse|safe }}',
       { foo => q{"'<>&} },
       { autoescape => true },
       q{&><'"} );
@@ -1467,25 +1459,22 @@ subtest 'compiler' => sub {
       { autoescape => true },
       '&lt;p&gt;foo&lt;/p&gt;' );
 
-    todo_equal( 'safe filter is k17 (Filters not ported yet)',
-      '{{ foo | safe }}',
-      { foo => undef },
+    equal( '{{ foo | safe }}',
+      { foo => Text::Nunjucks::Runtime->None },
       { autoescape => true },
       '' );
 
-    todo_equal( 'safe filter is k17 (Filters not ported yet)',
-      '{{ foo | safe }}',
+    equal( '{{ foo | safe }}',
       { foo => '<p>foo</p>' },
       { autoescape => true },
       '<p>foo</p>' );
 
-    todo_equal( 'safe filter is k17 (Filters not ported yet)',
-      '{{ foo | safe }}',
+    equal( '{{ foo | safe }}',
       { foo => ['<p>foo</p>'] },
       { autoescape => true },
       '<p>foo</p>' );
 
-    todo_equal( 'safe filter is k17 (Filters not ported yet)',
+    todo_equal( 'JS object with custom toString: mapping pending k44',
       '{{ foo | safe }}',
       { foo => { toString => sub { return '<p>foo</p>' } } },
       { autoescape => true },
@@ -1493,8 +1482,7 @@ subtest 'compiler' => sub {
   };
 
   subtest 'should not autoescape safe strings' => sub {
-    todo_equal( 'safe filter is k17 (Filters not ported yet)',
-      '{{ foo|safe }}',
+    equal( '{{ foo|safe }}',
       { foo => q{"'<>&} },
       { autoescape => true },
       q{"'<>&} );
@@ -1507,14 +1495,11 @@ subtest 'compiler' => sub {
           undef, { autoescape => true } ) )[1],
       '&lt;&gt;&amp; and &lt;&gt;' );
 
-  TODO: {
-      local $TODO = 'safe filter is k17 (Filters not ported yet)';
-      my ( undef, $res ) = render(
-        '{% macro foo(x, y) %}{{ x|safe }} and {{ y }}{% endmacro %}' .
-        '{{ foo("<>&", "<>") }}',
-        undef, { autoescape => true, noThrow => 1 } );
-      is( $res, '<>& and &lt;&gt;' );
-    }
+    my ( undef, $res ) = render(
+      '{% macro foo(x, y) %}{{ x|safe }} and {{ y }}{% endmacro %}' .
+      '{{ foo("<>&", "<>") }}',
+      undef, { autoescape => true, noThrow => 1 } );
+    is( $res, '<>& and &lt;&gt;' );
   };
 
   subtest 'should not autoescape super()' => sub {

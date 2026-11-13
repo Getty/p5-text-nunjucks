@@ -5,7 +5,7 @@ our $VERSION = '0.001';
 
 use strict;
 use warnings;
-use builtin qw( is_bool );
+use builtin qw( is_bool true );
 use Text::Nunjucks::Lib;
 use Text::Nunjucks::Lib::TemplateError;
 use Text::Nunjucks::Runtime;
@@ -16,8 +16,10 @@ no warnings 'experimental::builtin';
 # upstream's order and names (snake_case); each filter is a class method
 # dispatched through $self, like Lib and Runtime, so a filter that calls another
 # one (title -> capitalize, striptags -> trim) goes through the invocant, and a
-# filter named like a Perl builtin (truncate, join, reverse; sort, ... later)
-# never resolves to the builtin. A filter receives what the
+# filter named like a Perl builtin (abs, truncate, join, reverse; sort, ...
+# later) never resolves to the builtin. The two filters upstream builds with
+# r.makeMacro (int now, sort later) are their inner function as a method
+# (do_int), wrapped by Runtime make_macro in exports. A filter receives what the
 # template passed (ADR 0009): the value, the arguments, keyword arguments as a
 # trailing KwArgs hashref.
 #
@@ -49,6 +51,25 @@ sub normalize {
     return $default_value;
   }
   return $value;
+}
+
+#### abs -- exports.abs = Math.abs
+
+# Math.abs itself is the filter, called as (value, ...args): ToNumber on the
+# value, every other argument ignored (oracle: 'abc'|abs is NaN, none|abs is 0,
+# 1 / ((-0)|abs) is Infinity -- the result is +0).
+sub abs {
+  my ( $self, $x ) = @_;
+  return $self->_lib->js_math_abs( $self->_runtime->_to_number($x) );
+}
+
+#### isNaN
+
+# The module-local isNaN, not the global one: num !== num, no coercion (oracle:
+# 'www.x.com'|urlize('abc') gives an empty link text -- 'abc' is not NaN here).
+sub is_nan {
+  my ( $self, $num ) = @_;
+  return $self->_runtime->op_sne( $num, $num );
 }
 
 #### batch
@@ -119,11 +140,59 @@ sub center {
   return $rt->copy_safeness( $str, $rt->op_add( $rt->op_add( $pre, $str ), $post ) );
 }
 
+#### default_
+
+sub default_ {
+  my ( $self, $val, $def, $bool ) = @_;
+  my $rt = $self->_runtime;
+  if ( $rt->_truthy($bool) ) {
+    return $rt->op_or( $val, $def );
+  } else {
+    return defined($val) ? $val : $def;    # val !== undefined: null passes through
+  }
+}
+
+#### escape
+
+# str.toString() is the value's JS ToString (Runtime _js_to_string): an array's
+# join, '[object Object]', a regex's /source/flags. An own toString member and a
+# null-prototype object are k44.
+sub escape {
+  my ( $self, $str ) = @_;
+  my $rt = $self->_runtime;
+  if ( $rt->_is_safe_string($str) ) {
+    return $str;
+  }
+  $str = ( !defined($str) || $rt->_is_none($str) ) ? '' : $str;
+  return $rt->mark_safe( $self->_lib->escape( $rt->_js_to_string($str) ) );
+}
+
+#### safe
+
+sub safe {
+  my ( $self, $str ) = @_;
+  my $rt = $self->_runtime;
+  if ( $rt->_is_safe_string($str) ) {
+    return $str;
+  }
+  $str = ( !defined($str) || $rt->_is_none($str) ) ? '' : $str;
+  return $rt->mark_safe( $rt->_js_to_string($str) );
+}
+
 #### first
 
 sub first {
   my ( $self, $arr ) = @_;
   return $self->_runtime->js_member_read( $arr, 0 );
+}
+
+#### forceescape
+
+sub forceescape {
+  my ( $self, $str ) = @_;
+  my $rt = $self->_runtime;
+  $str = ( !defined($str) || $rt->_is_none($str) ) ? '' : $str;
+  return $rt->mark_safe( $self->_lib->escape( $rt->_js_to_string($str) ) );
 }
 
 #### indent
@@ -348,6 +417,28 @@ sub reverse {
   return $arr;
 }
 
+#### round
+
+sub round {
+  my ( $self, $val, $precision, $method ) = @_;
+  my $rt  = $self->_runtime;
+  my $lib = $self->_lib;
+  $precision = $rt->op_or( $precision, 0 );
+  my $factor = $lib->js_math_pow( 10, $rt->_to_number($precision) );
+  my $rounder;
+
+  if ( $rt->op_seq( $method, 'ceil' ) ) {
+    $rounder = sub { $lib->js_math_ceil( $_[0] ) };
+  } elsif ( $rt->op_seq( $method, 'floor' ) ) {
+    $rounder = sub { $lib->js_math_floor( $_[0] ) };
+  } else {
+    $rounder = sub { $lib->js_math_round( $_[0] ) };
+  }
+
+  # rounder's ToNumber is a no-op on the product, already a Number
+  return $rt->op_div( $rounder->( $rt->op_mul( $val, $factor ) ), $factor );
+}
+
 #### slice
 
 sub slice {
@@ -390,6 +481,13 @@ sub sum {
   }
 
   return $rt->op_add( $start, $rt->js_method_call( $arr, 'arr', 'reduce', sub { $rt->op_add( $_[0], $_[1] ) }, 0 ) );
+}
+
+#### string
+
+sub string {
+  my ( $self, $obj ) = @_;
+  return $self->_runtime->copy_safeness( $obj, $obj );
 }
 
 #### striptags
@@ -479,6 +577,104 @@ sub upper {
   return $self->_runtime->js_method_call( $str, 'str', 'toUpperCase' );
 }
 
+#### urlencode
+
+sub urlencode {
+  my ( $self, $obj ) = @_;
+  my $rt  = $self->_runtime;
+  my $lib = $self->_lib;
+  # encodeURIComponent: ToString, then the UTF-16 seam (ADR 0012)
+  my $enc = sub { $lib->js_encode_uri_component( $rt->_js_to_string( $_[0] ) ) };
+  if ( $lib->is_string($obj) ) {
+    return $enc->($obj);
+  } else {
+    my $keyvals = ( $lib->is_array($obj) ) ? $obj : $lib->_entries($obj);
+    # ([k, v]) destructures each entry through the iteration protocol; the
+    # template literal glues percent-encoded ASCII, where no pair can form
+    return $rt->_array_join(
+      [ map { my ( $k, $v ) = $rt->js_array_destructure( $_, 2 ); $enc->($k) . '=' . $enc->($v) } @$keyvals ],
+      '&' );
+  }
+}
+
+#### urlize
+
+my $INFINITY = 9**9**9;
+
+# For the jinja regexp, see
+# https://github.com/mitsuhiko/jinja2/blob/f15b814dcba6aa12bc74d1f7d0c881d55f7126be/jinja2/utils.py#L20-L23
+# JS `.` stops at a LineTerminator (\n \r U+2028 U+2029), and `$` without the m
+# flag is the end of input only: \z, where Perl's $ also matches before a final
+# newline
+my $PUNC_RE = qr/\A(?:\(|<|&lt;)?([^\n\r\x{2028}\x{2029}]*?)(?:\.|,|\)|\n|&gt;)?\z/;
+# from http://blog.gerv.net/2011/05/html5_email_address_regexp/
+# /i without the u flag folds no character above U+007F onto ASCII (oracle: the
+# Kelvin sign U+212A and long s U+017F match no [a-z]), so [a-z] is [A-Za-z];
+# \w and \d are the ECMAScript sets (ADR 0005), which /i leaves alone
+my $EMAIL_RE = do {
+  my $w = Text::Nunjucks::Lib->js_word_class;
+  my $d = Text::Nunjucks::Lib->js_digit_class;
+  qr/\A(?:$w|[.!#\$%&'*+\-\/=?\^`{|}~])+\@(?:[A-Za-z\-]|$d)+(\.(?:[A-Za-z\-]|$d)+)+\z/;
+};
+my $HTTP_HTTPS_RE = qr/\Ahttps?:\/\/[^\n\r\x{2028}\x{2029}]*\z/;
+my $WWW_RE        = qr/\Awww\./;
+my $TLD_RE        = qr/\.(?:org|net|com)(?::|\/|\z)/;
+
+sub urlize {
+  my ( $self, $str, $length, $nofollow ) = @_;
+  my $rt = $self->_runtime;
+  my $ws = $self->_lib->js_whitespace_class;
+  if ( $self->is_nan($length) ) {
+    $length = $INFINITY;
+  }
+
+  my $no_follow_attr = ( $rt->op_seq( $nofollow, true ) ? ' rel="nofollow"' : '' );
+
+  # str.split(/(\s+)/): the captured separators stay in the array; no
+  # whitespace run starts or ends inside a surrogate pair, so the pieces need no
+  # re-pairing
+  my $words = [ split /((?:$ws)+)/, $rt->js_string_this( $str, 'str', 'split' ), -1 ];
+  $words = [
+    grep {
+      # If the word has no length, bail. This can happen for str with
+      # trailing whitespace.
+      $rt->_truthy( $rt->op_and( $_, $rt->member_lookup( $_, 'length' ) ) );
+    } @$words
+  ];
+  my $urlize_word = sub {
+    my ($word) = @_;
+    my $possible_url = ( $word =~ $PUNC_RE ) ? $1 : $word;    # word.match(puncRe)
+    my $short_url    = $rt->js_method_call( $possible_url, 'possibleUrl', 'substr', 0, $length );
+
+    # the template literals glue ASCII onto each piece, so no pair can form
+
+    # url that starts with http or https
+    if ( $possible_url =~ $HTTP_HTTPS_RE ) {
+      return '<a href="' . $possible_url . '"' . $no_follow_attr . '>' . $short_url . '</a>';
+    }
+
+    # url that starts with www.
+    if ( $possible_url =~ $WWW_RE ) {
+      return '<a href="http://' . $possible_url . '"' . $no_follow_attr . '>' . $short_url . '</a>';
+    }
+
+    # an email address of the form username@domain.tld
+    if ( $possible_url =~ $EMAIL_RE ) {
+      return '<a href="mailto:' . $possible_url . '">' . $possible_url . '</a>';
+    }
+
+    # url that ends in .com, .org or .net that is not an email address
+    if ( $possible_url =~ $TLD_RE ) {
+      return '<a href="http://' . $possible_url . '"' . $no_follow_attr . '>' . $short_url . '</a>';
+    }
+
+    return $word;
+  };
+  $words = [ map { $urlize_word->($_) } @$words ];
+
+  return $rt->_array_join( $words, '' );
+}
+
 #### wordcount
 
 sub wordcount {
@@ -495,34 +691,74 @@ sub wordcount {
   return $rt->_truthy($words) ? scalar(@$words) : $rt->None;
 }
 
+#### float
+
+sub float {
+  my ( $self, $val, $def ) = @_;
+  # parseFloat(val): ToString first
+  my $res = $self->_lib->js_parse_float( $self->_runtime->_js_to_string($val) );
+  return ( $self->is_nan($res) ) ? $def : $res;
+}
+
+#### intFilter
+
+# The function upstream hands to r.makeMacro(['value', 'default', 'base'], [],
+# doInt); exports builds the macro around it, so keyword arguments reach it by
+# name (value=, default=, base=).
+sub do_int {
+  my ( $self, $value, $default_value, $base ) = @_;
+  my $rt = $self->_runtime;
+  $base = 10 unless defined $base;    # base = 10, a default parameter: undefined only
+  # parseInt(value, base): ToString(value), ToNumber(base) for its ToInt32
+  my $res = $self->_lib->js_parse_int( $rt->_js_to_string($value), $rt->_to_number($base) );
+  return ( $self->is_nan($res) ) ? $default_value : $res;
+}
+
 #### exports -- the bag Environment.init registers, built per Environment
 
 sub exports {
   my ( $self, $env ) = @_;
-  return {
-    batch      => sub { $self->batch(@_) },
-    capitalize => sub { $self->capitalize(@_) },
-    center     => sub { $self->center(@_) },
-    first      => sub { $self->first(@_) },
-    indent     => sub { $self->indent(@_) },
-    join       => sub { $self->join(@_) },
-    last       => sub { $self->last(@_) },
-    length     => sub { $self->length_filter(@_) },
-    list       => sub { $self->list(@_) },
-    lower      => sub { $self->lower(@_) },
-    nl2br      => sub { $self->nl2br(@_) },
-    random     => sub { $self->random(@_) },
-    replace    => sub { $self->replace(@_) },
-    reverse    => sub { $self->reverse(@_) },
-    slice      => sub { $self->slice(@_) },
-    sum        => sub { $self->sum(@_) },
-    striptags  => sub { $self->striptags(@_) },
-    title      => sub { $self->title(@_) },
-    trim       => sub { $self->trim(@_) },
-    truncate   => sub { $self->truncate(@_) },
-    upper      => sub { $self->upper(@_) },
-    wordcount  => sub { $self->wordcount(@_) },
+  my $exports = {
+    abs         => sub { $self->abs(@_) },
+    batch       => sub { $self->batch(@_) },
+    capitalize  => sub { $self->capitalize(@_) },
+    center      => sub { $self->center(@_) },
+    default     => sub { $self->default_(@_) },
+    escape      => sub { $self->escape(@_) },
+    safe        => sub { $self->safe(@_) },
+    first       => sub { $self->first(@_) },
+    forceescape => sub { $self->forceescape(@_) },
+    indent      => sub { $self->indent(@_) },
+    join        => sub { $self->join(@_) },
+    last        => sub { $self->last(@_) },
+    length      => sub { $self->length_filter(@_) },
+    list        => sub { $self->list(@_) },
+    lower       => sub { $self->lower(@_) },
+    nl2br       => sub { $self->nl2br(@_) },
+    random      => sub { $self->random(@_) },
+    replace     => sub { $self->replace(@_) },
+    reverse     => sub { $self->reverse(@_) },
+    round       => sub { $self->round(@_) },
+    slice       => sub { $self->slice(@_) },
+    sum         => sub { $self->sum(@_) },
+    string      => sub { $self->string(@_) },
+    striptags   => sub { $self->striptags(@_) },
+    title       => sub { $self->title(@_) },
+    trim        => sub { $self->trim(@_) },
+    truncate    => sub { $self->truncate(@_) },
+    upper       => sub { $self->upper(@_) },
+    urlencode   => sub { $self->urlencode(@_) },
+    urlize      => sub { $self->urlize(@_) },
+    wordcount   => sub { $self->wordcount(@_) },
+    float       => sub { $self->float(@_) },
+    int         => $self->_runtime->make_macro( [ 'value', 'default', 'base' ], [], sub { $self->do_int(@_) } ),
   };
+
+  # Aliases
+  $exports->{d} = $exports->{default};
+  $exports->{e} = $exports->{escape};
+
+  return $exports;
 }
 
 1;

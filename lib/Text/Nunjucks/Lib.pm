@@ -411,6 +411,12 @@ sub keys {
   # non-HASH ref dies here on the deref. The value model routes arrays through
   # async_iter / to_array, so this is believed unreachable; keys(undef) already
   # yields [] cleanly. Revisit if a k14/k17 call site reaches it.
+  #
+  # for-in over undefined, null, a number, a boolean or a function enumerates
+  # nothing (oracle: 5|urlencode, none|urlencode and a macro|urlencode render
+  # '' -- lib._entries(obj) is []). A primitive string's indices are k59.
+  return [] if !defined($obj) || ( !ref($obj) && !$self->is_string($obj) );
+  return [] if $self->_runtime->_is_none($obj) || $self->is_function($obj);
   return [ $obj->keys ] if blessed($obj) && $obj->isa('Hash::Ordered');
 
   # A SafeString (engine-built): its own properties in the order its
@@ -508,9 +514,8 @@ sub in_operator {
 #   WhiteSpace     U+0009 U+000B U+000C U+0020 U+00A0 U+FEFF
 #                  + Unicode Zs: U+1680, U+2000-U+200A, U+202F, U+205F, U+3000
 #   LineTerminator U+000A U+000D U+2028 U+2029
-# \d gets the same treatment when the parser/filters first need it; \w is
-# js_word_class below (ADR 0005: added on demand, one seam per class, like
-# _strict_eq / _falsy below).
+# \w is js_word_class and \d js_digit_class below (ADR 0005: added on demand,
+# one seam per class, like _strict_eq / _falsy below).
 my $JS_WHITESPACE_CLASS =
   qr/[\x09\x0A\x0B\x0C\x0D\x20\x{A0}\x{1680}\x{2000}-\x{200A}\x{2028}\x{2029}\x{202F}\x{205F}\x{3000}\x{FEFF}]/u;
 
@@ -529,6 +534,17 @@ my $JS_WORD_CLASS = qr/[A-Za-z0-9_]/;
 sub js_word_class {
   my ($self) = @_;
   return $JS_WORD_CLASS;
+}
+
+# JavaScript's \d is [0-9] -- ASCII only, with or without the u and i flags.
+# Perl's \d is every Unicode decimal digit. urlize's emailRe uses it; oracle:
+# 'a@x\u0663.com'|urlize does not take the mailto: branch (ARABIC-INDIC DIGIT
+# THREE is not \d), 'a@x3.com' does.
+my $JS_DIGIT_CLASS = qr/[0-9]/;
+
+sub js_digit_class {
+  my ($self) = @_;
+  return $JS_DIGIT_CLASS;
 }
 
 #### JS !x (falsiness) for _prepare_attribute_parts and future !x sites
@@ -591,8 +607,10 @@ sub _strict_eq {
 # but JS rounds it). pack/unpack('d') forces the value through a C double first
 # so the rounding matches Node's. Runtime's operators round their operands the
 # same way before computing, so intermediates are doubles too.
-my $NUM_POS_INF = 9**9**9;
-my $NUM_NEG_INF = -$NUM_POS_INF;
+my $NUM_POS_INF  = 9**9**9;
+my $NUM_NEG_INF  = -$NUM_POS_INF;
+my $NUM_NAN      = $NUM_POS_INF - $NUM_POS_INF;
+my $NUM_NEG_ZERO = -0.0;
 
 sub number_to_string {
   my ( $self, $n ) = @_;
@@ -656,6 +674,220 @@ sub number_to_string {
 sub js_math_floor {
   my ( $self, $n ) = @_;
   return POSIX::floor($n);
+}
+
+#### js_math_ceil -- Math.ceil(x)
+
+# The round filter's 'ceil' method, over an already-ToNumber'd value like
+# js_math_floor: C's ceil is IEEE's, -0.5 gives -0.
+sub js_math_ceil {
+  my ( $self, $n ) = @_;
+  return POSIX::ceil($n);
+}
+
+#### js_math_round -- Math.round(x)
+
+# The round filter's default method, over an already-ToNumber'd value. The
+# integral Number closest to x, a tie going towards +Infinity: 2.5 -> 3, -2.5 ->
+# -2, and -0 for x in [-0.5, -0] (oracle: -0.5|round(0) is -0 -- 1/x is
+# -Infinity). V8's Float64Round, step for step: ceil(x), one less unless ceil(x)
+# - 0.5 <= x. It never computes x + 0.5, which rounds 0.49999999999999994 up to
+# 1 and an odd integer above 2^52 to the next even one; NaN and +-Infinity pass
+# through.
+sub js_math_round {
+  my ( $self, $n ) = @_;
+  my $c = POSIX::ceil($n);
+  return ( $c - 0.5 <= $n ) ? $c : $c - 1;
+}
+
+#### js_math_abs -- Math.abs(x)
+
+# The abs filter (exports.abs = Math.abs), over an already-ToNumber'd value: C's
+# fabs, so -0 is +0 and NaN stays NaN.
+sub js_math_abs {
+  my ( $self, $n ) = @_;
+  return POSIX::fabs($n);
+}
+
+#### js_math_pow -- Math.pow(base, exponent)
+
+# The round filter's Math.pow(10, precision) and the template ** operator
+# (compiler.js emits Math.pow), over already-ToNumber'd values. Number::
+# exponentiate is IEEE pow with two exceptions C's pow does not share: a NaN
+# exponent gives NaN even for base 1, and base +-1 with an infinite exponent
+# gives NaN, not 1 (oracle: 1 ** (1/0) -> NaN).
+sub js_math_pow {
+  my ( $self, $base, $exponent ) = @_;
+  return $NUM_NAN if $exponent != $exponent;
+  return $NUM_NAN
+    if ( $exponent == $NUM_POS_INF || $exponent == $NUM_NEG_INF ) && ( $base == 1 || $base == -1 );
+  return POSIX::pow( $base, $exponent );
+}
+
+#### js_parse_int -- parseInt(string, radix)
+
+# Not a src/lib.js function: the global parseInt the int filter calls, over an
+# already-ToString'd string and an already-ToNumber'd radix (undef for JS
+# undefined), as the other number seams here take their arguments. ECMAScript
+# parseInt step by step: leading StrWhiteSpaceChar trimmed (js_whitespace_class),
+# one sign, the radix through ToInt32 -- 0 means 10, or 16 after a 0x / 0X
+# prefix, which radix 16 strips too; outside 2..36 is NaN -- then the longest
+# prefix of radix digits, NaN when there is none, and a zero keeps its sign
+# (oracle: '-0'|int is -0). The digits' value is computed as V8 computes it,
+# which the spec leaves to the implementation beyond 2^53 (oracle-fuzzed):
+#
+#   * radix 10: correctly rounded, as V8's Strtod -- Perl's numification of the
+#     digit string is (an exact integer below 2^64, else C's strtod);
+#   * radix 2, 4, 8, 16, 32: correctly rounded, round-half-even on the bits, the
+#     integer arithmetic of V8's InternalStringToIntDouble;
+#   * any other radix: V8's HandleGenericCase -- 32-bit chunks folded in by a
+#     double multiply and a double add, two roundings per chunk.
+sub js_parse_int {
+  my ( $self, $input_string, $radix ) = @_;
+  my $ws = $self->js_whitespace_class;
+  ( my $s = $input_string ) =~ s/\A(?:$ws)+//;    # TrimString(inputString, start)
+  my $sign = 1;
+  $sign = -1 if substr( $s, 0, 1 ) eq '-';
+  $s = substr( $s, 1 ) if $s =~ /\A[+-]/;
+  my $r            = $self->_js_to_int32($radix);
+  my $strip_prefix = 1;
+  if ( $r != 0 ) {
+    return $NUM_NAN if $r < 2 || $r > 36;
+    $strip_prefix = 0 if $r != 16;
+  } else {
+    $r = 10;
+  }
+  if ( $strip_prefix && $s =~ /\A0[xX]/ ) {
+    $s = substr( $s, 2 );
+    $r = 16;
+  }
+  # the radix-R digits: 0-9 then a-z / A-Z, ASCII only
+  my $class = $r <= 10
+    ? '0-' . ( $r - 1 )
+    : '0-9a-' . chr( ord('a') + $r - 11 ) . 'A-' . chr( ord('A') + $r - 11 );
+  my ($z) = $s =~ /\A([$class]*)/;
+  return $NUM_NAN if $z eq '';
+  my $math_int = $self->_js_parse_int_value( $z, $r );
+  return $sign < 0 ? $NUM_NEG_ZERO : 0 if $math_int == 0;
+  return $sign < 0 ? -$math_int : $math_int;
+}
+
+# The value of a non-empty string of radix-$r digits, as V8 computes it.
+sub _js_parse_int_value {
+  my ( $self, $z, $r ) = @_;
+  $z =~ s/\A0+//;    # V8 skips leading zeros before it counts digits
+  return 0 if $z eq '';
+  if ( $r == 10 ) {
+    # V8 keeps the first 310 significant digits; more than 309 is past the
+    # largest double either way
+    return unpack( 'd', pack( 'd', 0 + substr( $z, 0, 310 ) ) );
+  }
+  my @digits = CORE::map { /[0-9]/ ? ord($_) - ord('0') : ( ord( lc $_ ) - ord('a') + 10 ) } split //, $z;
+  return $self->_js_parse_int_power_of_two( \@digits, $r ) if ( $r & ( $r - 1 ) ) == 0;
+  return $self->_js_parse_int_generic( \@digits, $r );
+}
+
+# V8's InternalStringToIntDouble<radix_log_2>: accumulate the digits in an
+# integer until it passes 53 bits, then round half to even on the bits dropped,
+# a non-zero tail breaking a tie upwards, and scale by the bits left over.
+sub _js_parse_int_power_of_two {
+  my ( $self, $digits, $radix ) = @_;
+  my $radix_log_2 = 0;
+  $radix_log_2++ while ( 1 << $radix_log_2 ) < $radix;
+  my $number   = 0;    # an exact integer, below 2^58 (Perl IVs are 64-bit)
+  my $exponent = 0;
+  for ( my $i = 0; $i < @$digits; $i++ ) {
+    $number = $number * $radix + $digits->[$i];
+    my $overflow = $number >> 53;
+    if ( $overflow != 0 ) {
+      # Overflow occurred. Need to determine which direction to round the result.
+      my $overflow_bits_count = 1;
+      while ( $overflow > 1 ) {
+        $overflow_bits_count++;
+        $overflow >>= 1;
+      }
+
+      my $dropped_bits_mask = ( 1 << $overflow_bits_count ) - 1;
+      my $dropped_bits      = $number & $dropped_bits_mask;
+      $number >>= $overflow_bits_count;
+      $exponent = $overflow_bits_count;
+
+      my $zero_tail = 1;
+      for ( $i++; $i < @$digits; $i++ ) {
+        $zero_tail = 0 if $digits->[$i] != 0;
+        $exponent += $radix_log_2;
+      }
+
+      my $middle_value = 1 << ( $overflow_bits_count - 1 );
+      if ( $dropped_bits > $middle_value ) {
+        $number++;    # Rounding up.
+      } elsif ( $dropped_bits == $middle_value ) {
+        # Rounding to even to consistency with decimals: half-way case rounds
+        # up if significant part is odd and down otherwise.
+        $number++ if ( $number & 1 ) != 0 || !$zero_tail;
+      }
+
+      # Rounding up may cause overflow.
+      if ( ( $number & ( 1 << 53 ) ) != 0 ) {
+        $exponent++;
+        $number >>= 1;
+      }
+      last;
+    }
+  }
+  return unpack( 'd', pack( 'd', $number ) ) if $exponent == 0;
+  return POSIX::ldexp( $number, $exponent );
+}
+
+# V8's HandleGenericCase: the digits in chunks whose multiplier stays below
+# 0xFFFFFFFF / 36, each folded in as result * multiplier + part in double
+# arithmetic -- every step through pack('d'), since Perl would otherwise keep an
+# exact integer product where the double rounds.
+sub _js_parse_int_generic {
+  my ( $self, $digits, $radix ) = @_;
+  my $maximum_multiplier = int( 0xFFFFFFFF / 36 );
+  my $result             = 0;
+  my $i                  = 0;
+  my $done               = 0;
+  while ( !$done ) {
+    my ( $part, $multiplier ) = ( 0, 1 );
+    while (1) {
+      if ( $i >= @$digits ) {
+        $done = 1;
+        last;
+      }
+      my $m = $multiplier * $radix;
+      last if $m > $maximum_multiplier;
+      $part       = $part * $radix + $digits->[$i];
+      $multiplier = $m;
+      $i++;
+    }
+    $result = unpack( 'd', pack( 'd', $result * $multiplier ) );
+    $result = unpack( 'd', pack( 'd', $result + $part ) );
+  }
+  return $result;
+}
+
+#### js_parse_float -- parseFloat(string)
+
+# Not a src/lib.js function: the global parseFloat the float filter calls, over
+# an already-ToString'd string. Leading StrWhiteSpaceChar trimmed, then the
+# longest prefix that is a StrDecimalLiteral -- an optional sign, then Infinity
+# or digits with an optional fraction and exponent, no 0x, no numeric separator
+# -- else NaN (oracle: '3.7abc' -> 3.7, '.5' -> 0.5, '1e' -> 1, 'Infinityx' ->
+# Infinity, 'infinity' -> NaN, '-0' -> -0). The value is the correctly rounded
+# double, as V8's StringToDouble gives it; Perl numifies a decimal string through
+# C's strtod, which rounds correctly too.
+sub js_parse_float {
+  my ( $self, $input_string ) = @_;
+  my $ws = $self->js_whitespace_class;
+  ( my $s = $input_string ) =~ s/\A(?:$ws)+//;    # TrimString(inputString, start)
+  my ( $sign, $unsigned ) =
+    $s =~ /\A([+-]?)(Infinity|(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?)/
+    or return $NUM_NAN;
+  my $n = $unsigned eq 'Infinity' ? $NUM_POS_INF : unpack( 'd', pack( 'd', 0 + $unsigned ) );
+  return $n if $sign ne '-';
+  return $n == 0 ? $NUM_NEG_ZERO : -$n;
 }
 
 #### JS strings reckon in UTF-16 code units (ADR 0012)
@@ -737,6 +969,15 @@ sub _js_to_uint32 {
   return 0 if $n != $n || $n == $NUM_POS_INF || $n == $NUM_NEG_INF;
   my $m = POSIX::fmod( int($n), 4294967296 );
   return $m < 0 ? $m + 4294967296 : $m;
+}
+
+# ECMAScript ToInt32 over an already-ToNumber'd value (parseInt's radix), undef
+# being JS undefined: ToUint32, then the upper half of the range wraps negative.
+sub _js_to_int32 {
+  my ( $self, $n ) = @_;
+  return 0 unless defined $n;
+  my $m = $self->_js_to_uint32($n);
+  return $m >= 2147483648 ? $m - 4294967296 : $m;
 }
 
 # Clamp an integer-or-infinity to [0, $len].
@@ -1020,6 +1261,31 @@ sub js_get_substitution {
     $self->js_string_append( $result, $ref_replacement );
   }
   return $result;
+}
+
+#### js_encode_uri_component -- encodeURIComponent(uriComponent)
+
+# Not a src/lib.js function: the global encodeURIComponent the urlencode filter
+# calls, over an already-ToString'd string. ECMAScript Encode(string,
+# extraUnescaped): A-Z a-z 0-9 and - _ . ! ~ * ' ( ) stay, every other code
+# point goes out as the %XX bytes of its UTF-8 form in uppercase hex (oracle:
+# 'a b&c' -> a%20b%26c, 'é' -> %C3%A9, '\u{1F600}' -> %F0%9F%98%80). It walks code
+# units: a surrogate pair is the one code point, a lone surrogate has no UTF-8
+# form and throws URIError: URI malformed (oracle: '\u{1F600}'|first|urlencode). A
+# caller string spelling a pair as two surrogate characters is re-paired first,
+# so both spellings encode alike (ADR 0012).
+sub js_encode_uri_component {
+  my ( $self, $s ) = @_;
+  my $str = $self->_js_from_units($s);
+  die Text::Nunjucks::Lib::Error->new( 'URI malformed', name => 'URIError' )
+    if $str =~ /[\x{D800}-\x{DFFF}]/;
+  return $str =~ s{([^A-Za-z0-9\-_.!~*'()])}{$self->_js_utf8_percent_encode($1)}ger;
+}
+
+sub _js_utf8_percent_encode {
+  my ( $self, $char ) = @_;
+  utf8::encode($char);
+  return CORE::join( '', CORE::map { sprintf( '%%%02X', ord $_ ) } split //, $char );
 }
 
 1;

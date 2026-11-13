@@ -50,6 +50,50 @@ Filters: `'3.7'|int` → `3` · `'x'|int` → empty · `'3.7abc'|float` → `3.7
 `2.5|round` → `3` · `-2.5|round` → `-2` · `[10,9,1]|sort` → `1,9,10` ·
 `['b','A','c']|sort` → `A,b,c`.
 
+## Math.round, Math.abs, Math.pow — port as is, mechanism in Lib; pow ties open, k74
+
+`round` is `rounder(val * factor) / factor`, and Math.round is V8's
+Float64Round — ceil(x), one less unless ceil(x) − 0.5 ≤ x — never x + 0.5:
+`0.49999999999999994|round` → `0` · `4503599627370497|round` (2^52 + 1) →
+`4503599627370497` · `-0.51|round` → `-1`. On [-0.5, -0] it gives -0, which
+`1 / x` shows: `1 / (-0.5|round)` · `1 / (-0.2|round)` ·
+`1 / (-0.5|round(0, 'ceil'))` → `-Infinity`. `abs` is Math.abs, which drops the
+sign of zero: `1 / ((-0)|abs)` → `Infinity` (`1 / -0` → `-Infinity`). Math.pow
+— `round`'s factor and the `**` operator — is IEEE pow but NaN where C's pow
+gives 1: `1 ** (1/0)` · `(-1) ** (1/0)` · `1 ** (-1/0)` · `1 ** ('a' * 1)` →
+`NaN`; `('a' * 1) ** 0` → `1` · `2 ** (1/0)` → `Infinity`. Open: V8's pow and glibc's disagree on some
+exact-tie integer powers above 2^53 — `942 ** 6` → `698723607368084600`
+upstream, `698723607368084500` in the port (k74). Seams: Lib `js_math_round` /
+`js_math_ceil` / `js_math_floor` / `js_math_abs` / `js_math_pow`.
+
+## parseInt and parseFloat — port as is, mechanism in Lib
+
+`int` is `parseInt(value, base)`, base 10 unless given. Leading
+StrWhiteSpaceChar and one sign go: `'-12px'` behind U+00A0, U+FEFF and a space
+→ `-12` · `'+-1'|int('d')` → `d`. The radix goes through ToInt32:
+`'11'|int(base=4294967298)` · `(base=-4294967294)` · `(base=2.9)` → `3`, but
+`'11'|int('d', 2147483650)` → `d` (wraps negative, so NaN). 0 means 10, or 16
+after a `0x` prefix, which radix 16 strips too: `'0x1f'|int(base=0)` /
+`(base=16)` → `31` · `'0x1f'|int` and `'0x1f'|int('d', 8)` → `0` ·
+`'0x'|int('d', 16)` → `d`. A zero keeps its sign: `1 / ('-0'|int)` →
+`-Infinity`. Past 2^53 the spec leaves the value to the implementation. V8
+rounds radix 10 and the powers of two correctly, ties to even —
+`'9007199254740993'|int` → `9007199254740992`, 2^53 + 1 and 2^53 + 3 spelt in
+radix 2 → `9007199254740992` / `9007199254740996` — but folds any other radix in
+32-bit chunks, two roundings each, and can miss by an ulp:
+`'1200221000112221021220201222011021'|int('d', 3)` → `9455897125430928`
+(correctly rounded: `…926`) · `'wgwkw4s440gwg0'|int('d', 36)` →
+`5.538717684257602e+21` (`…601e+21`). Seams: Lib `js_parse_int`,
+`_js_to_int32`.
+
+`float` is `parseFloat(val)`: the longest StrDecimalLiteral prefix, `Infinity`
+spelt case-sensitively — `'Infinityx'|float` → `Infinity` · `'-Infinity'|float`
+→ `-Infinity` · `'infinity'|float('nan')` and `'INFINITY'|float('nan')` → `nan`
+(the default, as for any NaN) — with no hex and no numeric separator:
+`'1e'|float` → `1` · `'.5'|float` → `0.5` · `'0x10'|float` → `0` ·
+`'1_000'|float` → `1`; `1 / ('-0'|float)` → `-Infinity`. Seam: Lib
+`js_parse_float`.
+
 ## Strings are UTF-16 upstream — decided, ADR 0012
 
 On `'héllo😀'`: `length` → `7`, `s.length` → `7`, `s[1]` → `é`, `reverse` →
@@ -99,6 +143,14 @@ arguments as `'#<Object>'`; an array, SafeString or regex key drops the
 `(reading ...)` clause (`TypeError: Cannot read properties of undefined`).
 Anything else is `member_lookup`. Seam: Runtime `js_member_read` /
 `_js_read_error`.
+
+copySafeness's `target.toString()` is the same read — `string` is
+`r.copySafeness(obj, obj)`: `u|string` → `TypeError: Cannot read properties of
+undefined (reading 'toString')` · `none|string` → `... of null (reading
+'toString')`; any other target gives its JS ToString: `5|string` → `5` ·
+`[1,2]|string` → `1,2` · `true|string` → `true` · `{}|string` →
+`[object Object]`. An own `toString` member and a null prototype are k44. Seam:
+Runtime `copy_safeness`.
 
 Array `reduce` (sum's `arr.reduce`) is on the ADR 0008 surface: `'abc'|sum` →
 `TypeError: arr.reduce is not a function` · `u|sum` → `... of undefined
@@ -169,6 +221,20 @@ The engine's own `\w` (wordcount's `/\w+/g`) is `[A-Za-z0-9_]`:
 is a different path: `'é'|replace(r/\w/, '-')` → `é` upstream, `-` in the port
 (k49).
 
+## `\d` is ASCII, `/i` without `u` folds only ASCII — ADR 0005, mechanism in Lib
+
+urlize's emailRe is
+`` /^[\w.!#$%&'*+\-\/=?\^`{|}~]+@[a-z\d\-]+(\.[a-z\d\-]+)+$/i ``.
+`\d` is `[0-9]`: `'a@x3.com'|urlize` takes the `mailto:` branch, `'a@x٣.com'`
+(U+0663) does not — tldRe links it as `http://a@x٣.com`. `/i` without `u`
+canonicalises through toUpperCase but never maps a character above U+007F onto
+ASCII, so `[a-z]` matches the 52 ASCII letters only: `'a@X.COM'` → `mailto:` ·
+`'a@ſ.com'` (U+017F, upper `S`) · `'a@Kx.com'` (U+212A KELVIN SIGN, lower `k`) ·
+`'a@ıx.com'` (U+0131, upper `I`) → no `mailto:`; the local part's `\w` is ASCII
+as well: `'é@x.com'` → no `mailto:`. Perl's `/i` would take ſ and K (not ı),
+its `\w` é and its `\d` ٣. Seams: Lib `js_digit_class` and `js_word_class`;
+Filters spells `[a-z]` under `/i` as `[A-Za-z]` without `/i`.
+
 ## Stringification of containers — follows from k3/k6, mechanism in Runtime
 
 `{{ [3,1,2] }}` → `3,1,2` · `{{ {} }}` → `[object Object]`.
@@ -185,6 +251,35 @@ is a different path: `'é'|replace(r/\w/, '-')` → `é` upstream, `-` in the po
 Autoescape is **on by default**. The escape map is `& " ' < >` **plus backslash**:
 `'` → `&#39;`, `\` → `&#92;`; backtick is not escaped. `urlencode` follows
 `encodeURIComponent`: `'a b&c'` → `a%20b%26c`.
+
+## urlencode: encodeURIComponent, destructuring, for-in — port as is, mechanism in Lib and Runtime
+
+encodeURIComponent leaves `A-Z a-z 0-9 - _ . ! ~ * ' ( )` and writes every
+other code point as the uppercase %XX of its UTF-8 bytes:
+`"-_.!~*'()a b&c/?#[]"|urlencode|safe` → `-_.!~*'()a%20b%26c%2F%3F%23%5B%5D` ·
+`'😀'|urlencode` → `%F0%9F%98%80`. It walks code units (ADR 0012); a lone
+surrogate has no UTF-8 form and throws: `'😀'|first|urlencode` →
+`URIError: URI malformed`. Seam: Lib `js_encode_uri_component`.
+
+An array goes through `keyvals.map(([k, v]) => ...)`, and that pattern runs the
+iteration protocol on each element: an array by element, a string — a
+SafeString's value too — by code point, `undefined` past the end:
+`[['a','b','c'], ['x'], '😀b']|urlencode` →
+`a=b&amp;x=undefined&amp;%F0%9F%98%80=b` · `[m()]|urlencode` with `m` a macro
+returning `a😀b` → `a=%F0%9F%98%80`. Any other element has no Symbol.iterator
+and throws V8's TypeError, the value rendered as for a call (Runtime
+`_js_not_callable_text`, above): `[5]|urlencode` → `TypeError: number 5 is not
+iterable (cannot read property Symbol(Symbol.iterator))` · `[1.5]` →
+`number 1.5 ...` · `[true]` → `boolean true ...` · `[none]` → `object null ...`
+· `[u]` → `undefined ...` · `[{}]` → `object ...` · `[m]` with `m` a macro →
+`function ...`. Seam: Runtime `js_array_destructure`.
+
+Any other non-string goes through `lib._entries(obj)`, a for-in, which over
+undefined, null, a number, a boolean or a function enumerates nothing: `5`,
+`none`, `u`, `true`, `1/0` and a macro `m` all `|urlencode` to `''`;
+`{a: 1, b: 'x y'}|urlencode` → `a=1&amp;b=x%20y`. A primitive string never gets
+there (`lib.isString` comes first); its for-in indices elsewhere are k59. Seam:
+Lib `keys`.
 
 ## Errors — port as is
 

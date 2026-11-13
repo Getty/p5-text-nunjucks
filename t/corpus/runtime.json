@@ -330,5 +330,151 @@
         "message": "(unknown path)\n  TypeError: Cannot read properties of undefined (reading '#<Object>')"
       }
     }
+  },
+  {
+    "name": "Math.pow: base 1 or -1 to an infinite exponent is NaN",
+    "template": "{{ 1 ** (1/0) }}|{{ (-1) ** (1/0) }}|{{ 1 ** (-1/0) }}|{{ (-1) ** (-1/0) }}",
+    "expected": {
+      "ok": true,
+      "output": "NaN|NaN|NaN|NaN"
+    }
+  },
+  {
+    "name": "Math.pow: a NaN exponent is NaN even for base 1; exponent 0 is 1 even for NaN",
+    "template": "{{ 1 ** (\"a\" * 1) }}|{{ (\"a\" * 1) ** 0 }}|{{ 2 ** (1/0) }}|{{ 0.5 ** (1/0) }}",
+    "expected": {
+      "ok": true,
+      "output": "NaN|1|Infinity|0"
+    }
+  },
+  {
+    "name": "iteration protocol: a value with no Symbol.iterator, rendered as for a call",
+    "template": "{% macro m() %}{% endmacro %}{{ [m]|urlencode }}",
+    "expected": {
+      "ok": false,
+      "error": {
+        "name": "Template render error",
+        "message": "(unknown path)\n  TypeError: function is not iterable (cannot read property Symbol(Symbol.iterator))"
+      }
+    }
+  },
+  {
+    "name": "iteration protocol: a SafeString iterates its value by code point",
+    "template": "{% macro m() %}a😀b{% endmacro %}{{ [m()]|urlencode }}",
+    "expected": {
+      "ok": true,
+      "output": "a=%F0%9F%98%80"
+    }
+  },
+  {
+    "name": "copySafeness: target.toString() on null throws",
+    "template": "{{ none|string }}",
+    "expected": {
+      "ok": false,
+      "error": {
+        "name": "Template render error",
+        "message": "(unknown path)\n  TypeError: Cannot read properties of null (reading 'toString')"
+      }
+    }
+  },
+  {
+    "name": "parseInt: the radix goes through ToInt32",
+    "template": "{{ '11'|int(base=4294967298) }}|{{ '11'|int(base=-4294967294) }}|{{ '11'|int(base=2.9) }}|{{ '11'|int('d', 2147483650) }}|{{ '11'|int('d', -1) }}|{{ '11'|int(base=0) }}",
+    "expected": {
+      "ok": true,
+      "output": "3|3|3|d|d|11"
+    }
+  },
+  {
+    "name": "parseInt: a non-power-of-two radix takes V8's chunked value, not the correctly rounded one",
+    "template": "{{ '1200221000112221021220201222011021'|int('d', 3) }}|{{ '5004260653303222250133'|int('d', 7) }}|{{ 'wgwkw4s440gwg0'|int('d', 36) }}",
+    "expected": {
+      "ok": true,
+      "output": "9455897125430928|2799912234793303000|5.538717684257602e+21"
+    }
+  },
+  {
+    "name": "parseInt: radix 2 and radix 10 round correctly, a tie to even, a non-zero tail up",
+    "template": "{{ '100000000000000000000000000000000000000000000000000001'|int('d', 2) }}|{{ '100000000000000000000000000000000000000000000000000011'|int('d', 2) }}|{{ '1000000000000000000000000000000000000000000000000000010'|int('d', 2) }}|{{ '1000000000000000000000000000000000000000000000000000011'|int('d', 2) }}|{{ '9007199254740993'|int }}|{{ '9007199254740995'|int }}",
+    "expected": {
+      "ok": true,
+      "output": "9007199254740992|9007199254740996|18014398509481984|18014398509481988|9007199254740992|9007199254740996"
+    }
+  },
+  {
+    "name": "keys: for-in over a function or a number enumerates nothing",
+    "template": "{% macro m() %}x{% endmacro %}[{{ m|urlencode }}][{{ (1/0)|urlencode }}]",
+    "expected": {
+      "ok": true,
+      "output": "[][]"
+    }
+  },
+  {
+    "name": "Math.round: V8 Float64Round, never x + 0.5; -0 on [-0.5, -0]",
+    "template": "{{ 0.49999999999999994|round }}|{{ 4503599627370497|round }}|{{ -0.51|round }}|{{ 1 / (-0.5|round) }}|{{ 1 / (-0.2|round) }}|{{ 1 / (-0.5|round(0, \"ceil\")) }}",
+    "expected": {
+      "ok": true,
+      "output": "0|4503599627370497|-1|-Infinity|-Infinity|-Infinity"
+    }
+  },
+  {
+    "name": "Math.pow: V8 and glibc pow disagree on an exact-tie integer power above 2^53",
+    "template": "{{ 942 ** 6 }}|{{ 463 ** 6 }}",
+    "todo": "k74: Lib js_math_pow is glibc pow, not V8 ieee754::pow",
+    "expected": {
+      "ok": true,
+      "output": "698723607368084600|9851127637605410"
+    }
+  },
+  {
+    "name": "parseInt: one sign after the whitespace; the 0x prefix only for radix 0 and 16",
+    "template": "{{ \"+-1\"|int(\"d\") }}|{{ \"-+1\"|int(\"d\") }}|{{ \"0x1f\"|int }}|{{ \"0x1f\"|int(base=16) }}|{{ \"0x1f\"|int(base=0) }}|{{ \"0x\"|int(\"d\", 16) }}|{{ \"0x1f\"|int(\"d\", 8) }}",
+    "expected": {
+      "ok": true,
+      "output": "d|d|0|31|31|d|0"
+    }
+  },
+  {
+    "name": "parseFloat: Infinity is matched case-sensitively",
+    "template": "{{ \"INFINITY\"|float(\"nan\") }}|{{ \"infinity\"|float(\"nan\") }}|{{ \"Infinityx\"|float }}|{{ \"-Infinity\"|float }}|{{ 1 / (\"-0\"|float) }}",
+    "expected": {
+      "ok": true,
+      "output": "nan|nan|Infinity|-Infinity|-Infinity"
+    }
+  },
+  {
+    "name": "encodeURIComponent: the unreserved marks stay, every other ASCII mark is encoded",
+    "template": "{{ \"-_.!~*'()a b&c/?#[]\"|urlencode|safe }}",
+    "expected": {
+      "ok": true,
+      "output": "-_.!~*'()a%20b%26c%2F%3F%23%5B%5D"
+    }
+  },
+  {
+    "name": "iteration protocol: an array by element, undefined past the end, a string by code point",
+    "template": "{{ [[\"a\", \"b\", \"c\"], [\"x\"], \"😀b\"]|urlencode }}",
+    "expected": {
+      "ok": true,
+      "output": "a=b&amp;x=undefined&amp;%F0%9F%98%80=b"
+    }
+  },
+  {
+    "name": "iteration protocol: a number element is rendered with its ToString",
+    "template": "{{ [1.5]|urlencode }}",
+    "expected": {
+      "ok": false,
+      "error": {
+        "name": "Template render error",
+        "message": "(unknown path)\n  TypeError: number 1.5 is not iterable (cannot read property Symbol(Symbol.iterator))"
+      }
+    }
+  },
+  {
+    "name": "emailRe: /i without u folds no character above U+007F onto [a-z]",
+    "template": "{{ \"a@ıx.com\"|urlize|safe }}|{{ \"a@X.COM\"|urlize|safe }}",
+    "expected": {
+      "ok": true,
+      "output": "<a href=\"http://a@ıx.com\">a@ıx.com</a>|<a href=\"mailto:a@X.COM\">a@X.COM</a>"
+    }
   }
 ]

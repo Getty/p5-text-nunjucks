@@ -239,7 +239,6 @@
   {
     "name": "utf16: SafeString from the safe filter measures in code units",
     "template": "{{ ('héllo😀'|safe).length }}",
-    "todo": "k17: the safe filter is not ported yet",
     "expected": {
       "ok": true,
       "output": "7"

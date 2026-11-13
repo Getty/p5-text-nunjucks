@@ -738,7 +738,12 @@ sub num_args {
 sub copy_safeness {
   my ( $self, $dest, $target ) = @_;
   return $self->SafeString->new($target) if $self->_is_safe_string($dest);
-  return $self->_js_to_string($target);           # target.toString()
+  # target.toString(): reading toString off undefined / null throws V8's
+  # TypeError (oracle: undefined|string -> "Cannot read properties of undefined
+  # (reading 'toString')"); any other value's toString() is its JS ToString --
+  # an own toString member and a null prototype are k44
+  die $self->_js_read_error( $target, 'toString' ) if !defined($target) || $self->_is_none($target);
+  return $self->_js_to_string($target);
 }
 
 #### markSafe
@@ -1220,19 +1225,49 @@ sub _js_read_error {
 # (Array reduce's callbackfn; oracle with [1].reduce(x)): undefined ->
 # 'undefined', null -> 'object null', a boolean or number -> its type and
 # ToString ('boolean true', 'number 1.5', 'number NaN'), a string -> 'string
-# "x"', cut to its first 100 code units and '<...>' when longer, any object ->
-# 'object'.
+# "x"', cut to its first 100 code units and '<...>' when longer, a function ->
+# 'function', any other object -> 'object'. V8 renders a value it cannot iterate
+# the same way (js_array_destructure; oracle: [m]|urlencode with a macro m ->
+# "function is not iterable ...").
 sub _js_not_callable_text {
   my ( $self, $v ) = @_;
   return 'undefined'   if !defined($v);
   return 'object null' if $self->_is_none($v);
   my $type = $self->_js_type($v);
   return $type . ' ' . $self->_js_to_string($v) if $type eq 'boolean' || $type eq 'number';
+  return 'function' if Text::Nunjucks::Lib->is_function($v);
   return 'object' unless $type eq 'string';
   my $shown = Text::Nunjucks::Lib->js_string_length($v) > 100
     ? Text::Nunjucks::Lib->js_substring( $v, 0, 100 ) . '<...>'
     : $v;
   return 'string "' . $shown . '"';
+}
+
+# Port addition, same seam: the array destructuring pattern the engine's own
+# JavaScript binds -- urlencode's keyvals.map(([k, v]) => ...) -- over whatever
+# the template handed it. ES runs the iteration protocol: an array yields its
+# elements, a string -- primitive, or a SafeString's value (a String object) --
+# its code points, a lone surrogate on its own (oracle: ['\u{1F600}b']|urlencode
+# -> %F0%9F%98%80=b). The first $count come back, undefined past the end. Any
+# other value has no Symbol.iterator and throws V8's TypeError, the value
+# rendered as for a call (oracle: [5]|urlencode -> "number 5 is not iterable
+# (cannot read property Symbol(Symbol.iterator))", [{}] -> "object is not
+# iterable ...").
+sub js_array_destructure {
+  my ( $self, $value, $count ) = @_;
+  my $items;
+  if ( Text::Nunjucks::Lib->is_array($value) ) {
+    $items = $value;
+  } elsif ( Text::Nunjucks::Lib->is_string($value) || $self->_is_safe_string($value) ) {
+    my $s = $self->_is_safe_string($value) ? $value->val : $value;
+    $items = [ split //, Text::Nunjucks::Lib->_js_from_units($s) ];
+  } else {
+    die $self->_error_class->new(
+      $self->_js_not_callable_text($value) . ' is not iterable (cannot read property Symbol(Symbol.iterator))',
+      name => 'TypeError'
+    );
+  }
+  return CORE::map { $items->[$_] } 0 .. $count - 1;
 }
 
 #### callWrap
@@ -1591,7 +1626,8 @@ sub op_mod {
 
 sub op_pow {
   my ( $self, $a, $b ) = @_;
-  return $self->_dbl( $self->_to_number($a) ** $self->_to_number($b) );   # Math.pow
+  # compiler.js emits Math.pow(a, b): the one Lib seam (1 ** Infinity is NaN)
+  return $self->_dbl( Text::Nunjucks::Lib->js_math_pow( $self->_to_number($a), $self->_to_number($b) ) );
 }
 
 sub op_floordiv {

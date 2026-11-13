@@ -1204,7 +1204,6 @@
     "name": "sequences: reverse: markup string made safe stays safe",
     "template": "{{ '<b>ab'|safe|reverse }}",
     "context": {},
-    "todo": "k17: safe/escape filters not ported yet (job 4)",
     "expected": {
       "ok": true,
       "output": ",,,,"
@@ -2689,7 +2688,6 @@
     "name": "sequences: join: markup made safe",
     "template": "{{ ['<b>','x']|join(',')|safe }}",
     "context": {},
-    "todo": "k17: safe/escape filters not ported yet (job 4)",
     "expected": {
       "ok": true,
       "output": "<b>,x"

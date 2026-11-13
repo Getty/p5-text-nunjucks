@@ -25,9 +25,11 @@ Revision history for Text-Nunjucks
       (Text::Nunjucks::Filters, loaded by Environment, ADR 0015):
       capitalize, center, indent, lower, nl2br, replace, striptags, title,
       trim, truncate, upper and wordcount, and the sequence family: batch,
-      first, join, last, length, list, random, reverse, slice and sum. The
-      remaining built-in filters are not ported yet; their upstream tests
-      are carried as TODO.
+      first, join, last, length, list, random, reverse, slice and sum, and the
+      number, escaping and URL family: abs, default (d), escape (e), float,
+      forceescape, int, isNaN, round, safe, string, urlencode and urlize.
+      The remaining built-in filters (dictsort, groupby, sort, select and
+      friends) are not ported yet; their upstream tests are carried as TODO.
     - Case mapping follows JS toLowerCase and toUpperCase, Final_Sigma and
       SpecialCasing included.
     - The replace filter with a regex follows RegExp Symbol.replace: empty
@@ -45,3 +47,8 @@ Revision history for Text-Nunjucks
       same set of elements, never the same sequence.
     - The native String replace() takes the JS replacement patterns, a regex
       pattern and a function replacer.
+    - Math.ceil, Math.round (V8 Float64Round), Math.abs and Math.pow,
+      parseInt, parseFloat, ToInt32 and encodeURIComponent follow JS; "**"
+      gives NaN for 1 ** Infinity.
+    - Array destructuring follows JS; copy_safeness on undefined or null
+      throws V8's TypeError text.

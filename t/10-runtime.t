@@ -112,6 +112,9 @@ subtest 'op_concat (~), sub/mul/div/mod/pow/floordiv' => sub {
 
   is( s_( $R->op_pow( 2, 0.5 ) ), '1.4142135623730951', '{{ 2 ** 0.5 }}' );
   is( s_( $R->op_pow( 2, 10 ) ),  '1024',               '{{ 2 ** 10 }}' );
+  # compiler.js emits Math.pow: oracle 1 ** (1/0) and 1 ** ('a'*1) are NaN
+  is( s_( $R->op_pow( 1, $R->op_div( 1, 0 ) ) ), 'NaN', '{{ 1 ** (1/0) }} (C pow gives 1)' );
+  is( s_( $R->op_pow( 1, 'a' ) ),                'NaN', q<{{ 1 ** 'a' }}> );
 
   is( s_( $R->op_floordiv( 7, 2 ) ),  '3',  '{{ 7 // 2 }}' );
   is( s_( $R->op_floordiv( -7, 2 ) ), '-4', '{{ -7 // 2 }} (Math.floor, not trunc)' );
@@ -484,6 +487,14 @@ subtest 'SafeString / markSafe / copySafeness' => sub {
   my $plain = $R->copy_safeness( 'plain', 'new' );
   ok( !$R->_is_safe_string($plain), 'plain dest -> plain result' );
   is( $plain, 'new', 'plain result is the target string' );
+  # target.toString() -- oracle: 5|string -> 5, undefined|string and none|string throw
+  is( $R->copy_safeness( 5, 5 ), '5', 'a number target -> its ToString' );
+  my $err = do { local $@; eval { $R->copy_safeness( undef, undef ); 1 } ? undef : $@ };
+  is( $err && $err->name . ': ' . $err->message,
+    q{TypeError: Cannot read properties of undefined (reading 'toString')}, 'an undefined target throws' );
+  $err = do { local $@; eval { $R->copy_safeness( $R->None, $R->None ); 1 } ? undef : $@ };
+  is( $err && $err->name . ': ' . $err->message,
+    q{TypeError: Cannot read properties of null (reading 'toString')}, 'a null target throws' );
 };
 
 subtest 'ensure_defined / handle_error / context_or_frame_lookup' => sub {
@@ -974,6 +985,37 @@ subtest 'Array reduce' => sub {
       'TypeError: string "' . ( 'a' x 99 ) . "\x{D83D}" . '<...>" is not a function', 'cut in code units' );
   }
   is( _type_error( sub { _call( [], 'reduce', 5 ) } ), 'TypeError: number 5 is not a function', 'callable check first' );
+};
+
+subtest 'js_array_destructure: ([k, v]) through the iteration protocol' => sub {
+  # oracle: [[1,2],"ab",[3]]|urlencode -> 1=2&a=b&3=undefined, [[1,2,3]] -> 1=2,
+  # ["\u{1F600}b"] -> %F0%9F%98%80=b, [m()] with a macro m giving 'ab' -> a=b
+  is_deeply( [ $R->js_array_destructure( [ 1, 2, 3 ], 2 ) ], [ 1, 2 ],     'an array: its first elements' );
+  is_deeply( [ $R->js_array_destructure( [3], 2 ) ],         [ 3, undef ], '... undefined past the end' );
+  is_deeply( [ $R->js_array_destructure( 'ab', 2 ) ],        [ 'a', 'b' ], 'a string: its characters' );
+  is_deeply( [ $R->js_array_destructure( "\x{1F600}b", 2 ) ], [ "\x{1F600}", 'b' ], '... by code point' );
+  is_deeply( [ $R->js_array_destructure( "\x{D83D}\x{DE00}b", 2 ) ], [ "\x{1F600}", 'b' ],
+    '... a pair spelt as two surrogates is one code point' );
+  is_deeply( [ $R->js_array_destructure( '', 2 ) ], [ undef, undef ], 'the empty string' );
+  is_deeply( [ $R->js_array_destructure( $R->SafeString->new('ab'), 2 ) ], [ 'a', 'b' ], "a SafeString: its value's" );
+
+  # oracle: [5]|urlencode, [1.5], [true], [undefined], [none], [{}], [r/x/] and a macro
+  my $iter = ' is not iterable (cannot read property Symbol(Symbol.iterator))';
+  my %not_iterable = (
+    'a number'     => [ 5,                         'number 5' ],
+    'a fraction'   => [ 1.5,                       'number 1.5' ],
+    'a boolean'    => [ true,                      'boolean true' ],
+    'undefined'    => [ undef,                     'undefined' ],
+    'null'         => [ $R->None,                  'object null' ],
+    'a plain hash' => [ { a => 1 },                'object' ],
+    'a dict'       => [ Hash::Ordered->new,        'object' ],
+    'a regex'      => [ $R->make_regex( 'x', '' ), 'object' ],
+    'a function'   => [ sub { },                   'function' ],
+  );
+  for my $what ( sort keys %not_iterable ) {
+    my ( $value, $text ) = @{ $not_iterable{$what} };
+    is( _type_error( sub { $R->js_array_destructure( $value, 2 ) } ), 'TypeError: ' . $text . $iter, $what );
+  }
 };
 
 subtest 'member_lookup: String case mapping goes through the Lib seam' => sub {

@@ -311,6 +311,16 @@ subtest 'is_object / keys / _entries: a SafeString is an ordinary object' => sub
   is_deeply( $L->_entries($safe), [ [ 'val', 'ab' ], [ 'length', 2 ] ], '_entries' );
 };
 
+subtest 'keys over a primitive or a function enumerates nothing' => sub {
+  # oracle: 5|urlencode, true|urlencode, none|urlencode, undefined|urlencode and
+  # a macro|urlencode all render '' -- for-in over them yields no key
+  is_deeply( $L->keys(undef),                           [], 'undefined' );
+  is_deeply( $L->keys( Text::Nunjucks::Runtime->None ), [], 'null' );
+  is_deeply( $L->keys(5),                               [], 'a number' );
+  is_deeply( $L->keys(true),                            [], 'a boolean' );
+  is_deeply( $L->keys( sub { } ),                       [], 'a function' );
+};
+
 # ADR 0011 -- ordering policy at the keys() seam. The "as set" assertions above
 # cannot fail when the policy regresses, so pin the actual order here. Plain
 # caller hashes are key-sorted (the documented divergence from JS insertion
@@ -621,6 +631,178 @@ subtest 'js_word_class is ASCII' => sub {
   is( scalar( () = "\x{661}\x{662}\x{663} abc" =~ /(?:$w)+/g ), 1, 'Arabic-Indic digits are not word characters' );
   ok( '_' =~ /\A$w\z/, 'the underscore is' );
   ok( "\x{17F}" !~ /\A$w\z/, 'ſ is not' );
+};
+
+subtest 'js_digit_class is ASCII' => sub {
+  # oracle: 'a@x3.com'|urlize is a mailto: link, the same with ARABIC-INDIC
+  # DIGIT THREE (U+0663) for the 3 is not
+  my $d = $L->js_digit_class;
+  ok( '7' =~ /\A$d\z/,       'an ASCII digit is' );
+  ok( "\x{663}" !~ /\A$d\z/, 'U+0663 is not' );
+  ok( "\x{FF11}" !~ /\A$d\z/, 'FULLWIDTH DIGIT ONE is not' );
+};
+
+# Math.ceil / Math.round / Math.abs over a Number; oracle: 4.5|round is 5,
+# -0.5|round(0) and -0.4|round(0, 'ceil') are -0 (1 / x is -Infinity), (-0)|abs
+# is +0 (1 / x is Infinity)
+subtest 'js_math_ceil / js_math_round / js_math_abs (Math.ceil, Math.round, Math.abs)' => sub {
+  my $inf = 9**9**9;
+  my $nan = $inf - $inf;
+  my $s   = sub { $L->number_to_string( $_[0] ) };
+  is( $L->js_math_ceil(2.1),  3,  'ceil: up' );
+  is( $L->js_math_ceil(-2.9), -2, 'ceil: negative up' );
+  is( sprintf( '%g', $L->js_math_ceil(-0.4) ), '-0', 'ceil: -0.4 is -0' );
+  is( $s->( $L->js_math_ceil($nan) ), 'NaN', 'ceil: NaN' );
+
+  is( $L->js_math_round(2.5),  3,  'round: a tie goes up' );
+  is( $L->js_math_round(-2.5), -2, 'round: a negative tie goes towards +Infinity' );
+  is( $L->js_math_round(2.4),  2,  'round: below the tie' );
+  is( $L->js_math_round(0.49999999999999994), 0, 'round: the largest double below 0.5 is 0, never x + 0.5' );
+  is( $s->( $L->js_math_round(4503599627370497) ), '4503599627370497', 'round: an odd integer above 2^52 is itself' );
+  is( sprintf( '%g', $L->js_math_round(-0.5) ), '-0', 'round: -0.5 is -0' );
+  is( sprintf( '%g', $L->js_math_round(-0.0) ), '-0', 'round: -0 stays -0' );
+  is( $s->( $L->js_math_round($nan) ),    'NaN',       'round: NaN' );
+  is( $s->( $L->js_math_round( -$inf ) ), '-Infinity', 'round: -Infinity' );
+
+  is( $L->js_math_abs(-3.5), 3.5, 'abs' );
+  is( sprintf( '%g', $L->js_math_abs(-0.0) ), '0', 'abs: -0 is +0' );
+  is( $s->( $L->js_math_abs( -$inf ) ), 'Infinity', 'abs: -Infinity' );
+  is( $s->( $L->js_math_abs($nan) ),    'NaN',      'abs: NaN' );
+};
+
+# Math.pow; oracle: 1 ** (1/0), (-1) ** (1/0) and 1 ** NaN are NaN, NaN ** 0
+# is 1
+subtest 'js_math_pow (Math.pow)' => sub {
+  my $inf = 9**9**9;
+  my $nan = $inf - $inf;
+  my $s   = sub { $L->number_to_string( $_[0] ) };
+  is( $s->( $L->js_math_pow( 10, 2 ) ),     '100',      '10 ** 2' );
+  is( $s->( $L->js_math_pow( 10, -2 ) ),    '0.01',     '10 ** -2' );
+  is( $s->( $L->js_math_pow( 1, $inf ) ),   'NaN',      '1 ** Infinity' );
+  is( $s->( $L->js_math_pow( -1, -$inf ) ), 'NaN',      '-1 ** -Infinity' );
+  is( $s->( $L->js_math_pow( 1, $nan ) ),   'NaN',      '1 ** NaN' );
+  is( $s->( $L->js_math_pow( $nan, 0 ) ),   '1',        'NaN ** 0' );
+  is( $s->( $L->js_math_pow( 2, $inf ) ),   'Infinity', '2 ** Infinity' );
+};
+
+# parseInt(string, radix) over a string and a Number radix (undef: undefined);
+# every expected value is node's String(parseInt(s, radix)), -0 spelt '-0'
+subtest 'js_parse_int (parseInt)' => sub {
+  my $nan = 9**9**9 - 9**9**9;
+  my $show = sub { my ($n) = @_; ( $n == 0 && sprintf( '%g', $n ) eq '-0' ) ? '-0' : $L->number_to_string($n) };
+  for my $c (
+    [ "42", undef, '42' ],
+    [ "  -42px", undef, '-42' ],
+    [ "+7", undef, '7' ],
+    [ "\x{A0}\x{FEFF} 12", undef, '12' ],
+    [ "\x{180E}12", undef, 'NaN' ],
+    [ "0x1A", undef, '26' ],
+    [ "0x1A", 16, '26' ],
+    [ "0x1A", 10, '0' ],
+    [ "1A", 16, '26' ],
+    [ "0x", undef, 'NaN' ],
+    [ "-0x10", undef, '-16' ],
+    [ "101", 2, '5' ],
+    [ "777", 8, '511' ],
+    [ "zz", 36, '1295' ],
+    [ "Zz", 36, '1295' ],
+    [ "12", 37, 'NaN' ],
+    [ "12", 1, 'NaN' ],
+    [ "12", 0, '12' ],
+    [ "12", -1, 'NaN' ],
+    [ "12", 4294967306, '12' ],
+    [ "12", 16.9, '18' ],
+    [ "12", $nan, '12' ],
+    [ "-0", undef, '-0' ],
+    [ "-0x0", undef, '-0' ],
+    [ "", undef, 'NaN' ],
+    [ "abc", undef, 'NaN' ],
+    [ "3.9", undef, '3' ],
+    [ "1e21", undef, '1' ],
+    [ "9007199254740993", undef, '9007199254740992' ],
+    [ "123456789012345678901234567890", undef, '1.2345678901234568e+29' ],
+    [ "1" . ( "0" x 52 ) . "10", 2, '18014398509481984' ],
+    [ "1" . ( "0" x 52 ) . "11", 2, '18014398509481988' ],
+    [ "1" . ( "0" x 52 ) . "101", 2, '36028797018963976' ],
+    [ ( "f" x 18 ), 16, '4.722366482869645e+21' ],
+    [ ( "z" x 16 ), 36, '7.958661109946401e+24' ],
+    [ ( "7" x 21 ), 8, '9223372036854776000' ],
+    [ ( "1" x 400 ), undef, 'Infinity' ],
+    [ "\x{FF11}\x{FF12}", undef, 'NaN' ],
+    [ "\x{663}", undef, 'NaN' ],
+  ) {
+    my ( $str, $radix, $want ) = @$c;
+    is( $show->( $L->js_parse_int( $str, $radix ) ), $want,
+      'parseInt(' . ( length($str) > 30 ? substr( $str, 0, 30 ) . '...' : $str ) =~ s/([^\x20-\x7e])/sprintf('\\u%04X', ord $1)/ger
+        . ', ' . ( defined $radix ? $radix : 'undefined' ) . ')' );
+  }
+};
+
+# parseFloat(string); every expected value is node's String(parseFloat(s))
+subtest 'js_parse_float (parseFloat)' => sub {
+  my $show = sub { my ($n) = @_; ( $n == 0 && sprintf( '%g', $n ) eq '-0' ) ? '-0' : $L->number_to_string($n) };
+  for my $c (
+    [ "3.5", '3.5' ],
+    [ "  -3.5abc", '-3.5' ],
+    [ ".5", '0.5' ],
+    [ "5.", '5' ],
+    [ "1e3", '1000' ],
+    [ "1e", '1' ],
+    [ "1e+", '1' ],
+    [ "-.5e-3x", '-0.0005' ],
+    [ "0x10", '0' ],
+    [ "Infinity", 'Infinity' ],
+    [ "-Infinityx", '-Infinity' ],
+    [ "infinity", 'NaN' ],
+    [ "+Infinity", 'Infinity' ],
+    [ "Inf", 'NaN' ],
+    [ "-0", '-0' ],
+    [ "", 'NaN' ],
+    [ "abc", 'NaN' ],
+    [ "1_000", '1' ],
+    [ "\x{2028}\x{3000} 2.5", '2.5' ],
+    [ "\x{85} 1", 'NaN' ],
+    [ "2.4703282292062328e-324", '5e-324' ],
+    [ "1.7976931348623159e308", 'Infinity' ],
+    [ "9007199254740993", '9007199254740992' ],
+    [ "1" . ( "0" x 400 ), 'Infinity' ],
+  ) {
+    my ( $str, $want ) = @$c;
+    is( $show->( $L->js_parse_float($str) ), $want,
+      'parseFloat(' . ( length($str) > 30 ? substr( $str, 0, 30 ) . '...' : $str ) =~ s/([^\x20-\x7e])/sprintf('\\u%04X', ord $1)/ger . ')' );
+  }
+};
+
+subtest '_js_to_int32 (ToInt32)' => sub {
+  my $inf = 9**9**9;
+  is( $L->_js_to_int32(undef),         0,           'undefined' );
+  is( $L->_js_to_int32( $inf - $inf ), 0,           'NaN' );
+  is( $L->_js_to_int32($inf),          0,           'Infinity' );
+  is( $L->_js_to_int32(16.9),          16,          'truncates' );
+  is( $L->_js_to_int32(-1),            -1,          'a negative stays' );
+  is( $L->_js_to_int32(2147483648),    -2147483648, '2^31 wraps negative' );
+  is( $L->_js_to_int32(4294967306),    10,          'modulo 2^32' );
+};
+
+# encodeURIComponent; every expected value is node's encodeURIComponent(s)
+subtest 'js_encode_uri_component (encodeURIComponent)' => sub {
+  for my $c (
+    [ "abc", 'abc' ],
+    [ "A-Z a-z 0-9 -_.!~*'()", 'A-Z%20a-z%200-9%20-_.!~*\'()' ],
+    [ "a+b=c/d?e#f;g,h:i\@j\$k&l", 'a%2Bb%3Dc%2Fd%3Fe%23f%3Bg%2Ch%3Ai%40j%24k%26l' ],
+    [ "\x{E9}\x{20AC}\x{1F600}", '%C3%A9%E2%82%AC%F0%9F%98%80' ],
+    [ "\x{0}\x{7F}\x{80}\x{7FF}\x{800}\x{FFFD}", '%00%7F%C2%80%DF%BF%E0%A0%80%EF%BF%BD' ],
+  ) {
+    my ( $str, $want ) = @$c;
+    is( $L->js_encode_uri_component($str), $want, 'encodeURIComponent: ' . $want );
+  }
+  is( $L->js_encode_uri_component("\x{D83D}\x{DE00}"), '%F0%9F%98%80', 'a pair spelt as two surrogates is one character' );
+  for my $lone ( "\x{D83D}", "a\x{DE00}", "\x{DE00}\x{D83D}" ) {
+    my $err = do { local $@; eval { $L->js_encode_uri_component($lone); 1 } ? undef : $@ };
+    ok( $err && $err->isa('Text::Nunjucks::Lib::Error'), 'a lone surrogate throws' );
+    is( $err && $err->name,    'URIError',      '... a URIError' );
+    is( $err && $err->message, 'URI malformed', '... URI malformed (oracle: "\u{1F600}"|first|urlencode)' );
+  }
 };
 
 done_testing;

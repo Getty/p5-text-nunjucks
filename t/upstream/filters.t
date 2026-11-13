@@ -79,17 +79,10 @@ sub equal {
 # TODO table: upstream it() title => reason. Remove an entry when it passes.
 my $F = 'k17: filter not ported yet (ADR 0015)';
 my %TODO = map { $_ => $F } (
-  'abs', 'default', 'dump', 'escape',
-  'escape skip safe', 'should not double escape strings',
-  'should not double escape with autoescape on', 'should work with non-string values',
-  'should not escape safe strings with autoescape on',
-  'should keep strings escaped after they have been escaped', 'dictsort',
-  'float', 'forceescape', 'int', 'int (default value)',
-  'float (default value)', 'groupby',
+  'dump', 'dictsort',
+  'groupby',
   'reject', 'rejectattr', 'select',
-  'selectattr', 'round', 'sort',
-  'string', 'urlencode',
-  'urlencode - object without prototype', 'urlize',
+  'selectattr', 'sort',
 );
 
 # it(title, sub) -- one subtest, TODO'd from %TODO.
@@ -584,15 +577,12 @@ describe 'filter' => sub {
     equal( '{{ false | replace("rue", "afafasf", 4) }}',      'false' );
 
     # Will result in an infinite loop if unbounded otherwise test will pass
-    TODO: {
-      local $TODO = 'k17 job 4: safe filter not ported yet';
-      equal( '{{ "<img src=" | replace("<img", "<img alt=val") | safe }}',
-        '<img alt=val src=' );
-      equal(
-        '{{ "<img src=\\"http://www.example.com\\" />" | replace("<img", "replacement text") | safe }}',
-        'replacement text src="http://www.example.com" />'
-      );
-    }
+    equal( '{{ "<img src=" | replace("<img", "<img alt=val") | safe }}',
+      '<img alt=val src=' );
+    equal(
+      '{{ "<img src=\\"http://www.example.com\\" />" | replace("<img", "replacement text") | safe }}',
+      'replacement text src="http://www.example.com" />'
+    );
 
     # Regex
     equal( '{{ "aabbbb" | replace(r/ab{2}/, "z") }}', 'azbb' );
