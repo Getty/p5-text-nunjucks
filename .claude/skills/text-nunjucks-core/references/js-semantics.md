@@ -90,6 +90,33 @@ Seam: Runtime `js_method_call($obj, $src, $name, @args)` and `js_string_this`
 variable as `$src`. The method resolves through the ADR 0008 surface, so a
 method missing there throws the same text even where JS has it.
 
+A plain property read (`arr[0]`, `arr.length`, `v[attr]`) throws only on
+undefined / null — `u|first` → `TypeError: Cannot read properties of undefined
+(reading '0')` — and names the key as V8 prints it, measured with
+`[u]|join(',', k)`: a string as is, a number or boolean through ToString
+(`1.5` → `'1.5'`, `true` → `'true'`), a dict literal, caller hash or keyword
+arguments as `'#<Object>'`; an array, SafeString or regex key drops the
+`(reading ...)` clause (`TypeError: Cannot read properties of undefined`).
+Anything else is `member_lookup`. Seam: Runtime `js_member_read` /
+`_js_read_error`.
+
+Array `reduce` (sum's `arr.reduce`) is on the ADR 0008 surface: `'abc'|sum` →
+`TypeError: arr.reduce is not a function` · `u|sum` → `... of undefined
+(reading 'reduce')` · `[].reduce(f)` → `TypeError: Reduce of empty array with
+no initial value`. A callbackfn that is not callable is checked first and
+shown V8's way (Runtime `_js_not_callable_text`): `undefined` · `object null`
+· `boolean true` · `number 1.5` · `number NaN` · `string "x"` (cut to 100 code
+units, then `<...>`) · any object `object` — `[].reduce({})` → `TypeError:
+object is not a function`.
+
+lib.map over a non-array walks it as an array-like, `obj[i]` while `i <
+obj.length`, through Runtime (`member_lookup`, `op_lt`): `{length: '2', '0':
+'x', '1': 'y'}|reverse|join(',')` → `y,x` · length `'1.5'` → `b,a` · a
+SafeString has a length but no indices (`abc` from a macro, `|reverse` → `,,`)
+· a number or an object without length maps nothing. A numeric length that is
+no array length, `{length: 2.5}` or `{length: -1}`, throws `RangeError: Invalid
+array length` (`results.length = obj.length`). Seam: Lib `map`.
+
 ## Case mapping — port as is, mechanism in Lib; Unicode version open, k64
 
 JS maps by code point with the full default case conversion, SpecialCasing

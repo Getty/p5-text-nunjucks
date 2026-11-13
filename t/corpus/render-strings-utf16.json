@@ -248,7 +248,6 @@
   {
     "name": "utf16: the length filter reads a SafeString length in code units",
     "template": "{% macro m() %}héllo😀{% endmacro %}{{ m()|length }}",
-    "todo": "k17: the length filter is not ported yet",
     "expected": {
       "ok": true,
       "output": "7"
@@ -326,7 +325,7 @@
     "context": {
       "e": "😀ab"
     },
-    "todo": "k17: the select and length filters are not ported yet",
+    "todo": "k17: the select filter is not ported yet (job 5)",
     "expected": {
       "ok": true,
       "output": "4"
@@ -338,7 +337,6 @@
     "context": {
       "s": "a😀b"
     },
-    "todo": "k17: the reverse filter is not ported yet (the re-pairing its join needs is in, ADR 0012)",
     "expected": {
       "ok": true,
       "output": "4|b|a😀b"

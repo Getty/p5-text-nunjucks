@@ -889,6 +889,84 @@ subtest 'Array lastIndexOf' => sub {
   is( s_( _call( [ 1, '1' ], 'lastIndexOf', '1' ) ), '1', 'strict equality' );
 };
 
+subtest 'js_member_read: a plain property read and its V8 TypeError' => sub {
+  # oracle: [1,2,3]|first -> 1, 'abc'|first -> a, [{'a.b': 1}, {'a.b': 2}]|join(',', 'a.b')
+  # -> 1,2, undefined|first, null|last
+  is( s_( $R->js_member_read( [ 1, 2, 3 ], 0 ) ), '1', 'an array index' );
+  is( $R->js_member_read( 'abc', 0 ), 'a', 'a string index' );
+  is( s_( $R->js_member_read( [ 1, 2, 3 ], 'length' ) ), '3', 'length' );
+  is( s_( $R->js_member_read( { 'a.b' => 1, a => { b => 2 } }, 'a.b' ) ), '1', "'a.b' is one key, not a path" );
+  is( _type_error( sub { $R->js_member_read( undef, 0 ) } ),
+    q{TypeError: Cannot read properties of undefined (reading '0')}, 'undefined: the read throws' );
+  is( _type_error( sub { $R->js_member_read( $R->None, 'length' ) } ),
+    q{TypeError: Cannot read properties of null (reading 'length')}, 'null: the read throws' );
+
+  # the key as V8 names it -- oracle: [undefined]|join(',', k) for each k
+  my %reading = (
+    'a string'        => [ 'x',                                  q{ (reading 'x')} ],
+    'a number'        => [ 1.5,                                  q{ (reading '1.5')} ],
+    'a boolean'       => [ true,                                 q{ (reading 'true')} ],
+    'a plain object'  => [ { a => 1 },                           q{ (reading '#<Object>')} ],
+    'a dict literal'  => [ Hash::Ordered->new( a => 1 ),         q{ (reading '#<Object>')} ],
+    'keyword args'    => [ $R->make_keyword_args( { a => 1 } ),  q{ (reading '#<Object>')} ],
+    'an array'        => [ [ 1, 2 ],                             '' ],
+    'a SafeString'    => [ $R->SafeString->new('k'),             '' ],
+    'a regex'         => [ $R->make_regex( 'a', '' ),            '' ],
+  );
+  for my $what ( sort keys %reading ) {
+    my ( $key, $clause ) = @{ $reading{$what} };
+    is( _type_error( sub { $R->js_member_read( undef, $key ) } ),
+      'TypeError: Cannot read properties of undefined' . $clause, "key $what" );
+  }
+};
+
+subtest 'Array reduce' => sub {
+  my $add = sub { $R->op_add( $_[0], $_[1] ) };
+  # oracle: [1,2,3]|sum -> 6 (arr.reduce((a, b) => a + b, 0))
+  is( s_( _call( [ 1, 2, 3 ], 'reduce', $add, 0 ) ), '6', 'with an initial value' );
+  # oracle: macro f(a, b) -> {{ a }}+{{ b }}; [1,2,3].reduce(f) -> 1+2+3; [9].reduce(f) -> 9
+  is( _call( [ 1, 2, 3 ], 'reduce', sub { "$_[0]+$_[1]" } ), '1+2+3', 'without: the first element starts' );
+  is( s_( _call( [9], 'reduce', sub { 'X' } ) ), '9', 'one element, no initial value: never called' );
+  # oracle: [].reduce(f, 7) -> 7, [].reduce(f) -> TypeError
+  is( s_( _call( [], 'reduce', $add, 7 ) ), '7', 'an empty array returns the initial value' );
+  is( _type_error( sub { _call( [], 'reduce', $add ) } ),
+    'TypeError: Reduce of empty array with no initial value', 'an empty array, no initial value' );
+
+  my $arr = [ 1, 2 ];
+  my @seen;
+  _call( $arr, 'reduce', sub { push @seen, [ @_[ 2, 3 ] ]; $_[1] }, 0 );
+  is_deeply( [ map { $_->[0] } @seen ], [ 0, 1 ], 'the callback gets the index' );
+  ok( $seen[0][1] == $arr, '... and the array' );
+
+  # oracle: [1].reduce(x) for each x; [].reduce(5) -> number 5 (the callable check comes first)
+  my @not_callable = (
+    [ undef,                     'undefined' ],
+    [ $R->None,                  'object null' ],
+    [ true,                      'boolean true' ],
+    [ 5,                         'number 5' ],
+    [ 1.5,                       'number 1.5' ],
+    [ 9**9**9 / 9**9**9,         'number NaN' ],
+    [ 'x',                       'string "x"' ],
+    [ 'y' x 100,                 'string "' . ( 'y' x 100 ) . '"' ],
+    [ 'x' x 101,                 'string "' . ( 'x' x 100 ) . '<...>"' ],
+    [ {},                        'object' ],
+    [ [ 1, 2 ],                  'object' ],
+    [ $R->SafeString->new('s'), 'object' ],
+  );
+  for my $case (@not_callable) {
+    my ( $fn, $text ) = @$case;
+    is( _type_error( sub { _call( [1], 'reduce', $fn ) } ), "TypeError: $text is not a function", $text );
+  }
+  # 99 units then a pair: the cut at 100 units leaves the lone high surrogate
+  # (oracle: s = 'a' x 99 . '😀b')
+  {
+    no warnings 'surrogate';
+    is( _type_error( sub { _call( [1], 'reduce', ( 'a' x 99 ) . "\x{1F600}b" ) } ),
+      'TypeError: string "' . ( 'a' x 99 ) . "\x{D83D}" . '<...>" is not a function', 'cut in code units' );
+  }
+  is( _type_error( sub { _call( [], 'reduce', 5 ) } ), 'TypeError: number 5 is not a function', 'callable check first' );
+};
+
 subtest 'member_lookup: String case mapping goes through the Lib seam' => sub {
   # oracle: {{ s.toLowerCase() }}|{{ s.toUpperCase() }} with s = 'ΑΣ ß' -> ας ß|ΑΣ SS
   is( _call( "\x{391}\x{3A3} \x{DF}", 'toLowerCase' ), "\x{3B1}\x{3C2} \x{DF}", 'final sigma' );

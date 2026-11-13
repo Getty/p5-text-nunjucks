@@ -7,6 +7,7 @@ use strict;
 use warnings;
 use builtin qw( is_bool );
 use Text::Nunjucks::Lib;
+use Text::Nunjucks::Lib::TemplateError;
 use Text::Nunjucks::Runtime;
 
 no warnings 'experimental::builtin';
@@ -15,8 +16,8 @@ no warnings 'experimental::builtin';
 # upstream's order and names (snake_case); each filter is a class method
 # dispatched through $self, like Lib and Runtime, so a filter that calls another
 # one (title -> capitalize, striptags -> trim) goes through the invocant, and a
-# filter named like a Perl builtin (truncate here; join, length, reverse, sort,
-# int, ... later) never resolves to the builtin. A filter receives what the
+# filter named like a Perl builtin (truncate, join, reverse; sort, ... later)
+# never resolves to the builtin. A filter receives what the
 # template passed (ADR 0009): the value, the arguments, keyword arguments as a
 # trailing KwArgs hashref.
 #
@@ -36,8 +37,9 @@ no warnings 'experimental::builtin';
 # lengths, positions and joins go through the Lib UTF-16 seams (ADR 0012); the
 # engine's own regexes use the explicit ECMAScript classes of ADR 0005.
 
-sub _lib     { 'Text::Nunjucks::Lib' }
-sub _runtime { 'Text::Nunjucks::Runtime' }
+sub _lib                  { 'Text::Nunjucks::Lib' }
+sub _runtime              { 'Text::Nunjucks::Runtime' }
+sub _template_error_class { 'Text::Nunjucks::Lib::TemplateError' }
 
 #### normalize
 
@@ -47,6 +49,40 @@ sub normalize {
     return $default_value;
   }
   return $value;
+}
+
+#### batch
+
+sub batch {
+  my ( $self, $arr, $linecount, $fill_with ) = @_;
+  my $rt = $self->_runtime;
+  my $i;
+  my $res = [];
+  my $tmp = [];
+
+  # arr.length and arr[i] are read on every pass; a primitive string is read
+  # through its code units, the same length and arr[i] (ADR 0012)
+  $arr = $rt->_for_code_units($arr);
+  for ( $i = 0; $rt->op_lt( $i, $rt->js_member_read( $arr, 'length' ) ); $i++ ) {
+    if ( $rt->op_seq( $rt->op_mod( $i, $linecount ), 0 ) && @$tmp ) {
+      push @$res, $tmp;
+      $tmp = [];
+    }
+
+    push @$tmp, $rt->js_member_read( $arr, $i );
+  }
+
+  if (@$tmp) {
+    if ( $rt->_truthy($fill_with) ) {
+      for ( $i = scalar @$tmp; $rt->op_lt( $i, $linecount ); $i++ ) {
+        push @$tmp, $fill_with;
+      }
+    }
+
+    push @$res, $tmp;
+  }
+
+  return $res;
 }
 
 #### capitalize
@@ -83,6 +119,13 @@ sub center {
   return $rt->copy_safeness( $str, $rt->op_add( $rt->op_add( $pre, $str ), $post ) );
 }
 
+#### first
+
+sub first {
+  my ( $self, $arr ) = @_;
+  return $self->_runtime->js_member_read( $arr, 0 );
+}
+
 #### indent
 
 sub indent {
@@ -115,6 +158,66 @@ sub indent {
   return $rt->copy_safeness( $str, $res );
 }
 
+#### join
+
+sub join {
+  my ( $self, $arr, $del, $attr ) = @_;
+  my $rt = $self->_runtime;
+  $del = $rt->op_or( $del, '' );
+
+  if ( $rt->_truthy($attr) ) {
+    # v[attr]: one property read, so 'a.b' is the key 'a.b', not a path
+    $arr = $self->_lib->map( $arr, sub { $rt->js_member_read( $_[0], $attr ) } );
+  }
+
+  return $rt->js_method_call( $arr, 'arr', 'join', $del );
+}
+
+#### last
+
+sub last {
+  my ( $self, $arr ) = @_;
+  my $rt = $self->_runtime;
+  return $rt->js_member_read( $arr, $rt->op_sub( $rt->js_member_read( $arr, 'length' ), 1 ) );
+}
+
+#### lengthFilter
+
+sub length_filter {
+  my ( $self, $val ) = @_;
+  my $rt    = $self->_runtime;
+  my $value = $self->normalize( $val, '' );
+
+  if ( defined $value ) {
+    # ECMAScript 2015 Maps and Sets (value.size) have no Perl form (k44)
+    if ( $self->_lib->is_object($value) && !$rt->_is_safe_string($value) ) {
+      # Objects (besides SafeStrings), non-primative Arrays
+      return scalar @{ $self->_lib->keys($value) };
+    }
+    return $rt->js_member_read( $value, 'length' );
+  }
+  return 0;
+}
+
+#### list
+
+sub list {
+  my ( $self, $val ) = @_;
+  my $rt  = $self->_runtime;
+  my $lib = $self->_lib;
+  if ( $lib->is_string($val) ) {
+    return $rt->js_method_call( $val, 'val', 'split', '' );
+  } elsif ( $lib->is_object($val) ) {
+    # the entries array's own .map; ({key, value}) is an engine-built object,
+    # insertion-ordered (ADR 0011)
+    return [ map { $rt->make_dict( key => $_->[0], value => $_->[1] ) } @{ $lib->_entries( $rt->op_or( $val, {} ) ) } ];
+  } elsif ( $lib->is_array($val) ) {
+    return $val;
+  } else {
+    die $self->_template_error_class->new('list filter: type not iterable');
+  }
+}
+
 #### lower
 
 sub lower {
@@ -132,6 +235,18 @@ sub nl2br {
     return '';
   }
   return $rt->copy_safeness( $str, $rt->js_string_this( $str, 'str', 'replace' ) =~ s/\r\n|\n/<br \/>\n/gr );
+}
+
+#### random
+
+sub random {
+  my ( $self, $arr ) = @_;
+  my $rt = $self->_runtime;
+  # Math.random() is Perl's rand, [0, 1) like it but a different PRNG from
+  # V8's, so the pick is never byte-comparable with upstream's; upstream's own
+  # test asserts membership only. Listed for the divergence ledger (k24).
+  return $rt->js_member_read( $arr,
+    $self->_lib->js_math_floor( $rt->op_mul( rand(), $rt->js_member_read( $arr, 'length' ) ) ) );
 }
 
 #### replace
@@ -210,6 +325,71 @@ sub replace {
   }
 
   return $rt->copy_safeness( $original_str, $res );
+}
+
+#### reverse
+
+sub reverse {
+  my ( $self, $val ) = @_;
+  my $rt = $self->_runtime;
+  my $arr;
+  if ( $self->_lib->is_string($val) ) {
+    $arr = $self->list($val);
+  } else {
+    # Copy it
+    $arr = $self->_lib->map( $val, sub { $_[0] } );
+  }
+
+  $rt->js_method_call( $arr, 'arr', 'reverse' );
+
+  if ( $self->_lib->is_string($val) ) {
+    return $rt->copy_safeness( $val, $rt->js_method_call( $arr, 'arr', 'join', '' ) );
+  }
+  return $arr;
+}
+
+#### slice
+
+sub slice {
+  my ( $self, $arr, $slices, $fill_with ) = @_;
+  my $rt           = $self->_runtime;
+  my $slice_length = $self->_lib->js_math_floor( $rt->op_div( $rt->js_member_read( $arr, 'length' ), $slices ) );
+  my $extra        = $rt->op_mod( $rt->js_member_read( $arr, 'length' ), $slices );
+  my $res          = [];
+  my $offset       = 0;
+
+  for ( my $i = 0; $rt->op_lt( $i, $slices ); $i++ ) {
+    my $start = $rt->op_add( $offset, $rt->op_mul( $i, $slice_length ) );
+    if ( $rt->op_lt( $i, $extra ) ) {
+      $offset++;
+    }
+    my $end = $rt->op_add( $offset, $rt->op_mul( $i + 1, $slice_length ) );
+
+    # Array or String slice by the receiver's kind; push on a string slice
+    # throws (oracle: 'abcdef'|slice(3, 'x') -> currSlice.push is not a function)
+    my $curr_slice = $rt->js_method_call( $arr, 'arr', 'slice', $start, $end );
+    if ( $rt->_truthy($fill_with) && $rt->op_ge( $i, $extra ) ) {
+      $rt->js_method_call( $curr_slice, 'currSlice', 'push', $fill_with );
+    }
+    push @$res, $curr_slice;
+  }
+
+  return $res;
+}
+
+#### sum
+
+sub sum {
+  my ( $self, $arr, $attr, $start ) = @_;
+  my $rt = $self->_runtime;
+  $start = 0 unless defined $start;    # start = 0, a default parameter: undefined only
+
+  if ( $rt->_truthy($attr) ) {
+    # v[attr]: one property read, as in join
+    $arr = $self->_lib->map( $arr, sub { $rt->js_member_read( $_[0], $attr ) } );
+  }
+
+  return $rt->op_add( $start, $rt->js_method_call( $arr, 'arr', 'reduce', sub { $rt->op_add( $_[0], $_[1] ) }, 0 ) );
 }
 
 #### striptags
@@ -320,12 +500,22 @@ sub wordcount {
 sub exports {
   my ( $self, $env ) = @_;
   return {
+    batch      => sub { $self->batch(@_) },
     capitalize => sub { $self->capitalize(@_) },
     center     => sub { $self->center(@_) },
+    first      => sub { $self->first(@_) },
     indent     => sub { $self->indent(@_) },
+    join       => sub { $self->join(@_) },
+    last       => sub { $self->last(@_) },
+    length     => sub { $self->length_filter(@_) },
+    list       => sub { $self->list(@_) },
     lower      => sub { $self->lower(@_) },
     nl2br      => sub { $self->nl2br(@_) },
+    random     => sub { $self->random(@_) },
     replace    => sub { $self->replace(@_) },
+    reverse    => sub { $self->reverse(@_) },
+    slice      => sub { $self->slice(@_) },
+    sum        => sub { $self->sum(@_) },
     striptags  => sub { $self->striptags(@_) },
     title      => sub { $self->title(@_) },
     trim       => sub { $self->trim(@_) },

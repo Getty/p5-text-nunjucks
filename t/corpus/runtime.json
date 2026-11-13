@@ -106,6 +106,113 @@
     }
   },
   {
+    "name": "native Array reduce",
+    "template": "{% macro f(a, b) %}{{ a }}+{{ b }}{% endmacro %}{{ [1,2,3].reduce(f) }}|{{ [1,2,3].reduce(f, 0) }}|{{ [9].reduce(f) }}|{{ [].reduce(f, 7) }}",
+    "expected": {
+      "ok": true,
+      "output": "1+2+3|0+1+2+3|9|7"
+    }
+  },
+  {
+    "name": "native Array reduce: the callback gets accumulator, element, index and array",
+    "template": "{% macro f(a, b, i, arr) %}{{ a }}:{{ b }}:{{ i }}:{{ arr.length }};{% endmacro %}{{ [1,2].reduce(f, 'x') }}",
+    "expected": {
+      "ok": true,
+      "output": "x:1:0:2;:2:1:2;"
+    }
+  },
+  {
+    "name": "native Array reduce of an empty array without an initial value",
+    "template": "{% macro f(a, b) %}{% endmacro %}{{ [].reduce(f) }}",
+    "expected": {
+      "ok": false,
+      "error": {
+        "name": "Template render error",
+        "message": "(unknown path)\n  TypeError: Reduce of empty array with no initial value"
+      }
+    }
+  },
+  {
+    "name": "native Array reduce: a number callbackfn",
+    "template": "{{ [1].reduce(1.5) }}",
+    "expected": {
+      "ok": false,
+      "error": {
+        "name": "Template render error",
+        "message": "(unknown path)\n  TypeError: number 1.5 is not a function"
+      }
+    }
+  },
+  {
+    "name": "native Array reduce: a null callbackfn",
+    "template": "{{ [1].reduce(none) }}",
+    "expected": {
+      "ok": false,
+      "error": {
+        "name": "Template render error",
+        "message": "(unknown path)\n  TypeError: object null is not a function"
+      }
+    }
+  },
+  {
+    "name": "native Array reduce: an undefined callbackfn",
+    "template": "{{ [1].reduce(u) }}",
+    "expected": {
+      "ok": false,
+      "error": {
+        "name": "Template render error",
+        "message": "(unknown path)\n  TypeError: undefined is not a function"
+      }
+    }
+  },
+  {
+    "name": "native Array reduce: a boolean callbackfn",
+    "template": "{{ [1].reduce(true) }}",
+    "expected": {
+      "ok": false,
+      "error": {
+        "name": "Template render error",
+        "message": "(unknown path)\n  TypeError: boolean true is not a function"
+      }
+    }
+  },
+  {
+    "name": "native Array reduce: a NaN callbackfn",
+    "template": "{{ [1].reduce('a' * 1) }}",
+    "expected": {
+      "ok": false,
+      "error": {
+        "name": "Template render error",
+        "message": "(unknown path)\n  TypeError: number NaN is not a function"
+      }
+    }
+  },
+  {
+    "name": "native Array reduce: an object callbackfn is checked before the empty array",
+    "template": "{{ [].reduce({}) }}",
+    "expected": {
+      "ok": false,
+      "error": {
+        "name": "Template render error",
+        "message": "(unknown path)\n  TypeError: object is not a function"
+      }
+    }
+  },
+  {
+    "name": "native Array reduce: a string callbackfn is shown cut to 100 code units",
+    "template": "{{ [1].reduce(s) }}",
+    "context": {
+      "s": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+    },
+    "expected": {
+      "ok": false,
+      "error": {
+        "name": "Template render error",
+        "message": "(unknown path)\n  TypeError: string \"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx<...>\" is not a function"
+      }
+    }
+  },
+  {
     "name": "regex replacer: the named groups object iterates in group order (engine-built, ADR 0011)",
     "template": "{% macro f(m,a,b,p,s,g) %}{% for k, v in g %}{{k}}={{v}};{% endfor %}{% endmacro %}{{ 'ab'|replace(r/(?<z>a)(?<b>b)/, f) }}",
     "expected": {
@@ -173,6 +280,39 @@
     "expected": {
       "ok": true,
       "output": "aundefinedc|aundefinedc|anullc|abc"
+    }
+  },
+  {
+    "name": "filter property read on undefined: a regex key drops the (reading ...) clause",
+    "template": "{{ [u]|join(',', r/x/) }}",
+    "expected": {
+      "ok": false,
+      "error": {
+        "name": "Template render error",
+        "message": "(unknown path)\n  TypeError: Cannot read properties of undefined"
+      }
+    }
+  },
+  {
+    "name": "filter property read on undefined: a SafeString key drops the (reading ...) clause",
+    "template": "{% macro m() %}k{% endmacro %}{{ [u]|join(',', m()) }}",
+    "expected": {
+      "ok": false,
+      "error": {
+        "name": "Template render error",
+        "message": "(unknown path)\n  TypeError: Cannot read properties of undefined"
+      }
+    }
+  },
+  {
+    "name": "filter property read on undefined: keyword arguments as the key read as #<Object>",
+    "template": "{{ [u]|join(',', k=1) }}",
+    "expected": {
+      "ok": false,
+      "error": {
+        "name": "Template render error",
+        "message": "(unknown path)\n  TypeError: Cannot read properties of undefined (reading '#<Object>')"
+      }
     }
   }
 ]

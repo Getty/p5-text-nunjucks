@@ -24,8 +24,10 @@ Revision history for Text-Nunjucks
     - The built-in filters start with the string family
       (Text::Nunjucks::Filters, loaded by Environment, ADR 0015):
       capitalize, center, indent, lower, nl2br, replace, striptags, title,
-      trim, truncate, upper and wordcount. The remaining built-in filters
-      are not ported yet; their upstream tests are carried as TODO.
+      trim, truncate, upper and wordcount, and the sequence family: batch,
+      first, join, last, length, list, random, reverse, slice and sum. The
+      remaining built-in filters are not ported yet; their upstream tests
+      are carried as TODO.
     - Case mapping follows JS toLowerCase and toUpperCase, Final_Sigma and
       SpecialCasing included.
     - The replace filter with a regex follows RegExp Symbol.replace: empty
@@ -35,5 +37,10 @@ Revision history for Text-Nunjucks
     - A filter given a value of the wrong kind throws V8's TypeError text
       ("str.toLowerCase is not a function").
     - Array lastIndexOf is native.
+    - Array reduce is native. A filter that reads a property of undefined or
+      null throws V8's TypeError text ("Cannot read properties of undefined
+      (reading '0')").
+    - The random filter picks with Perl's rand, not V8's Math.random: the
+      same set of elements, never the same sequence.
     - The native String replace() takes the JS replacement patterns, a regex
       pattern and a function replacer.

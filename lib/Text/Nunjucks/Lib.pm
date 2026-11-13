@@ -11,6 +11,14 @@ use POSIX ();
 use Scalar::Util qw( blessed refaddr );
 use Text::Nunjucks::Lib::TemplateError;
 use Text::Nunjucks::Lib::Error;
+# Circular with Runtime's `use Text::Nunjucks::Lib`; map's array-like branch is
+# the one Lib function that calls up into it. Caveat: when Lib loads first,
+# this line compiles and runs all of Runtime before the rest of Lib is even
+# compiled -- the Lib subs below this line do not exist yet and its file-scope
+# lexicals (%ESCAPE_MAP, $JS_WORD_CLASS, $NUM_POS_INF, ...) are still unset. So
+# Runtime must never call a Lib function at file scope (a `my $X = Lib->...`,
+# a BEGIN, a `use constant`); calls from inside its subs are fine.
+use Text::Nunjucks::Runtime;
 
 no warnings 'experimental::builtin';
 
@@ -19,6 +27,10 @@ no warnings 'experimental::builtin';
 # invocant"): every function is a method taking $self, callers use
 # Text::Nunjucks::Lib->is_array($x), cross-calls go through $self. No instances.
 # ADR 0001 designates this module the single home for value-kind checks.
+
+# The collaborator class, named once (getty-perl-core resolver), for map's
+# array-like branch.
+sub _runtime { 'Text::Nunjucks::Runtime' }
 
 #### module constants (var escapeMap / escapeRegex)
 
@@ -114,8 +126,14 @@ sub is_string {
 
 sub is_object {
   my ( $self, $obj ) = @_;
-  # plain hashref only; blessed objects are k6/Runtime member-access territory
-  return ref($obj) eq 'HASH' ? 1 : 0;
+  # Object.prototype.toString.call(obj) === '[object Object]': a plain hashref,
+  # an ordered dict (template literal / engine-built object, ADR 0011) and a
+  # SafeString -- a String subclass whose instances are ordinary objects
+  # (oracle: '{% macro m() %}ab{% endmacro %}' m()|list gives val=ab;length=2;).
+  # Other blessed objects are k6/Runtime member-access territory.
+  return 1 if ref($obj) eq 'HASH';
+  return ( blessed($obj) && ( $obj->isa('Hash::Ordered') || $obj->isa('Text::Nunjucks::Runtime::SafeString') ) )
+    ? 1 : 0;
 }
 
 #### _prepareAttributeParts
@@ -252,12 +270,46 @@ sub each {
 sub map {
   my ( $self, $obj, $func ) = @_;
   my $results = [];
+  # if (obj == null) -- undefined here; null (Runtime's None) after the array
+  # branch, which so needs nothing from Runtime
   return $results if !defined $obj;
 
-  # obj.map(func) -- native Array.map passes (element, index, array)
-  for my $i ( 0 .. $#$obj ) {
-    $results->[$i] = $func->( $obj->[$i], $i, $obj );
+  # if (ArrayProto.map && obj.map === ArrayProto.map) return obj.map(func);
+  # -- a real array; native Array.map passes (element, index, array)
+  if ( $self->is_array($obj) ) {
+    for my $i ( 0 .. $#$obj ) {
+      $results->[$i] = $func->( $obj->[$i], $i, $obj );
+    }
+    return $results;
   }
+
+  # Anything else is read as an array-like. obj.length and obj[i] are JS
+  # property reads and `i < obj.length` a JS comparison: Runtime's
+  # member_lookup and op_lt, the one home of both (ADR 0008 / 0007), so this
+  # branch calls up into Runtime -- the one Lib function that does. Oracle: a
+  # SafeString has a length but no index access ('abc' from a macro, |reverse
+  # -> ',,'), {length: '2', 0: 'x', 1: 'y'} maps x, y, a number or a plain
+  # object without length maps nothing. A primitive string cannot change under
+  # the loop, so it is read through its split('') units -- the same length and
+  # the same obj[i] (ADR 0012) without measuring the string once per index.
+  my $rt = $self->_runtime;
+  return $results if $rt->_is_none($obj);
+  my $array_like = $self->is_string($obj) ? $self->js_split( $obj, '' ) : $obj;
+
+  for ( my $i = 0; $rt->op_lt( $i, $rt->member_lookup( $array_like, 'length' ) ); $i++ ) {
+    $results->[ scalar @$results ] = $func->( $rt->member_lookup( $array_like, $i ), $i );
+  }
+
+  # if (obj.length === +obj.length) results.length = obj.length; -- setting an
+  # array's length to anything but an integer in [0, 2^32 - 1] is a RangeError
+  # (oracle: {length: 2.5}|reverse, {length: -1}|reverse)
+  my $length = $rt->member_lookup( $array_like, 'length' );
+  if ( $self->_strict_eq( $length, $rt->op_pos($length) ) ) {
+    die Text::Nunjucks::Lib::Error->new( 'Invalid array length', name => 'RangeError' )
+      if $self->_js_to_uint32($length) != $length;
+    $#$results = $length - 1;
+  }
+
   return $results;
 }
 
@@ -295,9 +347,10 @@ sub async_for {
 
   # Value lookup mirrors the ordering policy of keys() above (ADR 0011): a
   # Hash::Ordered (template dict literal / engine-built object) reads via ->get;
-  # a plain hashref reads via ->{}. Lib doesn't reach Runtime->member_lookup
-  # (Lib and Runtime don't form a dep cycle in either direction), so this is the
-  # single seam -- the Runtime side mirrors it for its own async_all loop.
+  # a plain hashref reads via ->{}. asyncFor doesn't reach Runtime->member_lookup
+  # (map's array-like branch is Lib's one call up into Runtime),
+  # so this is the single seam -- the Runtime side mirrors it for its own
+  # async_all loop.
   my $lookup = ( blessed($obj) && $obj->isa('Hash::Ordered') )
     ? sub { my $k = shift; $obj->exists($k) ? $obj->get($k) : undef }
     : sub { my $k = shift; $obj->{$k} };
@@ -360,6 +413,10 @@ sub keys {
   # yields [] cleanly. Revisit if a k14/k17 call site reaches it.
   return [ $obj->keys ] if blessed($obj) && $obj->isa('Hash::Ordered');
 
+  # A SafeString (engine-built): its own properties in the order its
+  # constructor creates them, this.val then this.length.
+  return [ 'val', 'length' ] if blessed($obj) && $obj->isa('Text::Nunjucks::Runtime::SafeString');
+
   # Plain hash: sort CORE::keys (per-process-random Perl order) deterministically.
   my $arr = [];
   for my $k ( sort CORE::keys %$obj ) {
@@ -372,14 +429,21 @@ sub keys {
 
 sub _entries {
   my ( $self, $obj ) = @_;
-  return [ CORE::map { [ $_, $obj->{$_} ] } @{ $self->keys($obj) } ];
+  return [ CORE::map { [ $_, $self->_own_value( $obj, $_ ) ] } @{ $self->keys($obj) } ];
 }
 
 #### _values
 
 sub _values {
   my ( $self, $obj ) = @_;
-  return [ CORE::map { $obj->{$_} } @{ $self->keys($obj) } ];
+  return [ CORE::map { $self->_own_value( $obj, $_ ) } @{ $self->keys($obj) } ];
+}
+
+# obj[k] for a key keys() returned: an ordered dict (a blessed array, ADR 0011)
+# reads through ->get, a hash -- a SafeString's included -- by its key.
+sub _own_value {
+  my ( $self, $obj, $k ) = @_;
+  return ( blessed($obj) && $obj->isa('Hash::Ordered') ) ? $obj->get($k) : $obj->{$k};
 }
 
 #### extend / _assign
@@ -584,6 +648,16 @@ sub number_to_string {
   return $neg ? '-' . $out : $out;
 }
 
+#### js_math_floor -- Math.floor(x)
+
+# Not a src/lib.js function: the filters' Math.floor (random, slice), over an
+# already-ToNumber'd value as the other number seams here take it. C's floor is
+# IEEE's: NaN and +-Infinity pass through, -0 stays -0.
+sub js_math_floor {
+  my ( $self, $n ) = @_;
+  return POSIX::floor($n);
+}
+
 #### JS strings reckon in UTF-16 code units (ADR 0012)
 
 # Not src/lib.js functions: ADR 0012 designates Lib the single home for the
@@ -613,7 +687,7 @@ sub number_to_string {
 # give both spellings the same unit form, but eq and hash keys tell them apart.
 #
 # Index and length arguments follow one contract, because ToNumber lives in
-# Runtime (ADR 0007) and Lib does not call into Runtime: an argument is a JS
+# Runtime (ADR 0007) and these seams do not call into Runtime: an argument is a JS
 # number (already through ToNumber) or undef for JS `undefined`, and undef means
 # whatever `undefined` means for that parameter of that method. Search strings
 # and separators arrive already through ToString.

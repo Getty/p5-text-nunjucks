@@ -3962,7 +3962,7 @@
   {
     "name": "strings: replace: probe rep-regex-g",
     "template": "{{ 'aaa'|replace(r/a*/g, '-') }}|{{ 'abc'|replace(r//g, '-') }}|{{ 'abc'|replace(r/x*/g, '-') }}|{{ 'ab'|replace(r/x*|a/g, '-') }}|{{ 'a😀b'|replace(r//g, '-')|length }}",
-    "todo": "k17: length filter not ported yet",
+    "todo": "k53: regex matches code points, not UTF-16 code units",
     "expected": {
       "ok": true,
       "output": "--|-a-b-c-|-a-b-c-|-a-b-|9"

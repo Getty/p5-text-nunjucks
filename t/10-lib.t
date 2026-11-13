@@ -49,6 +49,9 @@ subtest 'is_function / is_array / is_object' => sub {
   ok( $L->is_object( {} ),        'hashref is an object' );
   ok( !$L->is_object( [] ),       'arrayref is not an object' );
   ok( !$L->is_object('x'),        'string is not an object' );
+  # oracle: {{ {b: 1, a: 2}|list }} iterates b, a -- a dict literal is a plain object
+  ok( $L->is_object( Hash::Ordered->new( a => 1 ) ), 'an ordered dict (ADR 0011) is an object' );
+  ok( !$L->is_object( bless {}, 'TN_Lib_Other' ),   'another blessed object is not' );
 };
 
 subtest 'is_string (ADR 0001 kinds)' => sub {
@@ -187,6 +190,54 @@ subtest 'map' => sub {
     'callback gets index'
   );
   is_deeply( $L->map(undef, sub { }), [], 'undef obj -> empty' );
+  my $arr = [ 1, 2 ];
+  my @args;
+  $L->map( $arr, sub { push @args, [@_] } );
+  ok( $args[1][2] == $arr, 'native Array.map: the callback also gets the array' );
+};
+
+# The array-like branch reads obj.length / obj[i] and compares with JS < --
+# Runtime's member_lookup and op_lt. Lib loads Runtime itself: this file loads
+# only Lib, so no require here -- the subtest also pins that loading Lib alone
+# suffices. Every value is oracle-grounded through upstream's
+# lib.map(val, v => v), the reverse filter.
+subtest 'map: array-likes, read through Runtime' => sub {
+  my $R  = 'Text::Nunjucks::Runtime';
+  my $id = sub { $_[0] };
+
+  # oracle: {{ o|reverse|join(',') }} with o = {length: 2, 0: 'x', 1: 'y'} -> y,x;
+  # with length '2' -> y,x; length '1.5' and [2] -> b,a; length true -> a
+  is_deeply( $L->map( Hash::Ordered->new( length => 2, 0 => 'x', 1 => 'y' ), $id ), [qw( x y )], 'length and indices' );
+  is_deeply( $L->map( { length => '2', 0 => 'x', 1 => 'y' }, $id ), [qw( x y )], 'a string length compares as a number' );
+  is_deeply( $L->map( { length => '1.5', 0 => 'a', 1 => 'b' }, $id ), [qw( a b )], "'1.5': i < length twice, no length set" );
+  is_deeply( $L->map( { length => [2], 0 => 'a', 1 => 'b' }, $id ), [qw( a b )], '[2] as length' );
+  is_deeply( $L->map( { length => true, 0 => 'a' }, $id ), ['a'], 'true as length' );
+  # oracle: {{ o|reverse|length }} with o = {key: 1, length: 5} -> 5 (all undefined)
+  is_deeply( $L->map( { key => 1, length => 5 }, $id ), [ (undef) x 5 ], 'missing indices are undefined' );
+  # oracle: '{% macro m() %}abc{% endmacro %}{{ m()|reverse }}' -> ,, -- a SafeString
+  # has a length and no index access
+  is_deeply( $L->map( $R->SafeString->new('abc'), $id ), [ (undef) x 3 ], 'a SafeString' );
+  # oracle: {{ ('a😀b'|reverse).length }} -> 4 -- a string's code units
+  {
+    no warnings 'surrogate';
+    is_deeply( $L->map( "a\x{1F600}b", $id ), [ 'a', "\x{D83D}", "\x{DE00}", 'b' ], 'a string maps its code units' );
+  }
+  # oracle: 5|reverse, {a: 1}|reverse, null|reverse -> nothing
+  is_deeply( $L->map( 5, $id ),          [], 'a number has no length' );
+  is_deeply( $L->map( { a => 1 }, $id ), [], 'an object without length' );
+  is_deeply( $L->map( $R->None, $id ),   [], 'null (obj == null)' );
+
+  my @args;
+  $L->map( { length => 1, 0 => 'v' }, sub { push @args, [@_] } );
+  is_deeply( \@args, [ [ 'v', 0 ] ], 'the callback gets (value, index)' );
+
+  # oracle: {length: 2.5}|reverse and {length: -1}|reverse -> RangeError; {length: -0} -> nothing
+  for my $length ( 2.5, -1 ) {
+    my $err = eval { $L->map( { length => $length }, $id ); 1 } ? undef : $@;
+    is( ref($err) ? $err->name . ': ' . $err->message : 'no error', 'RangeError: Invalid array length',
+      "length $length: results.length = obj.length throws" );
+  }
+  is_deeply( $L->map( { length => -0.0 }, $id ), [], 'length -0' );
 };
 
 #### asyncIter / asyncFor  (CPS, ADR 0003 -- run synchronously here)
@@ -245,6 +296,19 @@ subtest 'keys / _entries / _values' => sub {
     '_entries (as set)'
   );
   is_deeply( [ sort @{ $L->_values($obj) } ], [ 1, 2 ], '_values (as set)' );
+
+  my $ordered = Hash::Ordered->new( b => 1, a => 2 );
+  is_deeply( $L->_entries($ordered), [ [ 'b', 1 ], [ 'a', 2 ] ], '_entries of an ordered dict reads its values' );
+  is_deeply( $L->_values($ordered), [ 1, 2 ], '_values of an ordered dict' );
+};
+
+# oracle: '{% macro m() %}ab{% endmacro %}{% for p in m()|list %}{{ p.key }}={{ p.value }};{% endfor %}'
+# -> val=ab;length=2; -- a SafeString's own properties in constructor order
+subtest 'is_object / keys / _entries: a SafeString is an ordinary object' => sub {
+  my $safe = Text::Nunjucks::Runtime->SafeString->new('ab');
+  ok( $L->is_object($safe), 'is_object' );
+  is_deeply( $L->keys($safe),     [qw( val length )], 'keys: this.val, then this.length' );
+  is_deeply( $L->_entries($safe), [ [ 'val', 'ab' ], [ 'length', 2 ] ], '_entries' );
 };
 
 # ADR 0011 -- ordering policy at the keys() seam. The "as set" assertions above
@@ -535,6 +599,19 @@ subtest 'js_get_substitution: the JS replacement patterns' => sub {
   # '😀ab😀b'|replace(r/b/g, '[$`]') -> '😀a[😀a]😀[😀ab😀]': positions in code units
   is( $L->js_get_substitution( 'b', "\x{1F600}ab\x{1F600}b", 3, [], undef, q{[$`|$']} ),
     "[\x{1F600}a|\x{1F600}b]", '$` and $\' cut at a code-unit position' );
+};
+
+# oracle: [1,2,3,4,5]|slice(2.5) -> [[1,2],[3,4],[5]] (Math.floor(5 / 2.5) = 2);
+# Math.floor on NaN, -0, +-Infinity and negatives as IEEE floor
+subtest 'js_math_floor (Math.floor)' => sub {
+  my $inf = 9**9**9;
+  is( $L->js_math_floor(2.5),  2,  'positive fraction' );
+  is( $L->js_math_floor(-2.5), -3, 'negative fraction rounds down' );
+  is( $L->js_math_floor(3),    3,  'an integer is itself' );
+  is( $L->number_to_string( $L->js_math_floor( $inf / $inf ) ), 'NaN',       'NaN' );
+  is( $L->number_to_string( $L->js_math_floor($inf) ),          'Infinity',  'Infinity' );
+  is( $L->number_to_string( $L->js_math_floor( -$inf ) ),       '-Infinity', '-Infinity' );
+  is( sprintf( '%g', $L->js_math_floor(-0.0) ), '-0', '-0 stays -0' );
 };
 
 subtest 'js_word_class is ASCII' => sub {

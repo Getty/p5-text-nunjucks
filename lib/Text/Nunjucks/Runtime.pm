@@ -924,6 +924,34 @@ my %ARRAY_METHODS = (
     }
     return \@new;
   },
+  reduce => sub {
+    # Array.prototype.reduce(callbackfn[, initialValue]): the length is read
+    # once, callbackfn gets (accumulator, element, index, array), an index the
+    # callback removed is skipped. Oracle: [1,2,3].reduce(f, 0) with f(a, b)
+    # returning a + b -> 123 (macro output is a string), f(a, b, i, arr) sees
+    # x:1:0:2 then :2:1:2. [].reduce(f) -> "TypeError: Reduce of empty array
+    # with no initial value"; a callbackfn that is not callable is checked
+    # first -> "TypeError: number 5 is not a function". The sum filter's
+    # arr.reduce reaches it.
+    my ( $self, $arr, $callbackfn, @initial_value ) = @_;
+    die $self->_error_class->new( $self->_js_not_callable_text($callbackfn) . ' is not a function', name => 'TypeError' )
+      unless Text::Nunjucks::Lib->is_function($callbackfn);
+    my $len = scalar @$arr;
+    my $k   = 0;
+    my $accumulator;
+    if (@initial_value) {
+      $accumulator = $initial_value[0];
+    } else {
+      die $self->_error_class->new( 'Reduce of empty array with no initial value', name => 'TypeError' )
+        if $len == 0;
+      $accumulator = $arr->[ $k++ ];
+    }
+    for ( ; $k < $len; $k++ ) {
+      next if $k >= scalar @$arr;    # HasProperty(O, k)
+      $accumulator = $callbackfn->( $accumulator, $arr->[$k], $k, $arr );
+    }
+    return $accumulator;
+  },
   # mutators -- change the underlying Perl structure in place (ADR 0008)
   push => sub {
     my ( $self, $arr, @args ) = @_;
@@ -1151,10 +1179,60 @@ sub js_string_this {
 
 sub _js_method_error {
   my ( $self, $obj, $src, $name ) = @_;
-  my $message = ( !defined($obj) || $self->_is_none($obj) )
-    ? 'Cannot read properties of ' . $self->_js_type($obj) . " (reading '" . $name . "')"
-    : $src . '.' . $name . ' is not a function';
-  return $self->_error_class->new( $message, name => 'TypeError' );
+  return $self->_js_read_error( $obj, $name ) if !defined($obj) || $self->_is_none($obj);
+  return $self->_error_class->new( $src . '.' . $name . ' is not a function', name => 'TypeError' );
+}
+
+# Port addition, same seam: a plain property read obj[key] the engine's own
+# JavaScript makes on a value it never checked -- filters.js reads arr[0],
+# arr.length, v[attr] off whatever the template piped in. On undefined / null
+# the read throws V8's TypeError (oracle: undefined|first -> "TypeError: Cannot
+# read properties of undefined (reading '0')", null|last -> "... of null
+# (reading 'length')"); on anything else it is member_lookup, the JS property
+# read of the ADR 0008 surface. The key is used as given -- v[attr] with attr
+# 'a.b' reads the key 'a.b', no path.
+sub js_member_read {
+  my ( $self, $obj, $key ) = @_;
+  die $self->_js_read_error( $obj, $key ) if !defined($obj) || $self->_is_none($obj);
+  return $self->member_lookup( $obj, $key );
+}
+
+# V8's text for a property read on undefined / null. It names the key as V8
+# prints it without side effects (oracle, with v undefined in [v]|join(',', k)):
+# a string as is, a number or boolean as its ToString ('1.5', 'true'), a plain
+# object -- dict literal, caller hash, keyword arguments -- as '#<Object>'; an
+# array, a SafeString or a regex has no such form and drops the "(reading ...)"
+# clause. A function key would print its JS source, which has no Perl form; it
+# and other blessed objects drop the clause too.
+sub _js_read_error {
+  my ( $self, $obj, $key ) = @_;
+  my $name =
+      ( !ref($key) || $self->_is_none($key) ) ? $self->_member_key($key)
+    : ( ref($key) eq 'HASH' || $self->_is_ordered_hash($key) || $self->_is_kwargs($key) ) ? '#<Object>'
+    :   undef;
+  return $self->_error_class->new(
+    'Cannot read properties of ' . $self->_js_type($obj) . ( defined($name) ? " (reading '" . $name . "')" : '' ),
+    name => 'TypeError'
+  );
+}
+
+# V8's rendering of a value a builtin was handed to call that is not callable
+# (Array reduce's callbackfn; oracle with [1].reduce(x)): undefined ->
+# 'undefined', null -> 'object null', a boolean or number -> its type and
+# ToString ('boolean true', 'number 1.5', 'number NaN'), a string -> 'string
+# "x"', cut to its first 100 code units and '<...>' when longer, any object ->
+# 'object'.
+sub _js_not_callable_text {
+  my ( $self, $v ) = @_;
+  return 'undefined'   if !defined($v);
+  return 'object null' if $self->_is_none($v);
+  my $type = $self->_js_type($v);
+  return $type . ' ' . $self->_js_to_string($v) if $type eq 'boolean' || $type eq 'number';
+  return 'object' unless $type eq 'string';
+  my $shown = Text::Nunjucks::Lib->js_string_length($v) > 100
+    ? Text::Nunjucks::Lib->js_substring( $v, 0, 100 ) . '<...>'
+    : $v;
+  return 'string "' . $shown . '"';
 }
 
 #### callWrap

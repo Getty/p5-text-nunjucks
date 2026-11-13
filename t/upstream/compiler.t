@@ -1440,8 +1440,7 @@ subtest 'compiler' => sub {
       { autoescape => true },
       '&quot;&#39;&lt;&gt;&amp;' );
 
-    todo_equal( 'reverse filter is k17 (Filters not ported yet)',
-      '{{ foo|reverse }}',
+    equal( '{{ foo|reverse }}',
       { foo => q{"'<>&} },
       { autoescape => true },
       '&amp;&gt;&lt;&#39;&quot;' );
