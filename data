@@ -1,0 +1,28 @@
+---
+class: standard
+completed: 2026-11-13T03:48:07Z
+created: 2026-10-06T19:47:38Z
+id: 50
+priority: low
+started: 2026-11-13T03:48:07Z
+status: done
+tags:
+- docs
+- claude-md
+- review-2026-10-06
+title: CLAUDE.md still describes the bootstrap state and manage-skills hardlinks
+updated: 2026-11-13T04:37:38Z
+---
+
+`CLAUDE.md` is what every agent reads first, and three statements in it are no longer true:
+
+- "Status: bootstrap. The distribution is a stub" (line 7). `lib/` holds 7,662 lines: Lexer, Nodes, Parser, Transformer, Runtime, Compiler and Environment are ported and tested (k9-k16, k21, k28, k30-k32 done).
+- "the `getty-*` ... ones are hardlinked from their shared sources (never Edit/Write those -- skill `manage-skills`)". The repo moved to skilletor in 420d58a ("migrate shared skills from manage-skills to skilletor"); there are no hardlinks and no manage-skills here any more.
+- "Working the board" still presents k1 and the k2-k8 decisions as the next steps and says Runtime (k14) is blocked on them; Runtime is done.
+
+k24 covers README and the divergence ledger before the first release, not this file. Done when the status paragraph, the skills sentence (skilletor) and the board walkthrough match the board as it is.
+
+---
+Fleet review 2026-10-06 · kind: docs · confidence: verified
+
+2026-11-13 04:37 CLAUDE.md updated in 13eceda.
