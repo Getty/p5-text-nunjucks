@@ -1,0 +1,14 @@
+---
+class: standard
+created: 2026-11-13T12:08:31Z
+id: 84
+priority: low
+status: backlog
+tags:
+- bug
+- runtime
+title: Array toSorted() missing from the native method surface (ADR 0008)
+updated: 2026-11-13T12:08:31Z
+---
+
+Oracle (node v24.19.0): {{ [3,1,2].toSorted() }} -> 1,2,3; the port dies (no such member on the ADR 0008 curated surface). Found by the k17 job 5 sort worker, 2026-11-13. Fix: add toSorted (and check toReversed/toSpliced/with, same ES2023 family, against the oracle) to Runtime Array methods; toSorted goes through Lib js_array_sort on a copy (ADR for the sort seam, k17 job 5). Oracle corpus cases.
