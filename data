@@ -1,0 +1,27 @@
+---
+claimed_at: 2026-11-13T17:09:10Z
+claimed_by: p5-text-nunjucks
+class: standard
+completed: 2026-11-13T17:09:05Z
+created: 2026-09-22T05:00:32Z
+depends_on:
+- 20
+id: 38
+priority: medium
+started: 2026-11-13T16:31:39Z
+status: done
+tags:
+- port
+- tests
+- upstream-suite
+title: Port tests/api.js → t/upstream/api.t (6 it)
+updated: 2026-11-13T17:09:10Z
+---
+
+Port upstream/nunjucks/tests/api.js to t/upstream/api.t (public API surface). Some cases are JS-callback-specific; adapt to the Perl render API (ADR 0003/0009), never drop silently.
+
+Promoted from backlog on the maintainer's instruction (2026-11-13): worked together with k20. None of the 6 it()s uses the top-level API, so k101 does not block it.
+
+t/upstream/api.t ported: 6/6 it() pass, no TODO; 7 relative/ fixtures copied into t/upstream/templates. Not committed.
+
+committed in 80b744c
