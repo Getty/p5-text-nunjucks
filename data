@@ -1,0 +1,14 @@
+---
+class: standard
+created: 2026-11-13T08:22:09Z
+id: 73
+priority: low
+status: backlog
+tags:
+- bug
+- runtime
+title: x' in SafeString checks only own keys (JS also finds String.prototype members)
+updated: 2026-11-13T08:22:09Z
+---
+
+Found by the k17 job 3 worker (2026-11-13). Since k17 job 3, 'in' on a SafeString checks its own keys (val, length); JS's in also walks the prototype chain, so 'toString' in m() is true (SafeString's prototype chain reaches String.prototype). Before job 3 the port threw. ADR 0014 decides own-key exists for context lookup, not for the in operator on objects -- check whether an ADR covers in; probe with the oracle.
