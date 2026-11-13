@@ -1,0 +1,27 @@
+---
+class: standard
+completed: 2026-11-13T14:56:29Z
+created: 2026-09-22T05:00:31Z
+depends_on:
+- 18
+id: 36
+priority: medium
+started: 2026-11-13T13:50:38Z
+status: done
+tags:
+- port
+- tests
+- upstream-suite
+title: Port tests/globals.js → t/upstream/globals.t (11 it)
+updated: 2026-11-13T14:56:30Z
+---
+
+Port upstream/nunjucks/tests/globals.js to t/upstream/globals.t, oracle-grounded.
+
+Promoted from backlog on the maintainer's instruction (2026-11-13): worked together with k18.
+
+test-writer: t/upstream/globals.t ported, 11/11 it(). TODO k18: range, cycler, joiner (Globals.pm missing); 'pass context as this' nested TODO (ADR 0009, bare coderef gets no this). Corpus globals: cases in t/corpus/render-tests-globals.json (todo k18).
+
+test-writer 2026-11-13: globals.t boolean-global it() cut to upstream's one assertion (extras dropped; add_global not expressible in corpus). Corpus: cycler for-in todo retargeted to k93; +3 k93 todo cases.
+
+Committed in 871bd91
