@@ -1,0 +1,14 @@
+---
+class: standard
+created: 2026-11-13T12:15:35Z
+id: 86
+priority: low
+status: backlog
+tags:
+- bug
+- runtime
+title: Array splice() missing from the native method surface (ADR 0008)
+updated: 2026-11-13T12:15:35Z
+---
+
+Found by the k17 job 5 test-writer, 2026-11-13: {% set x = a.splice(0) %} -> port dies with Unable to call a["splice"], which is undefined or falsey; oracle splices. Corpus cases in t/corpus/render-array-sort.json ("mutating comparator: splice empties array during sort" -> [1,2,3,4,5]|5|[1,2,3,4,5]; "mutating comparator: length zero during sort" -> true|1|5) carry todo: k86. Fix: add splice (start/deleteCount ToIntegerOrInfinity clamping, insert items, returns the removed array) to the Runtime Array methods per ADR 0008 growth-on-demand; lift the 2 todos; more oracle corpus cases for splice itself.
