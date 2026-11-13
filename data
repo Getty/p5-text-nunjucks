@@ -1,0 +1,15 @@
+---
+class: standard
+created: 2026-11-13T06:19:03Z
+id: 59
+priority: medium
+status: backlog
+tags:
+- bug
+- runtime
+- compiler
+title: for k, v over a string dies with a raw Perl HASH-ref error
+updated: 2026-11-13T06:19:03Z
+---
+
+Found by the k17 job 1 worker (2026-11-13). {% for k, v in 'ab' %}{{k}}={{v}};{% endfor %}: oracle 0=a;1=b; (for-in over a string primitive enumerates its index keys), port dies in Lib::keys with Perl's "Can't use string as a HASH ref". Related: k58 (asyncEach over a string). Fix through the UTF-16 seams (indices are code units, ADR 0012); oracle corpus case.
