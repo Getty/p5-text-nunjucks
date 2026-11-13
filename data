@@ -1,0 +1,25 @@
+---
+class: standard
+created: 2026-11-13T16:58:51Z
+id: 105
+priority: low
+status: backlog
+tags:
+- tests
+- harness
+- release-should
+- release-0.001
+title: t/upstream/*.t skip_all guards turn a module that fails to load into a silent
+  skip
+updated: 2026-11-13T20:26:50Z
+---
+
+Found in the k20 fidelity audit (2026-11-13). Every ported upstream suite opens with a transitional guard from before the modules existed:
+`plan skip_all => 'Text::Nunjucks::Environment not available' unless eval { require Text::Nunjucks::Environment; 1 };`
+t/upstream/api.t:21, compiler.t:32, filters.t:47, globals.t:31, loader.t:36, tests.t:31, runtime.t:29 and :31, lexer.t:24, parser.t:27.
+
+All of those modules exist now, so the only way the guard fires is a module that fails to compile -- and then the suite reports "skipped" instead of failing. t/00-load.t loads only Text::Nunjucks, which loads nothing, so it does not catch it either. Other t/ files that `use` the modules directly would still go red, but the upstream-suite counts (the coverage measure of the port) would silently drop.
+
+Fix: plain `use Text::Nunjucks::Environment;` (and so on) in the suites; extend t/00-load.t to use_ok every lib/ module. Test-writer lane.
+
+2026-11-13 20:24 Pre-release audit (scout, verified): with a compile error injected into Filters.pm, api/filters/globals/tests.t print '1..0 # SKIP Text::Nunjucks::Environment not available' (exit 0) and corpus.t turns 4056 of 4120 cases into TODO; the run as a whole still FAILs via t/10-environment.t (exit 34) -- a silent skip, not a silent PASS. Also corpus.t:291 skip_all when the corpus dir is missing. t/00-load.t use_ok's only Text::Nunjucks, which loads nothing. Cheap fix before upload: use_ok every lib/ module in 00-load.t, plain use in the suites. Release: should-fix.
