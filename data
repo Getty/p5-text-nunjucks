@@ -1,0 +1,15 @@
+---
+class: standard
+created: 2026-11-13T05:07:29Z
+id: 53
+priority: medium
+status: backlog
+tags:
+- bug
+- regex
+- utf16
+title: Regex (ADR 0013) matches code points, not UTF-16 code units (ADR 0012)
+updated: 2026-11-13T05:07:29Z
+---
+
+Found in the k17 job 1 audit (2026-11-13). Runtime.pm ~135-242 (Regex object): matching, captures and lastIndex run on Perl code points. Oracle vs port: r/^.$/.test('😀') false vs true; r/^.b$/.test('😀b') false vs true; r/(.)b/.exec('😀b') captures \ude00 vs 😀; lastIndex of r/b/g on 'a😀b' 4 vs 3. Non-/u JS regexes see code units; /u regexes see code points (ties to k45, k49). Fix through the Lib UTF-16 unit form (k17 job 1 seams), corpus cases from the oracle.
