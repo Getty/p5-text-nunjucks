@@ -1,0 +1,18 @@
+---
+class: standard
+completed: 2026-11-13T08:51:40Z
+created: 2026-11-13T05:07:30Z
+id: 55
+priority: medium
+started: 2026-11-13T08:51:40Z
+status: done
+tags:
+- bug
+- runtime
+title: 'Array slice with a NaN bound: int(NaN) stays NaN'
+updated: 2026-11-13T08:51:40Z
+---
+
+Found in the k17 job 1 audit (2026-11-13). Runtime::_slice_bounds (~1381-1388, arrays only since k17 job 1) applies int() to NaN. Oracle vs port: [1,2,3].slice(0,'x') -> '' (oracle) vs '1'... (verify direction with the oracle when fixing). Fix: ToIntegerOrInfinity (Lib::_js_to_integer_or_infinity exists since k17 job 1); oracle corpus case.
+
+Fixed in 46c850c
