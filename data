@@ -1,0 +1,14 @@
+---
+class: standard
+created: 2026-11-13T07:05:38Z
+id: 66
+priority: medium
+status: backlog
+tags:
+- bug
+- regex
+title: 'make_regex: ^/$ under m and . ignore JS line terminators (\r, U+2028, U+2029)'
+updated: 2026-11-13T07:05:38Z
+---
+
+Found by the k17 job 2 worker (2026-11-13). JS LineTerminator is \n, \r, U+2028, U+2029: '.' does not match them, and ^/$ under the m flag break at all four. The port's make_regex uses Perl's ^/$/. (\n only). Oracle vs port: r/^b/m.test('a\rb') true vs false. Neighbour of k49 (\d \w \s) and k53 (code units); ADR 0005/0013.
