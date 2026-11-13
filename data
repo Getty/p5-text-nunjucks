@@ -1,0 +1,17 @@
+---
+class: standard
+created: 2026-11-13T05:07:32Z
+id: 57
+priority: medium
+status: backlog
+tags:
+- bug
+- runtime
+- regex
+title: String split()/replace() with a regex argument stringify the regex
+updated: 2026-11-13T07:44:30Z
+---
+
+Found in the k17 job 1 audit (2026-11-13). Runtime STRING_METHODS split/replace treat a Regex object (ADR 0013) as a string. Oracle vs port: 'a1b2c'.split(r/\d/) a,b,c vs a1b2c; 'a1b'.replace(r/\d/,'-') a-b vs a1b. ADR 0013 territory; the replace filter's regex branch (str.replace(regex, new)) in k17 needs the same seam -- if k17 builds it, this card closes with it.
+
+Replace half fixed in 6e78d3b; 'a1b2c'.split(r/\d/) still differs, stays open.
