@@ -6,6 +6,7 @@ disallowedTools: Edit, Write, NotebookEdit
 briefing:
   skills:
     - text-nunjucks-core
+    - superpowers:verification-before-completion
     - kanban-issues-karr-ticket
 ---
 

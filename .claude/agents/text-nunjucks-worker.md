@@ -7,6 +7,9 @@ briefing:
     - text-nunjucks-core
     - getty-perl-core
     - getty-perl-moo
+    - getty-perl-pod
+    - feedback-loop-debugging
+    - superpowers:verification-before-completion
     - kanban-issues-karr-ticket
 ---
 
@@ -25,9 +28,6 @@ record a ticket (here or on another repo's board), that means a note on your car
 saying what and for which board; the dispatching agent files it.
 Never `git commit`: leave the tree commit-ready and report what changed and why, plus a proposed commit subject and
 `Changes` entry — commits belong to `text-nunjucks-release-manager`.
-
-Coordinate via `karr`: work the ticket you were given, record drift and newly found
-upstream surprises as new tickets rather than widening the change.
 
 ## What is true about this repo and written nowhere else
 

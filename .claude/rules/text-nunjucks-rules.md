@@ -15,14 +15,16 @@ upstream test file, before any Perl. "I know how Nunjucks works" is the dangerou
 
 | Task | Agent |
 |---|---|
+| Find out where something is, how upstream does it, what is missing (read-only) | `text-nunjucks-scout` |
 | Port / implement / refactor / debug behavior-relevant code | `text-nunjucks-worker` (default) |
 | Port upstream test suites, grow the corpus, reproduce fidelity bugs | `text-nunjucks-test-writer` |
 | Compare a ported module against its upstream file (read-only) | `text-nunjucks-fidelity-auditor` |
+| POD, README, the prose of a decided ADR | `text-nunjucks-doc-writer` |
 | Commits, `Changes`, card → done, pre-release audit | `text-nunjucks-release-manager` |
-| Read-only research, audit, gap analysis | `text-nunjucks-worker` ("read-only, change nothing") |
 
 Porting: worker → fidelity-auditor → worker → done; no audit means "looks right" beats "is 1:1".
-The main agent's lane also includes putting `decision` tickets in front of the maintainer.
+The fidelity-auditor is this team's reviewer. The main agent's lane also includes putting
+`decision` tickets in front of the maintainer.
 
 Behavior-relevant = `lib/`, `t/`, `xt/`, `maint/`, `cpanfile`, `dist.ini`; pure prose is not.
 
@@ -43,6 +45,16 @@ Behavior-relevant = `lib/`, `t/`, `xt/`, `maint/`, `cpanfile`, `dist.ini`; pure 
 - **`prove -lr t/`, never `prove -l t/`** — `t/upstream/` is a subdirectory the short form skips.
 - **Expected values are generated, never typed** — `maint/corpus-regen` writes `expected`.
 - **Open mappings are decided once, by ADR** — `decision` tickets need the maintainer, not a filter.
+
+## With superpowers
+
+A plan runs in this folder on this branch, no worktree, so the board stays here. Per task,
+one after another: `text-nunjucks-worker` (a test task: `-test-writer`, docs: `-doc-writer`)
+is told to skip the implementer prompt's commit step; `text-nunjucks-fidelity-auditor`
+reviews the uncommitted `git diff`; then `text-nunjucks-release-manager` commits. Never
+`general-purpose`: built-in agents get no briefing. Brainstorming and the plan stay with
+the main agent. Upstream's tests are ported, not invented: "test first" here means the
+ported upstream suite is in (as TODO) before the module is.
 
 ## Perl specifics — reference, don't restate
 

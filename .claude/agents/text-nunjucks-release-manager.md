@@ -5,6 +5,7 @@ model: sonnet
 briefing:
   skills:
     - getty-git-commit-style
+    - getty-git-usage
     - getty-perl-release-author-getty
     - perl-release-dist-ini
     - getty-perl-core
@@ -27,8 +28,9 @@ code goes back to the worker as a note on its card, not as your own fix. **Never
 1. `cpanfile` — every module `use`d under `lib/` is declared
    (`grep -rhoE '^use [A-Z][A-Za-z:]+' lib/ | sort -u`), test-only modules sit in
    `on test`, `perl` is `5.040` (ADR 0001).
-2. `dist.ini` — `[@Author::GETTY]`, no hand-set version, no `our $VERSION` anywhere in
-   `lib/`.
+2. `dist.ini` — `[@Author::GETTY]`, no hand-set version there; every module under `lib/`
+   and every executable carries the same `our $VERSION` (the bundle rewrites it at
+   release: `grep -rL 'our \$VERSION' lib/` must print nothing).
 3. `dzil build` and `dzil test` run clean, no warnings, no missing files.
 4. **The shipped suite must not need node.** Build the dist and check that nothing under
    the built `t/` references `upstream/` or `maint/oracle.js`; those belong to `xt/` and
