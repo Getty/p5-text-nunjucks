@@ -213,6 +213,22 @@
     }
   },
   {
+    "name": "native Array slice: a NaN bound is 0 (k55)",
+    "template": "{{ [1,2,3].slice(0, 'x')|join(',') }}|{{ [1,2,3].slice('x')|join(',') }}|{{ [1,2,3].slice('x', 2)|join(',') }}|{{ [1,2,3].slice(0, 0/0)|join(',') }}",
+    "expected": {
+      "ok": true,
+      "output": "|1,2,3|1,2|"
+    }
+  },
+  {
+    "name": "native Array slice: infinite and fractional bounds",
+    "template": "{{ [1,2,3].slice(1/0)|join(',') }}|{{ [1,2,3].slice(-1/0)|join(',') }}|{{ [1,2,3].slice(0, 1/0)|join(',') }}|{{ [1,2,3].slice(0, -1/0)|join(',') }}|{{ [1,2,3].slice(1.7, 2.9)|join(',') }}|{{ [1,2,3].slice(-1.5)|join(',') }}|{{ [1,2,3].slice(undefined, 2)|join(',') }}|{{ [1,2,3].slice(none, '2')|join(',') }}",
+    "expected": {
+      "ok": true,
+      "output": "|1,2,3|1,2,3||2|3|1,2|1,2"
+    }
+  },
+  {
     "name": "regex replacer: the named groups object iterates in group order (engine-built, ADR 0011)",
     "template": "{% macro f(m,a,b,p,s,g) %}{% for k, v in g %}{{k}}={{v}};{% endfor %}{% endmacro %}{{ 'ab'|replace(r/(?<z>a)(?<b>b)/, f) }}",
     "expected": {

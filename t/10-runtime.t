@@ -232,6 +232,15 @@ subtest 'member_lookup: arrays (incl. in-place mutators)' => sub {
   is( _call( [ 3, 1, 2 ], 'indexOf', 1 ),   1,  '{{ arr.indexOf(1) }}' );
   is( _call( [ 3, 1, 2 ], 'indexOf', '3' ), -1, q<{{ arr.indexOf('3') }} strict !== 3> );
   is( s_( _call( [ 1, 2, 3 ], 'slice', 1, 3 ) ),   '2,3',   '{{ arr.slice(1,3) }}' );
+  # oracle: [1,2,3].slice(0, 'x') -> [], .slice('x') -> 1,2,3, .slice(0, 0/0) -> [],
+  # .slice(1/0) -> [], .slice(0, 1/0) -> 1,2,3, .slice(-1.5) -> 3 -- ToIntegerOrInfinity (k55)
+  my $inf = 9**9**9;
+  is( s_( _call( [ 1, 2, 3 ], 'slice', 0, 'x' ) ),         '',      'a NaN end is 0' );
+  is( s_( _call( [ 1, 2, 3 ], 'slice', 'x' ) ),            '1,2,3', 'a NaN start is 0' );
+  is( s_( _call( [ 1, 2, 3 ], 'slice', 0, $inf / $inf ) ), '',      'NaN itself' );
+  is( s_( _call( [ 1, 2, 3 ], 'slice', $inf ) ),           '',      'an infinite start' );
+  is( s_( _call( [ 1, 2, 3 ], 'slice', 0, $inf ) ),        '1,2,3', 'an infinite end' );
+  is( s_( _call( [ 1, 2, 3 ], 'slice', -1.5 ) ),           '3',     'a fraction truncates toward 0' );
   is( s_( _call( [ 1, 2, 3 ], 'concat', [ 4, 5 ] ) ), '1,2,3,4,5', '{{ arr.concat([4,5]) }}' );
 
   # mutators change the underlying arrayref in place and return JS values

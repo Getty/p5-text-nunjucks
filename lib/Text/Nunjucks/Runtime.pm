@@ -1679,8 +1679,9 @@ sub _less_than {
 # count from the end). Strings slice through the Lib seams (ADR 0012).
 sub _slice_bounds {
   my ( $self, $len, $start, $end ) = @_;
-  $start = defined($start) ? int( $self->_to_number($start) ) : 0;
-  $end   = defined($end)   ? int( $self->_to_number($end) )   : $len;
+  # ToIntegerOrInfinity: NaN is 0, so [1,2,3].slice(0, 'x') is [] (oracle, k55)
+  $start = defined($start) ? Text::Nunjucks::Lib->_js_to_integer_or_infinity( $self->_to_number($start) ) : 0;
+  $end   = defined($end)   ? Text::Nunjucks::Lib->_js_to_integer_or_infinity( $self->_to_number($end) )   : $len;
   $start = $start < 0 ? ( $len + $start > 0 ? $len + $start : 0 ) : ( $start > $len ? $len : $start );
   $end   = $end < 0   ? ( $len + $end > 0   ? $len + $end   : 0 ) : ( $end > $len   ? $len : $end );
   return ( $start, $end );
