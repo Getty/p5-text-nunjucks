@@ -1,0 +1,17 @@
+---
+class: standard
+created: 2026-11-13T15:38:53Z
+id: 94
+priority: medium
+status: backlog
+tags:
+- decision
+- environment
+- loader
+title: 'Decision: duck-typed loaders (an object exposing only get_source) -- where
+  loader.cache lives'
+updated: 2026-11-13T15:38:53Z
+---
+
+Found while porting k19 (2026-11-13). Upstream tests/loader.js it 1 "should allow a simple loader to be created" and it 2 "should catch loader error" use constructors that are NOT Loader subclasses and only expose getSource (+ async). environment.js _initLoaders does `loader.cache = {}` on any object and `if (typeof loader.on === "function")`; getTemplate reads loader.cache[name]. In the port ADR 0016 has only a read seam for blessed objects; a non-subclass loader dies on ->cache in Environment::_init_loaders. ADR 0002 offers Loader.extend as subclassing but does not cover the duck-typed case.
+Options: (A) a loader without a cache method gets a plain slot in its blessed hash ($loader->{cache}) -- keeps upstream sharing of one loader across Environments, fails for non-hash objects; (B) a per-Environment table keyed by loader -- loses the cross-Environment sharing node shows; (C) require a cache accessor (subclass or role) -- the two upstream it()s change; (D) a general property-write seam in Runtime -- templates would see it, k47-level. Recommendation (worker): A. Until decided: t/upstream/loader.t it 1/2 stay TODO naming this card.
