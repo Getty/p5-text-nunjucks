@@ -1,0 +1,33 @@
+---
+class: standard
+completed: 2026-11-13T14:56:27Z
+created: 2026-09-22T05:00:31Z
+depends_on:
+- 18
+id: 35
+priority: high
+started: 2026-11-13T13:50:37Z
+status: done
+tags:
+- port
+- tests
+- upstream-suite
+title: Port tests/tests.js → t/upstream/tests.t (28 it)
+updated: 2026-11-13T14:56:28Z
+---
+
+Port upstream/nunjucks/tests/tests.js (the is-tests) to t/upstream/tests.t, oracle-grounded.
+
+From k17 job 1 (2026-11-13): Tests.pm lower/upper (lc/uc) warn on a lone surrogate (output still right); fix alongside the F3 lower/upper fix here (Runtime toUpperCase/toLowerCase use no warnings 'surrogate').
+
+Evidence from the k17 job 2 audit (2026-11-13): {{ 5 is lower }} oracle 'TypeError: value.toLowerCase is not a function', port false; {{ null is lower }} 'TypeError: Cannot read properties of null (reading 'toLowerCase')' vs false; {{ [] is upper }} 'TypeError: value.toUpperCase is not a function' vs false. Since k17 job 2 there are seams for it: Lib js_to_lower_case/js_to_upper_case (JS case mapping, Final_Sigma) and Runtime js_method_call($value, 'value', 'toLowerCase') for V8's TypeError texts.
+
+From the k17 job 3 audit (2026-11-13), pre-existing (checked at HEAD): {{ r/a/ is mapping }} oracle true, port false (upstream mapping is typeof value === 'object', covers regexes and blessed objects); {{ m() is iterable }} with m() a macro (SafeString) oracle true, port false (upstream !!value[Symbol.iterator], inherited from String.prototype; related k60). Tests::mapping's _is_ordered_hash branch is redundant since k17 job 3 widened Lib::is_object (harmless).
+
+Promoted from backlog on the maintainer's instruction (2026-11-13): worked together with k18.
+
+test-writer: t/upstream/tests.t ported, 28/28 it(); every upstream assertion passes today; Map/Set/generator assertions TODO k44 (4 it(), 1 nested block each). Corpus t/corpus/render-tests-globals.json (188 oracle cases, 69 todo): k35 evidence confirmed (lower/upper TypeError, mapping regex, iterable macro/SafeString); NEW: null/undefined is iterable throws TypeError upstream, port says false. Filed k90 (compiler dies on '1 is not (equalto(2))').
+
+test-writer 2026-11-13: tests.t mapping it(): assertion order was already upstream's (Map first, then {}); added an explicit order comment only.
+
+Committed in 871bd91
