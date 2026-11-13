@@ -50,3 +50,31 @@ character strings; the code-unit count is computed, not stored.
   on strings), which reckon in the same code units.
 - Reversible only by a maintainer decision to accept an astral-plane divergence
   (option a); the corpus pins the UTF-16 cases in render mode once filters land.
+
+## Implementation (k17)
+
+How the decision was carried out; the decision above is unchanged.
+
+- **Seams.** `Text::Nunjucks::Lib` holds `js_string_length`, `js_char_at`,
+  `js_string_slice`, `js_substring`, `js_substr`, `js_string_index_of`,
+  `js_string_last_index_of`, `js_split`, `js_string_compare` and
+  `js_string_append`. Strings stay ordinary Perl character strings; the
+  code-unit view is computed per call (an astral character is spelled as its two
+  surrogate characters for the operation, and valid pairs are re-joined in the
+  result).
+- **Invariant.** No string the engine builds holds a valid surrogate pair as two
+  surrogate characters; a pair is always the one astral character. Every join
+  point — template `~` and `+`, String `concat` and `replace`, Array `join`,
+  `repeat`, the output buffer, blocks, includes, extensions, `asyncAll` — goes
+  through `js_string_append`, which re-pairs a lone high surrogate at the end of
+  one string with a lone low surrogate at the start of the next, as JS
+  concatenation does. So Perl `eq` and hash keys agree with JS `==`, `===` and
+  object keys. A caller string that spells a pair as two surrogate characters is
+  outside the invariant; the seams still treat both spellings alike.
+- **Corpus.** Lone surrogates cannot travel through the oracle corpus JSON:
+  Perl's JSON decoders reject `"\ud83d"`. `maint/corpus-regen` refuses a case
+  that holds one, so they are tested indirectly (through a result that re-pairs
+  or a length) or in Perl-side unit tests.
+- **`js_reverse`.** Satisfied without a dedicated function: upstream's `reverse`
+  filter is `split('')`, Array `reverse`, `join('')`, and each step is already a
+  seam.

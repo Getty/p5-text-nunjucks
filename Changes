@@ -11,6 +11,14 @@ Revision history for Text-Nunjucks
       with path resolution, and the built-in "is" tests (Tests) are in.
     - Every deliberate difference from Nunjucks is recorded as an ADR in
       docs/adr/.
+    - JS string operations count UTF-16 code units as upstream does (ADR
+      0012): string index and .length, the String methods (with new substr
+      and lastIndexOf), Array sort, SafeString length, "<" and ">", "in",
+      and for loops over strings.
+    - Every string join (template "~" and "+", concat, replace, Array join,
+      repeat, the output buffer, blocks, includes, extensions, asyncAll)
+      re-pairs a lone high and low surrogate where two strings meet, as JS
+      concatenation does.
     - The test suite ports the upstream compiler, lexer, parser and runtime
       suites and runs a corpus of cases generated from the real Nunjucks.
     - Not yet ported: the built-in filters; their upstream tests are

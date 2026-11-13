@@ -315,6 +315,29 @@ subtest 'member_lookup: SafeString is a String OBJECT, not a primitive (F1)' => 
   is( $R->member_lookup( 'abc', 0 ), 'a', '{{ s[0] }} on a plain string -> char' );
 };
 
+# The corpus case "case mapping does not die on a lone surrogate" cannot see a
+# warning; Perl's uc/lc warn on a surrogate ("returns its argument for UTF-16
+# surrogate"), JS maps it to itself silently (node: '\ud83d'.toUpperCase()).
+subtest 'member_lookup: case mapping a lone surrogate does not warn (ADR 0012)' => sub {
+  my @warnings;
+  local $SIG{__WARN__} = sub { push @warnings, @_ };
+  is( _call( "\x{D83D}", 'toUpperCase' ), "\x{D83D}", 'toUpperCase maps a lone high surrogate to itself' );
+  is( _call( "\x{DE00}", 'toLowerCase' ), "\x{DE00}", 'toLowerCase maps a lone low surrogate to itself' );
+  is_deeply( \@warnings, [], 'no warning' );
+};
+
+# {% for c in s %} indexes s through _for_code_units: the code units of a
+# primitive string, split once (ADR 0012); the loop's results are pinned by the
+# corpus, this pins what passes through untouched.
+subtest '_for_code_units: only a primitive string becomes its code units' => sub {
+  is_deeply( $R->_for_code_units("\x{1F600}a"), [ "\x{D83D}", "\x{DE00}", 'a' ], 'string -> code units' );
+  my $arr = [ 1, 2 ];
+  is( $R->_for_code_units($arr), $arr, 'an array passes through as itself' );
+  my $ss = $R->SafeString->new('ab');
+  is( $R->_for_code_units($ss), $ss, 'a SafeString (a String object) passes through' );
+  is( $R->_for_code_units(5), 5, 'a number passes through' );
+};
+
 #### callWrap / kwargs / macros -- ADR 0009
 
 subtest 'callWrap error text and dispatch' => sub {
@@ -435,6 +458,8 @@ subtest 'SafeString / markSafe / copySafeness' => sub {
   ok( $R->_is_safe_string($ss), 'SafeString recognised' );
   is( $ss->val,    'hi', 'val' );
   is( $ss->length, 2,    'length' );
+  # this.length = val.length, in UTF-16 code units (ADR 0012; oracle: 'héllo😀'|safe has length 7)
+  is( $R->SafeString->new("h\x{E9}llo\x{1F600}")->length, 7, 'length counts UTF-16 code units' );
   is( "$ss",       'hi', 'stringification overload' );
   # non-string passes through unchanged (JS: new SafeString(5) === 5)
   is( $R->SafeString->new(5), 5, 'SafeString(non-string) returns the value' );

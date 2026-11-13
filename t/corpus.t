@@ -35,6 +35,22 @@ BEGIN {
 # typed by hand. Until the port implements a mode, its cases run as TODO -- so
 # this file stays green on an unimplemented port and turns real as each stage
 # lands. A TODO test that starts passing is a signal to drop the TODO.
+#
+# Per-case TODO: a case may carry "todo": "<reason, naming the ticket>". It is
+# committed with its oracle-generated "expected" like any other case and runs
+# as a TODO test with that reason -- for a case whose filter is not ported yet
+# or whose mapping awaits a maintainer decision. maint/corpus-regen keeps the
+# key (and never sends it to the oracle). When prove reports the case as a
+# passing TODO, delete its "todo".
+#
+# Lone surrogates cannot be committed: the oracle's JSON.stringify writes one as
+# a "\ud83d" escape, and Perl's JSON decoders (Cpanel::JSON::XS, JSON::PP)
+# reject it, so maint/corpus-regen refuses a case whose input or expected holds
+# one. Observe lone surrogates indirectly (.length, indexOf, loop counts).
+
+# Cases are decoded text and a failure's diagnostics print them, so the TAP
+# handles speak UTF-8 (else "Wide character in print" on non-ASCII cases).
+binmode( Test::More->builder->$_, ':encoding(UTF-8)' ) for qw( output failure_output todo_output );
 
 my $DECODE = JSON::MaybeXS->new( utf8 => 1, allow_nonref => 1 );
 my $CANON  = JSON::MaybeXS->new(
@@ -219,14 +235,40 @@ for my $file (@files) {
       next;
     }
 
-    my $got = eval { $m->{run}->($case) };
-    if ( my $err = $@ ) {
-      fail($title);
-      diag("runner died: $err");
-      next;
+    TODO: {
+      local $TODO = $case->{todo};    # per-case marker; undef runs the case for real
+      check_case( $m, $case, $title );
     }
-    is( canon($got), canon( $case->{expected} ), $title );
   }
+}
+
+sub check_case {
+  my ( $m, $case, $title ) = @_;
+  my $got = eval { $m->{run}->($case) };
+  if ( my $err = $@ ) {
+    fail($title);
+    diag("runner died: $err");
+    return;
+  }
+  # A result holding a surrogate character (a lone one, or a pair the port left
+  # unjoined) has no JSON form; the expected side never holds one (see above).
+  my $got_json = eval { canon($got) };
+  if ( !defined $got_json ) {
+    fail($title);
+    diag( 'result has no JSON form (surrogate characters?): '
+        . canon( surrogates_visible($got) ) );
+    return;
+  }
+  is( $got_json, canon( $case->{expected} ), $title );
+}
+
+# Copy of a result with each surrogate character spelled <U+D83D>, for a diag.
+sub surrogates_visible {
+  my ($v) = @_;
+  return [ map { surrogates_visible($_) } @$v ] if ref $v eq 'ARRAY';
+  return { map { $_ => surrogates_visible( $v->{$_} ) } keys %$v } if ref $v eq 'HASH';
+  return $v if ref $v || !defined $v;
+  return $v =~ s/([\x{D800}-\x{DFFF}])/sprintf( '<U+%04X>', ord $1 )/ger;
 }
 
 done_testing;

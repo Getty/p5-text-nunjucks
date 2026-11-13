@@ -54,6 +54,18 @@ Filters: `'3.7'|int` → `3` · `'x'|int` → empty · `'3.7abc'|float` → `3.7
 
 On `'héllo😀'`: `length` → `7`, `s.length` → `7`, `s[1]` → `é`, `reverse` →
 splits the surrogate pair into two lone surrogates.
+On `t = 'a😀b😀c'`: `t.indexOf('b')` → `3` · `t.lastIndexOf('😀', 3)` → `1` ·
+`t.split('').length` → `7` · `''.split('')` → `[]` but `''.split(',')` → `['']` ·
+`'abc'.substr(0, -1)` → `''` · `'！' < '😀'` → `false` (code units: U+FF01 >
+U+D83D) · `{% for c in '😀ab' %}` runs 4 times. Seams: `Lib` `js_*` (ADR 0012).
+With `e = '😀ab'`, `e[0]` and `e[1]` are the two lone halves of the pair. Glued
+back together by `~`, `+`, `.concat()`, `replace`, Array `join` or the output
+buffer they are the pair again: `(e[0] ~ e[1]) == '😀'` and `=== '😀'` →
+`true`, `d[e[0] ~ e[1]]` with `d = {'😀': 'hit'}` → `hit`, `{{ e[0] }}{{ e[1] }}`
+outputs `😀`. Decided by ADR 0012: every join goes through `Lib`
+`js_string_append`, which re-pairs a lone high + lone low surrogate where two
+strings meet (and only there), so no string holds a pair as two surrogate
+characters and Perl `eq` and hash keys agree with JS.
 
 ## Native JS members from templates — decided, ADR 0008
 

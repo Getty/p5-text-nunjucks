@@ -308,9 +308,11 @@ package Text::Nunjucks::Compiler::Compiler {
       : 1;
     my $ae = $autoescape ? '1' : '0';
 
+    # `buffer += ...` is Runtime js_string_append throughout: JS's buffer joins
+    # code units, so it re-pairs two halves of a surrogate pair (ADR 0012).
     if ( !$async ) {
-      $self->_emit( '$' . $self->buffer . ' = $' . $self->buffer
-          . ' . $runtime->_js_to_string($runtime->suppress_value(' );
+      $self->_emit( '$runtime->js_string_append($' . $self->buffer
+          . ', $runtime->_js_to_string($runtime->suppress_value(' );
     }
 
     $self->_emit( '$env->get_extension(' . $self->_quote( $node->extName )
@@ -368,15 +370,14 @@ package Text::Nunjucks::Compiler::Compiler {
     if ($async) {
       my $res = $self->_tmpid;
       $self->_emit_line( ', ' . $self->_make_callback($res) );
-      $self->_emit_line( '$' . $self->buffer
-          . ' = $' . $self->buffer
-          . ' . $runtime->_js_to_string($runtime->suppress_value($'
-          . $res . ', ' . $ae . ' && $env->opts->{autoescape}));' );
+      $self->_emit_line( '$runtime->js_string_append($' . $self->buffer
+          . ', $runtime->_js_to_string($runtime->suppress_value($'
+          . $res . ', ' . $ae . ' && $env->opts->{autoescape})));' );
       $self->_add_scope_level;
     }
     else {
       $self->_emit(')');
-      $self->_emit( ', ' . $ae . " && \$env->opts->{autoescape}));\n" );
+      $self->_emit( ', ' . $ae . " && \$env->opts->{autoescape})));\n" );
     }
   }
 
@@ -978,6 +979,9 @@ package Text::Nunjucks::Compiler::Compiler {
       my $v = $self->_tmpid;
       $frame->set( $node->name->value, $v );
 
+      # A string is indexed through its code units, split once rather than
+      # measured per element (ADR 0012); the loop below keeps upstream's shape.
+      $self->_emit_line( '$' . $arr . ' = $runtime->_for_code_units($' . $arr . ');' );
       $self->_emit_line( '$' . $len . ' = $runtime->member_lookup($' . $arr . ', "length");' );
       $self->_emit_line( 'for(my $' . $i . '=0; defined($' . $len . ') && $' . $i . ' < $' . $len . '; $' . $i . '++) {' );
       $self->_emit_line( 'my $' . $v . ' = $runtime->member_lookup($' . $arr . ', $' . $i . ');' );
@@ -1064,8 +1068,7 @@ package Text::Nunjucks::Compiler::Compiler {
     $self->_add_scope_level;
 
     if ($parallel) {
-      $self->_emit_line(
-        '$' . $self->buffer . ' = $' . $self->buffer . ' . $' . $output . ';' );
+      $self->_emit_line( '$runtime->js_string_append($' . $self->buffer . ', $' . $output . ');' );
     }
 
     if ( $node->else_ ) {
@@ -1286,7 +1289,7 @@ package Text::Nunjucks::Compiler::Compiler {
       $self->_emit(')');
     }
     $self->_emit_line( '->($env, $context, $frame, $runtime, ' . $self->_make_callback($id) );
-    $self->_emit_line( '$' . $self->buffer . ' = $' . $self->buffer . ' . $' . $id . ';' );
+    $self->_emit_line( '$runtime->js_string_append($' . $self->buffer . ', $' . $id . ');' );
     $self->_add_scope_level;
   }
 
@@ -1337,7 +1340,7 @@ package Text::Nunjucks::Compiler::Compiler {
 
     $self->_emit_line('push @tasks, sub {');
     $self->_emit_line('my ($result, $callback) = @_;');
-    $self->_emit_line( '$' . $self->buffer . ' = $' . $self->buffer . ' . $result;' );
+    $self->_emit_line( '$runtime->js_string_append($' . $self->buffer . ', $result);' );
     $self->_emit_line('$callback->(undef);');
     $self->_emit_line('};');
     $self->_emit_line('$env->waterfall(\@tasks, sub {');
@@ -1372,23 +1375,24 @@ package Text::Nunjucks::Compiler::Compiler {
       if ( $child->isa( $self->node('TemplateData') ) ) {
         my $val = $child->value;
         if ( defined($val) && length($val) ) {    # JS if(child.value): "" falsy, "0" truthy
-          $self->_emit( '$' . $buffer . ' = $' . $buffer . ' . ' );
+          $self->_emit( '$runtime->js_string_append($' . $buffer . ', ' );
           $self->compile_literal($child);
-          $self->_emit_line(';');
+          $self->_emit_line(');');
         }
       }
       else {
         # forward note (k14 audit): the append goes through _js_to_string so a
         # raw value from suppress_value (autoescape off) uses number_to_string.
-        $self->_emit( '$' . $buffer . ' = $' . $buffer
-            . ' . $runtime->_js_to_string($runtime->suppress_value(' );
+        # `buffer += ...` is js_string_append: it joins in code units (ADR 0012).
+        $self->_emit( '$runtime->js_string_append($' . $buffer
+            . ', $runtime->_js_to_string($runtime->suppress_value(' );
         $self->_emit('$runtime->ensure_defined(') if $self->throw_on_undefined;
         $self->compile( $child, $frame );
         $self->_emit( ', '
             . $self->_num_or_undef( $node->lineno ) . ', '
             . $self->_num_or_undef( $node->colno ) . ')' )
           if $self->throw_on_undefined;
-        $self->_emit( ", \$env->opts->{autoescape}));\n" );
+        $self->_emit( ", \$env->opts->{autoescape})));\n" );
       }
     }
   }

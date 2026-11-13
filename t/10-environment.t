@@ -98,6 +98,56 @@ subtest 'extensions add / has / get / remove' => sub {
   is_deeply( $env->extensions_list, [], 'extensions_list emptied' );
 };
 
+#### the output buffer joins in UTF-16 code units (ADR 0012)
+
+# Every `buffer += value` the compiler emits is Runtime js_string_append, which
+# re-pairs a lone high surrogate at the buffer's end with a lone low one at the
+# start of what is appended. t/corpus/render-strings-utf16.json pins the
+# expression, block, include, caller, asyncEach and asyncAll appends; a lone
+# surrogate in a template literal or an extension's result has no JSON form, so
+# those appends are asserted here, each confirmed in node.
+{
+  package T::LoExtension;    # {% lo 1 %}: CallExtension(Async) whose run gives a lone low surrogate
+  sub new        { my ( $class, $async ) = @_; bless { async => $async }, $class }
+  sub tags       { ['lo'] }
+  sub autoescape { undef }
+  sub __name     { my $self = shift; $self->{__name} = shift if @_; return $self->{__name} }
+  sub parse {
+    my ( $self, $parser, $nodes ) = @_;
+    my $tok  = $parser->next_token;
+    my $args = $parser->parse_signature( undef, 1 );
+    $parser->advance_after_block_end( $tok->value );
+    my $class = $nodes . '::' . ( $self->{async} ? 'CallExtensionAsync' : 'CallExtension' );
+    return $class->new( $self, 'run', $args );
+  }
+  sub run {
+    my ( $self, $context, @args ) = @_;
+    return "\x{DE00}" unless $self->{async};
+    my $cb = pop @args;
+    $cb->( undef, "\x{DE00}" );
+    return;
+  }
+}
+
+subtest 'output appends re-pair a split surrogate pair' => sub {
+  my $em = "\x{1F600}";
+  # node: renderString('{{ hi }}\ude00x', {hi: '\ud83d'}) -> d83d de00 78, 2 code points
+  is( Text::Nunjucks::Environment->new->render_string( "{{ hi }}\x{DE00}x", { hi => "\x{D83D}" } ),
+    "${em}x", 'a template literal starting with a low surrogate' );
+  # node: renderString('a\ud83d{{ lo }}', {lo: '\ude00'}) -> 61 d83d de00
+  is( Text::Nunjucks::Environment->new->render_string( "a\x{D83D}{{ lo }}", { lo => "\x{DE00}" } ),
+    "a${em}", 'an expression after a literal ending in a high surrogate' );
+
+  # node: an extension {% lo 1 %} whose run returns '\ude00' (sync) or cb(null,
+  # '\ude00') (CallExtensionAsync) after {{ hi }}: d83d de00 78 either way
+  for my $async ( 0, 1 ) {
+    my $env = Text::Nunjucks::Environment->new;
+    $env->add_extension( 'E', T::LoExtension->new($async) );
+    is( $env->render_string( '{{ hi }}{% lo 1 %}x', { hi => "\x{D83D}" } ),
+      "${em}x", ( $async ? 'CallExtensionAsync' : 'CallExtension' ) . ' result' );
+  }
+};
+
 #### loader event surface (on/emit): loader emits -> Environment re-emits
 
 subtest 'loader on/emit propagates to the Environment' => sub {

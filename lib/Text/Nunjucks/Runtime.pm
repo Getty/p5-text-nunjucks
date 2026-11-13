@@ -323,11 +323,10 @@ package Text::Nunjucks::Runtime::SafeString {
     my ( $class, $val ) = @_;
     # if (typeof val !== 'string') return val;  -- non-strings pass through
     return $val unless Text::Nunjucks::Lib->is_string($val);
-    return bless { val => $val, length => CORE::length($val) }, $class;
+    # this.length = val.length -- in UTF-16 code units (ADR 0012)
+    return bless { val => $val, length => Text::Nunjucks::Lib->js_string_length($val) }, $class;
   }
 
-  # length is a live property in JS; code-points here, ADR 0012 requires UTF-16
-  # code units -- retrofitted in k17 (filters)
   sub val       { $_[0]->{val} }
   sub length    { $_[0]->{length} }
   sub value_of  { $_[0]->{val} }    # SafeString.prototype.valueOf
@@ -678,9 +677,8 @@ sub ensure_defined {
 # back as a closure bound to the owner). Perl scalars/arrays have no such
 # members, so ADR 0008 makes this a curated, in-place emulated String / Array /
 # Number surface -- grown on demand, each entry oracle-verified. String
-# indexing / .length / slice / charAt / split('')/ reverse here use Perl
-# code-points; ADR 0012 requires UTF-16 code units -- retrofitted in k17
-# (filters), when the js-utf16 seams and all their consumers land in one pass.
+# indexing, .length and the string methods reckon in UTF-16 code units through
+# the Lib seams of ADR 0012; ToNumber / ToString of their arguments stay here.
 #
 # ADR 0016 split: this function is the PROPERTY-ACCESS seam
 # (`member_lookup($obj, $key)` returns the value the template would see at
@@ -689,8 +687,9 @@ sub ensure_defined {
 # (compile_lookup_val vs compile_fun_call -> the latter on a LookupVal name).
 
 my %STRING_METHODS = (
-  toUpperCase => sub { my ( $self, $s ) = @_; uc $s },
-  toLowerCase => sub { my ( $self, $s ) = @_; lc $s },
+  # a lone surrogate (ADR 0012) maps to itself, as in JS; Perl would warn
+  toUpperCase => sub { my ( $self, $s ) = @_; no warnings 'surrogate'; uc $s },
+  toLowerCase => sub { my ( $self, $s ) = @_; no warnings 'surrogate'; lc $s },
   trim => sub {
     my ( $self, $s ) = @_;
     my $ws = Text::Nunjucks::Lib->js_whitespace_class;    # ADR 0005 seam
@@ -704,56 +703,55 @@ my %STRING_METHODS = (
     my ( $self, $s, $pattern, $repl ) = @_;
     $pattern = $self->_js_to_string($pattern);
     $repl    = $self->_js_to_string($repl);
-    my $idx = index( $s, $pattern );
+    my $idx = Text::Nunjucks::Lib->js_string_index_of( $s, $pattern );
     return $s if $idx < 0;
-    return substr( $s, 0, $idx ) . $repl . substr( $s, $idx + length($pattern) );
+    # preceding + replacement + following, joined in code units (ADR 0012)
+    my $out = Text::Nunjucks::Lib->js_substring( $s, 0, $idx );
+    Text::Nunjucks::Lib->js_string_append( $out, $repl );
+    Text::Nunjucks::Lib->js_string_append( $out,
+      Text::Nunjucks::Lib->js_substring( $s, $idx + Text::Nunjucks::Lib->js_string_length($pattern) ) );
+    return $out;
   },
   slice => sub {
     my ( $self, $s, $start, $end ) = @_;
-    my $len = length $s;
-    ( $start, $end ) = $self->_slice_bounds( $len, $start, $end );
-    return '' if $start >= $end;
-    return substr( $s, $start, $end - $start );
+    return Text::Nunjucks::Lib->js_string_slice( $s,
+      $self->_to_number_or_undef($start), $self->_to_number_or_undef($end) );
   },
   substring => sub {
     my ( $self, $s, $start, $end ) = @_;
-    my $len = length $s;
-    $start = defined($start) ? int( $self->_to_number($start) ) : 0;
-    $end   = defined($end)   ? int( $self->_to_number($end) )   : $len;
-    $start = 0    if $start < 0;
-    $start = $len if $start > $len;
-    $end   = 0    if $end < 0;
-    $end   = $len if $end > $len;
-    ( $start, $end ) = ( $end, $start ) if $start > $end;
-    return substr( $s, $start, $end - $start );
+    return Text::Nunjucks::Lib->js_substring( $s,
+      $self->_to_number_or_undef($start), $self->_to_number_or_undef($end) );
+  },
+  substr => sub {
+    my ( $self, $s, $start, $length ) = @_;
+    return Text::Nunjucks::Lib->js_substr( $s,
+      $self->_to_number_or_undef($start), $self->_to_number_or_undef($length) );
   },
   split => sub {
     my ( $self, $s, $sep, $limit ) = @_;
-    return [$s] unless defined $sep;             # split() -> [whole string]
-    $sep = $self->_js_to_string($sep);
-    my @parts = $sep eq '' ? ( split //, $s ) : ( split /\Q$sep\E/, $s, -1 );
-    if ( defined $limit ) {
-      my $l = int( $self->_to_number($limit) );
-      @parts = @parts[ 0 .. $l - 1 ] if $l >= 0 && $l < scalar @parts;
-    }
-    return \@parts;
+    # ToString(separator) unless undefined (split() -> [whole string]); a null
+    # separator is the string 'null'
+    return Text::Nunjucks::Lib->js_split( $s,
+      defined($sep) ? $self->_js_to_string($sep) : undef, $self->_to_number_or_undef($limit) );
   },
   indexOf => sub {
     my ( $self, $s, $search, $from ) = @_;
-    $search = $self->_js_to_string($search);
-    return defined($from)
-      ? index( $s, $search, int( $self->_to_number($from) ) )
-      : index( $s, $search );
+    return Text::Nunjucks::Lib->js_string_index_of( $s,
+      $self->_js_to_string($search), $self->_to_number_or_undef($from) );
+  },
+  lastIndexOf => sub {
+    my ( $self, $s, $search, $from ) = @_;
+    return Text::Nunjucks::Lib->js_string_last_index_of( $s,
+      $self->_js_to_string($search), $self->_to_number_or_undef($from) );
   },
   charAt => sub {
     my ( $self, $s, $i ) = @_;
-    $i = defined($i) ? int( $self->_to_number($i) ) : 0;
-    return '' if $i < 0 || $i >= length($s);
-    return substr( $s, $i, 1 );
+    return Text::Nunjucks::Lib->js_char_at( $s, $self->_to_number_or_undef($i) );
   },
   concat => sub {
     my ( $self, $s, @args ) = @_;
-    return $s . join( '', map { $self->_js_to_string($_) } @args );
+    Text::Nunjucks::Lib->js_string_append( $s, $self->_js_to_string($_) ) for @args;    # ADR 0012
+    return $s;
   },
 );
 
@@ -805,9 +803,12 @@ my %ARRAY_METHODS = (
     return scalar @$arr;
   },
   sort => sub {
-    # JS Array.sort() with no comparator sorts by the String form of elements.
+    # JS Array.sort() with no comparator sorts by the String form of elements,
+    # in UTF-16 code-unit order (ADR 0012).
     my ( $self, $arr ) = @_;
-    @$arr = sort { $self->_js_to_string($a) cmp $self->_js_to_string($b) } @$arr;
+    @$arr = sort {
+      Text::Nunjucks::Lib->js_string_compare( $self->_js_to_string($a), $self->_js_to_string($b) )
+    } @$arr;
     return $arr;
   },
   reverse => sub {
@@ -870,12 +871,15 @@ sub member_lookup {
     # String OBJECT -- length + methods but NO index access (oracle: on a
     # SafeString `s[0]` and `s['0']` render ''). So gate indexing to plain
     # strings only, never $str_target (the SafeString case).
+    # Index and length count UTF-16 code units (ADR 0012): s[i] past an astral
+    # character lands one further, and inside one yields a lone surrogate. One
+    # charAt call measures the string once; its '' (a code unit is never empty)
+    # is the index past the end, where s[i] is undefined.
     if ( !defined($str_target) && $self->_is_index_key($key) ) {
-      my $i = 0 + $key;
-      return undef if $i >= length($s);
-      return substr( $s, $i, 1 );
+      my $unit = Text::Nunjucks::Lib->js_char_at( $s, 0 + $key );
+      return $unit eq '' ? undef : $unit;
     }
-    return length($s) if $key eq 'length';
+    return Text::Nunjucks::Lib->js_string_length($s) if $key eq 'length';
     if ( $STRING_METHODS{$key} ) {               # ADR 0016: method on FunCall seam
       return sub { $STRING_METHODS{$key}->( $self, $s, @_ ) };
     }
@@ -1065,7 +1069,10 @@ sub async_all {
     $output_arr[$i] = $output;
 
     if ( $finished == $len ) {
-      $cb->( undef, join( '', map { defined($_) ? $_ : '' } @output_arr ) );
+      # outputArr.join(''), joined in code units (ADR 0012)
+      my $joined = '';
+      Text::Nunjucks::Lib->js_string_append( $joined, defined($_) ? $_ : '' ) for @output_arr;
+      $cb->( undef, $joined );
     }
   };
 
@@ -1134,6 +1141,25 @@ sub in_operator {
   return Text::Nunjucks::Lib->in_operator( $key, $val );
 }
 
+#### string seams the compiled code calls (ADR 0012) -- port additions
+
+# The output buffer: every `buffer += value` the compiler emits is this call, so
+# two halves of a pair written one after the other come out as the one astral
+# character, as they do in JS's buffer. The buffer is passed on aliased ($_[1]
+# after the shift), so Lib appends to the template's variable in place.
+sub js_string_append { shift; Text::Nunjucks::Lib->js_string_append(@_) }
+
+# The single-name {% for %} reads arr.length once and arr[i] per element. On a
+# primitive string both are code-unit operations that measure the whole string,
+# so per element they would make the loop O(n^2); the loop indexes the string's
+# split('') array instead -- the same length and the same arr[i] for every i, as
+# a string cannot change under the loop. Anything else passes through, a
+# SafeString included (a String object: its arr[i] is undefined, not a unit).
+sub _for_code_units {
+  my ( $self, $arr ) = @_;
+  return Text::Nunjucks::Lib->is_string($arr) ? Text::Nunjucks::Lib->js_split( $arr, '' ) : $arr;
+}
+
 #### ------------------------------------------------------------------------
 #### JS value model: ToNumber / ToPrimitive / ToString, truthiness (ADR 0007,
 #### 0006, 0001). Port additions -- Perl's native operators lack JS semantics.
@@ -1182,12 +1208,19 @@ sub _js_to_string {
   return '[object Object]';    # object / other ref (overloaded objects: k8)
 }
 
-# Array.prototype.join: null/undefined elements become '' (not "null").
+# Array.prototype.join: null/undefined elements become '' (not "null"); the
+# pieces are joined in code units (ADR 0012), so split('').join('') restores
+# a string whose astral characters split() cut into halves.
 sub _array_join {
   my ( $self, $arr, $sep ) = @_;
-  return join( $sep,
-    map { ( !defined($_) || $self->_is_none($_) ) ? '' : $self->_js_to_string($_) }
-    @$arr );
+  my $out = '';
+  for my $i ( 0 .. $#$arr ) {
+    my $v = $arr->[$i];
+    Text::Nunjucks::Lib->js_string_append( $out, $sep ) if $i > 0;
+    Text::Nunjucks::Lib->js_string_append( $out,
+      ( !defined($v) || $self->_is_none($v) ) ? '' : $self->_js_to_string($v) );
+  }
+  return $out;
 }
 
 sub _to_primitive {
@@ -1243,15 +1276,20 @@ sub op_add {
   my $pb = $self->_to_primitive($b);
   # JS +: string concat if either primitive is a string, else numeric add.
   if ( Text::Nunjucks::Lib->is_string($pa) || Text::Nunjucks::Lib->is_string($pb) ) {
-    return $self->_js_to_string($pa) . $self->_js_to_string($pb);
+    my $s = $self->_js_to_string($pa);
+    Text::Nunjucks::Lib->js_string_append( $s, $self->_js_to_string($pb) );    # ADR 0012
+    return $s;
   }
   return $self->_dbl( $self->_to_number($pa) + $self->_to_number($pb) );
 }
 
-# `~` operator -- compiler emits `a + "" + b`, i.e. String(a) . String(b).
+# `~` operator -- compiler emits `a + "" + b`, i.e. String(a) . String(b),
+# joined in code units (ADR 0012).
 sub op_concat {
   my ( $self, $a, $b ) = @_;
-  return $self->_js_to_string($a) . $self->_js_to_string($b);
+  my $s = $self->_js_to_string($a);
+  Text::Nunjucks::Lib->js_string_append( $s, $self->_js_to_string($b) );
+  return $s;
 }
 
 sub op_sub { my ( $self, $a, $b ) = @_; $self->_dbl( $self->_to_number($a) - $self->_to_number($b) ) }
@@ -1367,7 +1405,7 @@ sub _less_than {
   my $py = $self->_to_primitive($y);
 
   if ( $self->_js_type($px) eq 'string' && $self->_js_type($py) eq 'string' ) {
-    return ( $px lt $py ) ? 1 : 0;      # code-point compare; ADR 0012 (UTF-16) retrofit in k17
+    return Text::Nunjucks::Lib->js_string_compare( $px, $py ) < 0 ? 1 : 0;   # code units (ADR 0012)
   }
 
   my $nx = $self->_to_number($px);
@@ -1378,8 +1416,8 @@ sub _less_than {
 
 #### helpers for the emulated member surface
 
-# JS uses ToInteger on slice/substring bounds; this clamps like Array/String
-# slice (negatives count from the end).
+# JS uses ToInteger on slice bounds; this clamps like Array slice (negatives
+# count from the end). Strings slice through the Lib seams (ADR 0012).
 sub _slice_bounds {
   my ( $self, $len, $start, $end ) = @_;
   $start = defined($start) ? int( $self->_to_number($start) ) : 0;
@@ -1387,6 +1425,14 @@ sub _slice_bounds {
   $start = $start < 0 ? ( $len + $start > 0 ? $len + $start : 0 ) : ( $start > $len ? $len : $start );
   $end   = $end < 0   ? ( $len + $end > 0   ? $len + $end   : 0 ) : ( $end > $len   ? $len : $end );
   return ( $start, $end );
+}
+
+# ToNumber of an optional numeric method argument, keeping JS `undefined` as
+# undef: the Lib string seams (ADR 0012) give undefined its per-parameter
+# meaning (slice's end -> length, lastIndexOf's position -> +Infinity, ...).
+sub _to_number_or_undef {
+  my ( $self, $v ) = @_;
+  return defined($v) ? $self->_to_number($v) : undef;
 }
 
 # The JS string key that `obj[val]` uses to look a member up.

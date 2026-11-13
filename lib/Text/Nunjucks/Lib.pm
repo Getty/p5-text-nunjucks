@@ -7,6 +7,7 @@ use strict;
 use warnings;
 use builtin qw( is_bool created_as_number true false );
 use Carp qw( croak );
+use POSIX ();
 use Scalar::Util qw( blessed refaddr );
 use Text::Nunjucks::Lib::TemplateError;
 use Text::Nunjucks::Lib::Error;
@@ -196,8 +197,8 @@ sub to_array {
   my ( $self, $obj ) = @_;
   # Array.prototype.slice.call(obj) -- realistic use is a shallow arrayref copy
   return [ @$obj ] if ref($obj) eq 'ARRAY';
-  # slice.call(string) -> chars (k5: codepoints here, not UTF-16 units)
-  return [ split //, $obj ] if $self->is_string($obj);
+  # slice.call(string) -> its UTF-16 code units, the same list as split('')
+  return $self->js_split( $obj, '' ) if $self->is_string($obj);
   return [];
 }
 
@@ -227,7 +228,7 @@ sub repeat {
   # JS: for (let i = 0; i < n; i++) -- runs (ceil of) fractional n times, unlike
   # Perl's `1..$n` which truncates. center() feeds fractional counts (spaces/2).
   for ( my $i = 0; $i < $n; $i++ ) {
-    $str .= $char;
+    $self->js_string_append( $str, $char );    # str += char_ (ADR 0012)
   }
   return $str;
 }
@@ -414,7 +415,7 @@ sub in_operator {
     # for other non-string values (booleans especially: true -> "true", not
     # Perl's "1") rides on k6 (native coercion) and is left to that decision.
     my $needle = defined($key) ? $key : 'undefined';
-    return index( $val, $needle ) != -1 ? true : false;
+    return $self->js_string_index_of( $val, $needle ) != -1 ? true : false;    # code units (ADR 0012)
   }
   # Ordered hash (template dict literal / engine-built object, ADR 0011).
   if ( blessed($val) && $val->isa('Hash::Ordered') ) {
@@ -569,6 +570,254 @@ sub number_to_string {
   }
 
   return $neg ? '-' . $out : $out;
+}
+
+#### JS strings reckon in UTF-16 code units (ADR 0012)
+
+# Not src/lib.js functions: ADR 0012 designates Lib the single home for the
+# string operations JS defines over UTF-16 code units. Strings stay ordinary
+# Perl character strings; the code-unit view is computed per call:
+#
+#   * the "unit form" of a string spells every astral character (U+10000 ..
+#     U+10FFFF) as its two surrogate characters, so each Perl character of the
+#     unit form IS one UTF-16 code unit, and Perl's own length / substr / index /
+#     rindex / cmp run in code units on it;
+#   * a result goes back through _js_from_units, which re-pairs every valid
+#     high + low surrogate pair into its astral character. A surrogate left
+#     without its partner -- a slice, split or index through a pair -- stays a
+#     lone surrogate character, 1:1 with JS (ADR 0012 accepts them).
+#
+# The invariant: no string the engine builds holds a valid pair (a high
+# surrogate U+D800..DBFF directly followed by a low one U+DC00..DFFF) as two
+# surrogate characters -- a pair is always the one astral character. Seam
+# results keep it through _js_from_units; joins keep it through
+# js_string_append, the one way two strings are glued together (template `~`
+# and string `+`, String concat / replace, Array join and toString, the output
+# buffer, asyncAll's output, repeat). Because every string satisfies it, the
+# two code-unit sequences JS compares are equal exactly when the Perl strings
+# are, so Perl's eq and hash keys stand in for JS ==, ===, object keys and `in`
+# over an array or object with no further mapping. A caller string that spells
+# a pair as two surrogate characters is outside the invariant: the seams below
+# give both spellings the same unit form, but eq and hash keys tell them apart.
+#
+# Index and length arguments follow one contract, because ToNumber lives in
+# Runtime (ADR 0007) and Lib does not call into Runtime: an argument is a JS
+# number (already through ToNumber) or undef for JS `undefined`, and undef means
+# whatever `undefined` means for that parameter of that method. Search strings
+# and separators arrive already through ToString.
+
+my $JS_ASTRAL = qr/[\x{10000}-\x{10FFFF}]/;
+
+# The last astral string converted and its unit form. Spelling the pairs out
+# costs a Perl-level substitution per astral character, the eq that finds the
+# string again a C-level compare, so a template that indexes one string in a
+# loop ({{ s[i] }}) converts it once instead of once per index.
+my ( $JS_UNITS_OF, $JS_UNITS );
+
+sub _js_to_units {
+  my ( $self, $s ) = @_;
+  return $s unless $s =~ $JS_ASTRAL;
+  return $JS_UNITS if defined($JS_UNITS_OF) && $JS_UNITS_OF eq $s;
+  $JS_UNITS_OF = "$s";
+  return $JS_UNITS = $s =~ s/($JS_ASTRAL)/$self->_js_surrogate_pair( ord $1 )/ger;
+}
+
+sub _js_surrogate_pair {
+  my ( $self, $cp ) = @_;
+  $cp -= 0x10000;
+  return chr( 0xD800 + ( $cp >> 10 ) ) . chr( 0xDC00 + ( $cp & 0x3FF ) );
+}
+
+sub _js_from_units {
+  my ( $self, $u ) = @_;
+  return $u unless $u =~ /[\x{D800}-\x{DBFF}]/;
+  return $u =~ s/([\x{D800}-\x{DBFF}])([\x{DC00}-\x{DFFF}])/
+    chr( 0x10000 + ( ( ord($1) - 0xD800 ) << 10 ) + ( ord($2) - 0xDC00 ) )/ger;
+}
+
+# ECMAScript ToIntegerOrInfinity over an already-ToNumber'd value: NaN (and
+# undef, JS undefined -> NaN) is 0, +-Infinity stays, the rest truncates to zero.
+sub _js_to_integer_or_infinity {
+  my ( $self, $n ) = @_;
+  return 0 if !defined($n) || $n != $n;
+  return $n if $n == $NUM_POS_INF || $n == $NUM_NEG_INF;
+  return int($n);
+}
+
+# ECMAScript ToUint32 over an already-ToNumber'd value (String.prototype.split's
+# limit): NaN and +-Infinity are 0, else truncate and wrap modulo 2^32.
+sub _js_to_uint32 {
+  my ( $self, $n ) = @_;
+  return 0 if $n != $n || $n == $NUM_POS_INF || $n == $NUM_NEG_INF;
+  my $m = POSIX::fmod( int($n), 4294967296 );
+  return $m < 0 ? $m + 4294967296 : $m;
+}
+
+# Clamp an integer-or-infinity to [0, $len].
+sub _js_clamp {
+  my ( $self, $n, $len ) = @_;
+  return $n < 0 ? 0 : $n > $len ? $len : $n;
+}
+
+# The code units [$from, $to) of a unit form, back as a Perl string.
+sub _js_unit_range {
+  my ( $self, $u, $from, $to ) = @_;
+  return '' if $from >= $to;
+  return $self->_js_from_units( substr( $u, $from, $to - $from ) );
+}
+
+#### js_string_append -- JS string concatenation, in place
+
+# Appends $str to the caller's string variable -- $_[1] is aliased, so the
+# buffer is extended in place and never copied -- and returns nothing. JS joins
+# code units, so a lone high surrogate at the end of the buffer and a lone low
+# one at the start of $str form a valid pair in JS's result; here they become
+# the one astral character, which keeps the invariant above. Only that boundary
+# is looked at: each side already holds the invariant, so no other pair can
+# form, and the check is O(1) whatever the buffer's length -- a test of $str's
+# first character, then a chop of the buffer's last one (put back unless it is
+# a high surrogate). Not a /[\x{D800}-\x{DBFF}]\z/ match: a successful match
+# shares the buffer copy-on-write, so the chop after it would copy the whole
+# buffer, and an output of many re-paired halves would turn O(n^2).
+sub js_string_append {
+  my ( $self, undef, $str ) = @_;
+  my $lo = ord $str;    # ord '' is 0
+  if ( $lo >= 0xDC00 && $lo <= 0xDFFF ) {
+    my $last = chop $_[1];    # '' on an empty buffer
+    my $hi   = ord $last;
+    if ( $hi >= 0xD800 && $hi <= 0xDBFF ) {
+      $_[1] .= chr( 0x10000 + ( ( $hi - 0xD800 ) << 10 ) + ( $lo - 0xDC00 ) ) . substr( $str, 1 );
+      return;
+    }
+    $_[1] .= $last;
+  }
+  $_[1] .= $str;
+  return;
+}
+
+#### js_string_length -- String length
+
+sub js_string_length {
+  my ( $self, $s ) = @_;
+  # one code unit per character, plus the second unit of each astral one; the
+  # match first, because tr over a wide range costs ~20 ns per character even
+  # on a string with no astral character in it
+  return CORE::length($s) unless $s =~ $JS_ASTRAL;
+  return CORE::length($s) + ( $s =~ tr/\x{10000}-\x{10FFFF}// );
+}
+
+#### js_char_at -- String.prototype.charAt(pos)
+
+sub js_char_at {
+  my ( $self, $s, $pos ) = @_;
+  my $u = $self->_js_to_units($s);
+  my $p = $self->_js_to_integer_or_infinity($pos);
+  return '' if $p < 0 || $p >= CORE::length($u);
+  return substr( $u, $p, 1 );    # one unit: an ordinary character or a lone surrogate
+}
+
+#### js_string_slice -- String.prototype.slice(start, end)
+
+sub js_string_slice {
+  my ( $self, $s, $start, $end ) = @_;
+  my $u    = $self->_js_to_units($s);
+  my $len  = CORE::length($u);
+  my $from = $self->_js_to_integer_or_infinity($start);
+  my $to   = defined($end) ? $self->_js_to_integer_or_infinity($end) : $len;
+  $from = $from < 0 ? $len + $from : $from;    # negative counts from the end
+  $to   = $to < 0   ? $len + $to   : $to;
+  return $self->_js_unit_range( $u, $self->_js_clamp( $from, $len ), $self->_js_clamp( $to, $len ) );
+}
+
+#### js_substring -- String.prototype.substring(start, end)
+
+sub js_substring {
+  my ( $self, $s, $start, $end ) = @_;
+  my $u    = $self->_js_to_units($s);
+  my $len  = CORE::length($u);
+  my $from = $self->_js_clamp( $self->_js_to_integer_or_infinity($start), $len );
+  my $to   = defined($end) ? $self->_js_clamp( $self->_js_to_integer_or_infinity($end), $len ) : $len;
+  ( $from, $to ) = ( $to, $from ) if $from > $to;    # substring swaps, slice does not
+  return $self->_js_unit_range( $u, $from, $to );
+}
+
+#### js_substr -- String.prototype.substr(start, length) (ECMAScript Annex B)
+
+sub js_substr {
+  my ( $self, $s, $start, $length ) = @_;
+  my $u    = $self->_js_to_units($s);
+  my $size = CORE::length($u);
+  my $from = $self->_js_to_integer_or_infinity($start);
+  $from = $from < 0 ? $size + $from : $from;
+  $from = $self->_js_clamp( $from, $size );
+  # length undefined -> to the end; a negative or NaN length takes nothing
+  # (JS 'abc'.substr(0, -1) is '', where Perl's substr would drop the last char)
+  my $n = defined($length) ? $self->_js_clamp( $self->_js_to_integer_or_infinity($length), $size ) : $size;
+  my $to = $from + $n > $size ? $size : $from + $n;
+  return $self->_js_unit_range( $u, $from, $to );
+}
+
+#### js_string_index_of -- String.prototype.indexOf(searchString, position)
+
+sub js_string_index_of {
+  my ( $self, $s, $search, $position ) = @_;
+  my $u = $self->_js_to_units($s);
+  my $p = $self->_js_clamp( $self->_js_to_integer_or_infinity($position), CORE::length($u) );
+  return index( $u, $self->_js_to_units($search), $p );
+}
+
+#### js_string_last_index_of -- String.prototype.lastIndexOf(searchString, position)
+
+sub js_string_last_index_of {
+  my ( $self, $s, $search, $position ) = @_;
+  my $u = $self->_js_to_units($s);
+  # NaN -- and so undefined -- searches from the end, unlike indexOf's 0
+  my $p = ( !defined($position) || $position != $position )
+    ? $NUM_POS_INF
+    : $self->_js_to_integer_or_infinity($position);
+  return rindex( $u, $self->_js_to_units($search), $self->_js_clamp( $p, CORE::length($u) ) );
+}
+
+#### js_split -- String.prototype.split(separator, limit), string separator
+
+sub js_split {
+  my ( $self, $s, $separator, $limit ) = @_;
+  my $lim = defined($limit) ? $self->_js_to_uint32($limit) : 4294967295;
+  return [] if $lim == 0;
+  return [$s] unless defined $separator;    # split(undefined) -> [S]
+
+  my $u = $self->_js_to_units($s);
+  # split('') -> the code units themselves, an astral character as two lone
+  # surrogates; ''.split('') is [] while ''.split(',') is [''] (oracle)
+  if ( $separator eq '' ) {
+    my $head = $lim < CORE::length($u) ? substr( $u, 0, $lim ) : $u;
+    return [ split //, $head ];
+  }
+  return [$s] if $u eq '';
+
+  my $r     = $self->_js_to_units($separator);
+  my $r_len = CORE::length($r);
+  my @parts;
+  my $i = 0;
+  my $j = index( $u, $r, 0 );
+  while ( $j != -1 ) {
+    push @parts, $self->_js_unit_range( $u, $i, $j );
+    return \@parts if @parts == $lim;
+    $i = $j + $r_len;
+    $j = index( $u, $r, $i );
+  }
+  push @parts, $self->_js_unit_range( $u, $i, CORE::length($u) );
+  return \@parts;
+}
+
+#### js_string_compare -- the code-unit order of the JS relational operators
+
+# IsLessThan on two strings compares UTF-16 code units, so U+FF01 sorts after
+# U+1F600 (high surrogate U+D83D) where code points would put it before. cmp
+# over the unit forms is exactly that order. Returns -1, 0 or 1.
+sub js_string_compare {
+  my ( $self, $x, $y ) = @_;
+  return $self->_js_to_units($x) cmp $self->_js_to_units($y);
 }
 
 1;

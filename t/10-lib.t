@@ -139,6 +139,9 @@ subtest 'to_array' => sub {
   is_deeply( $cp, [ 1, 2, 3 ], 'copies contents' );
   isnt( $cp, $src, 'returns a new arrayref' );
   is_deeply( $L->to_array('ab'), [qw( a b )], 'string -> chars' );
+  # node: Array.prototype.slice.call('a😀') -> ['a', '\ud83d', '\ude00']
+  is_deeply( $L->to_array("a\x{1F600}"), [ 'a', "\x{D83D}", "\x{DE00}" ],
+    'string -> UTF-16 code units, an astral char as two lone surrogates (ADR 0012)' );
 };
 
 #### without
@@ -374,6 +377,75 @@ subtest '_prettify_error' => sub {
     "(tmpl.njk) [Line 1, Column 4]\n  unknown block tag: foo",
     'update applied to our own error'
   );
+};
+
+#### JS string seams in UTF-16 code units (ADR 0012)
+
+# The template-level behaviour is pinned by t/corpus/render-strings-utf16.json.
+# What the corpus JSON cannot carry is a lone surrogate, so the seams' lone-
+# surrogate results are asserted here (each confirmed in node), together with
+# the Perl-side contract that a pair spelled as two surrogate characters and
+# the astral character are the same JS string.
+subtest 'UTF-16 code-unit seams: lone surrogates and both spellings of a pair' => sub {
+  my $em     = "\x{1F600}";           # one Perl character, two UTF-16 code units
+  my $halves = "\x{D83D}\x{DE00}";    # the same code units, spelled as two characters
+
+  # node: '😀'.charAt(0) / charAt(1) -> '\ud83d' / '\ude00'
+  is( $L->js_char_at( $em, 0 ), "\x{D83D}", 'js_char_at inside a pair -> its high surrogate' );
+  is( $L->js_char_at( $em, 1 ), "\x{DE00}", 'js_char_at inside a pair -> its low surrogate' );
+  # node: 'a😀b'.slice(1, 2) -> '\ud83d'; slice(1, 3) -> '😀'
+  is( $L->js_string_slice( "a${em}b", 1, 2 ), "\x{D83D}", 'js_string_slice cutting a pair -> a lone surrogate' );
+  is( $L->js_string_slice( "a${em}b", 1, 3 ), $em, 'a slice holding the whole pair comes back as the one character' );
+
+  # node: ('\ud83d' + '\ude00').length -> 2, === '😀' -> true, '😀'.indexOf('\ude00') -> 1
+  is( $L->js_string_length($halves), 2, 'js_string_length: two surrogate characters are two code units' );
+  is( $L->js_string_compare( $halves, $em ), 0, 'js_string_compare: both spellings are the same string' );
+  is( $L->js_string_slice( $halves, 0 ), $em, 'a seam result re-pairs a valid pair into the astral character' );
+  is( $L->js_string_index_of( $em, "\x{DE00}" ), 1, 'js_string_index_of finds a lone surrogate inside a pair' );
+};
+
+# js_string_append is the one join of two strings (template ~ and +, concat,
+# replace, Array join, the output buffer); render cases in the corpus cover
+# those callers, this pins the seam itself, lone surrogates included.
+subtest 'js_string_append: joins in place, re-pairs at the boundary only' => sub {
+  my $em = "\x{1F600}";
+
+  # node: '\ud83d' + '\ude00' === '😀' -> true; ('a\ud83d' + '\ude00b').length -> 4
+  my $buf = "a\x{D83D}";
+  $L->js_string_append( $buf, "\x{DE00}b" );
+  is( $buf, "a${em}b", 'a lone high + lone low surrogate become the astral character' );
+  is( CORE::length($buf), 3, '... as one Perl character' );
+
+  my $plain = 'ab';
+  is( $L->js_string_append( $plain, 'cd' ), undef, 'returns nothing' );
+  is( $plain, 'abcd', 'appends to the caller variable in place' );
+
+  # node: '\ud83d' + '\ud83d', '\ude00' + '\ude00', '\ude00' + '\ud83d' stay two units each
+  for my $case (
+    [ "\x{D83D}", "\x{D83D}", 'high + high' ],
+    [ "\x{DE00}", "\x{DE00}", 'low + low' ],
+    [ "\x{DE00}", "\x{D83D}", 'low + high' ],
+    [ 'x',        "\x{DE00}", 'a non-surrogate + low' ],
+    [ '',         "\x{DE00}", 'an empty buffer + low' ],
+    [ "\x{D83D}", '',         'high + an empty string' ],
+    [ "\x{D83D}", "x\x{DE00}", 'high + a string whose low surrogate is not first' ],
+  ) {
+    my ( $l, $r, $label ) = @$case;
+    my $b = $l;
+    $L->js_string_append( $b, $r );
+    is( $b, $l . $r, "$label: plain concatenation" );
+  }
+
+  # node: ('\ude00\ud83d' + '\ude00\ud83d').length -> 4, with a valid pair in the middle
+  my $lh = "\x{DE00}\x{D83D}";
+  $L->js_string_append( $lh, "\x{DE00}\x{D83D}" );
+  is( $lh, "\x{DE00}${em}\x{D83D}", 'only the pair at the seam joins; the outer halves stay lone' );
+};
+
+subtest 'repeat joins in code units' => sub {
+  # node: lib.repeat('\ude00\ud83d', 2) -> de00 d83d de00 d83d, 3 code points
+  is( $L->repeat( "\x{DE00}\x{D83D}", 2 ), "\x{DE00}\x{1F600}\x{D83D}",
+    'the halves that meet between two repeats form the pair' );
 };
 
 done_testing;
