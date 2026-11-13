@@ -332,6 +332,87 @@
     }
   },
   {
+    "name": "filter property read on undefined: an object key with a toString property drops the (reading ...) clause",
+    "template": "{{ [u]|join(',', {'toString': 1}) }}",
+    "expected": {
+      "ok": false,
+      "error": {
+        "name": "Template render error",
+        "message": "(unknown path)\n  TypeError: Cannot read properties of undefined"
+      }
+    }
+  },
+  {
+    "name": "filter property read on undefined: an object key with a constructor property drops the (reading ...) clause",
+    "template": "{{ [u]|join(',', {'constructor': 1}) }}",
+    "expected": {
+      "ok": false,
+      "error": {
+        "name": "Template render error",
+        "message": "(unknown path)\n  TypeError: Cannot read properties of undefined"
+      }
+    }
+  },
+  {
+    "name": "filter property read on undefined: keyword arguments with a toString property drop the (reading ...) clause",
+    "template": "{{ [u]|join(',', toString=1) }}",
+    "expected": {
+      "ok": false,
+      "error": {
+        "name": "Template render error",
+        "message": "(unknown path)\n  TypeError: Cannot read properties of undefined"
+      }
+    }
+  },
+  {
+    "name": "filter property read on undefined: a context hash with a constructor property drops the (reading ...) clause",
+    "template": "{{ [u]|join(',', k) }}",
+    "context": {
+      "k": {
+        "constructor": "x"
+      }
+    },
+    "expected": {
+      "ok": false,
+      "error": {
+        "name": "Template render error",
+        "message": "(unknown path)\n  TypeError: Cannot read properties of undefined"
+      }
+    }
+  },
+  {
+    "name": "filter property read on undefined: a plain object key reads as #<Object>",
+    "template": "{{ [u]|join(',', {'a': 1}) }}",
+    "expected": {
+      "ok": false,
+      "error": {
+        "name": "Template render error",
+        "message": "(unknown path)\n  TypeError: Cannot read properties of undefined (reading '#<Object>')"
+      }
+    }
+  },
+  {
+    "name": "filter property read on undefined: an object key whose constructor is a macro reads as #<macro>",
+    "template": "{% macro m() %}x{% endmacro %}{{ [u]|join(',', {'constructor': m}) }}",
+    "todo": "k88: macro has no JS function name",
+    "expected": {
+      "ok": false,
+      "error": {
+        "name": "Template render error",
+        "message": "(unknown path)\n  TypeError: Cannot read properties of undefined (reading '#<macro>')"
+      }
+    }
+  },
+  {
+    "name": "dict literal: __proto__ sets the prototype",
+    "template": "{{ {'__proto__': {'a': 1} }.a }}",
+    "todo": "k89: __proto__ in a dict literal sets the prototype",
+    "expected": {
+      "ok": true,
+      "output": "1"
+    }
+  },
+  {
     "name": "Math.pow: base 1 or -1 to an infinite exponent is NaN",
     "template": "{{ 1 ** (1/0) }}|{{ (-1) ** (1/0) }}|{{ 1 ** (-1/0) }}|{{ (-1) ** (-1/0) }}",
     "expected": {

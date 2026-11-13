@@ -159,9 +159,15 @@ undefined / null — `u|first` → `TypeError: Cannot read properties of undefin
 `[u]|join(',', k)`: a string as is, a number or boolean through ToString
 (`1.5` → `'1.5'`, `true` → `'true'`), a dict literal, caller hash or keyword
 arguments as `'#<Object>'`; an array, SafeString or regex key drops the
-`(reading ...)` clause (`TypeError: Cannot read properties of undefined`).
-Anything else is `member_lookup`. Seam: Runtime `js_member_read` /
-`_js_read_error`.
+`(reading ...)` clause (`TypeError: Cannot read properties of undefined`), and
+so does a plain object with an own `toString` (`{'toString': 1}`,
+`toString=1`) or an own `constructor` that is no named function
+(`{'constructor': 1}`, a context hash `{"constructor": "x"}`). That is V8's
+NoSideEffectsToMaybeString, the rule of the Array sort TypeError below:
+`{'constructor': m}`, `m` a macro, reads `'#<macro>'` upstream; the port drops
+the clause until a coderef has a name (k88). Anything else is
+`member_lookup`. Seam: Runtime `js_member_read` / `_js_read_error` /
+`_js_no_side_effects_to_maybe_string`.
 
 copySafeness's `target.toString()` is the same read — `string` is
 `r.copySafeness(obj, obj)`: `u|string` → `TypeError: Cannot read properties of
@@ -179,6 +185,17 @@ shown V8's way (Runtime `_js_not_callable_text`): `undefined` · `object null`
 · `boolean true` · `number 1.5` · `number NaN` · `string "x"` (cut to 100 code
 units, then `<...>`) · any object `object` — `[].reduce({})` → `TypeError:
 object is not a function`.
+
+Array `filter` (the `.filter` of select, reject, selectattr, rejectattr) is on
+the surface too. The length is read once and an index the callback removed is
+skipped: with `f` popping `a` on each call, `[1,2,3]` filters to `1,2`; with
+`f` pushing `9`, `[1,2]` filters to `1,2` and `a` ends `1,2,9,9`. An element
+is kept when the result is truthy, and a macro's output is a SafeString, an
+object: `[1, 0, '', 2].filter(m)` keeps all four. A callbackfn that is not
+callable throws in the reduce form: `[1].filter(5)` → `TypeError: number 5 is
+not a function` · `filter(none)` → `object null is not a function` ·
+`filter()` → `undefined is not a function`. Seam: Runtime `%ARRAY_METHODS`
+`filter`.
 
 lib.map over a non-array walks it as an array-like, `obj[i]` while `i <
 obj.length`, through Runtime (`member_lookup`, `op_lt`): `{length: '2', '0':
@@ -299,6 +316,157 @@ undefined, null, a number, a boolean or a function enumerates nothing: `5`,
 `{a: 1, b: 'x y'}|urlencode` → `a=1&amp;b=x%20y`. A primitive string never gets
 there (`lib.isString` comes first); its for-in indices elsewhere are k59. Seam:
 Lib `keys`.
+
+## Array.prototype.sort — decided, ADR 0017, mechanism in Lib
+
+The Array `sort` member and the `sort` / `dictsort` filters all run one port
+of V8 13.6.233.17's TimSort (`array-sort.tq`), so an inconsistent comparator
+gets V8's calls and V8's result too. Without a comparefn two elements compare
+as their ToStrings in UTF-16 code-unit order: `[10,9,1,100,25,2].sort()` →
+`1,10,100,2,25,9` · `[1,'a',true,null,9,10,2,u].sort()|join(',')` →
+`1,10,2,9,a,,true,` (null sorts as `'null'`). undefined goes last and is never
+passed to the comparator: `[u,'z','a'].sort()` → `a,z,` · with `cmp` logging
+its `(a, b)`, `[3,u,1,u,2].sort(cmp)|dump` → `[1,2,3,null,null]` after the
+calls `1,3 2,1 2,3 2,1`. A comparefn is called `(x, y)` without `this`, its
+result goes through ToNumber, NaN counts as +0 and only a negative result puts
+x first: a macro printing `x` leaves `[5,3,9,1]` as it is, one printing
+` {{ a - b }} ` (with spaces) sorts it to `1,3,5,9`, `-0` leaves it, and
+`-Infinity` turns `[5,3,9,1,7,2,8]` into `8,2,7,1,9,3,5`. A comparefn that is
+neither undefined nor callable throws before anything else, even on an empty
+array: `[].sort(5)` → `TypeError: The comparison function must be either a
+function or undefined: 5`. Seam: Lib `js_array_sort`, its call sequences
+pinned by `t/data/js-array-sort.json` (`maint/js-array-sort-fixtures`).
+
+The value in that TypeError is V8's NoSideEffectsToString. A primitive shows
+as its ToString, a string uncut. `[1]` → `[object Array]`, `r/a/` →
+`[object RegExp]`, `'a'|safe` → `[object Object]`. A plain object (a dict
+literal, a caller hash, keyword arguments) shows as `#<Object>` (`{}`), except:
+
+- an own `toString` key, whatever it holds, makes it `[object Object]`
+  (`{'toString': 1}`, `{'toString': u}`, `sort(toString=1)`);
+- so does an own `constructor` that is no named function (`{'constructor':
+  1}`, `''`, `u`, `none`, `[]`, a SafeString, a context hash `{"constructor":
+  "x"}`);
+- an own `constructor` that is a named function shows by its name:
+  `{'constructor': m}` with a macro `m` → `#<macro>`. In node, `function
+  foo(){}` → `#<foo>` and an anonymous function → `[object Object]`.
+
+Seam: Runtime `_js_no_side_effects_to_string` over
+`_js_no_side_effects_to_maybe_string`; the name comes from `_js_function_name`.
+Open: a Perl coderef has no name yet, so the port shows `[object Object]`
+where upstream shows `#<macro>` (k88). A dict literal's `'__proto__'` key sets
+the prototype upstream (`{'__proto__': {'toString': 1} }` → `[object Object]`,
+`{'__proto__': {'a': 1} }.a` → `1`) but is an own key in the port (`#<Object>`,
+empty). That one has no card yet; it is noted on k17.
+
+## JSON.stringify (dump) — port as is, mechanism in Lib
+
+`dump(spaces)` is `JSON.stringify(obj, null, spaces)`.
+
+**The gap is V8's.** A number above 0 gives its integer part in spaces, at
+most ten: `[1]|dump(2.9)` → `[\n  1\n]` · `dump(11)` → ten spaces. A number
+in (0, 1) gives an empty gap that still breaks lines, which is not what the
+spec says: `[1]|dump(0.5)` → `[\n1\n]` · `{'a': 1}|dump(0.5)` →
+`{\n"a": 1\n}`. A string gives its first ten code units:
+`dump('abcdefghijkl')` → `[\nabcdefghij1\n]`. `-1`, `true`, `''` and `0/0`
+give no gap.
+
+**Strings go through QuoteJSONString, well-formed.** `"`, `\` and the C0
+controls are escaped (the short form, else `\u00XX`). A lone surrogate becomes
+`\uXXXX`: `'😀'|first|dump` → `"\ud83d"`. U+007F, U+2028 and U+FEFF stay as
+they are.
+A pair that a caller spells as two surrogate characters is the one character,
+as a value and as a key (ADR 0012).
+
+**Values:**
+
+- undefined and a function are left out of an object, are `null` in an array,
+  and dump to '' at the top: `u|dump` and `m|dump` → '' · `[u, m]` → `[null,null]` ·
+  `{'a': u, 'b': m, 'c': 1}` → `{"c":1}`.
+- NaN and ±Infinity are `null`, and `-0` is `0`.
+- A callable `toJSON` member is called with the key and its result is
+  serialized: `{'toJSON': m}|dump` → `{"val":"T","length":1}`, the macro's
+  SafeString. A `toJSON` that is not callable is a plain property:
+  `{"toJSON":5,"a":1}`.
+- A SafeString is an object with own `val` and `length`: `m()|dump` →
+  `{"val":"ab","length":2}`. A regex is `{}`.
+- Keys come in Lib `keys` order (ADR 0011).
+
+**A circle throws V8's text.** `a.push(a)` then `a|dump` gives `TypeError:
+Converting circular structure to JSON\n    --> starting at object with
+constructor 'Array'\n    --- index 0 closes the circle`. A link through an
+object prints as `|     property 'x' -> object with constructor 'Array'`, the
+empty key as `<anonymous>`. Past three links V8 prints the first two, then
+`|     ...`, then the last.
+
+Seam: Lib `js_json_stringify`.
+
+## hasOwnProperty, groupby, toArray — port as is, mechanism in Lib
+
+`lib.hasOwnProp` is `Object.prototype.hasOwnProperty.call(obj, k)`. It runs
+ToPropertyKey(k) first, then ToObject(obj), which throws on undefined and null:
+`[u]|groupby('a')` and `[{'a': null}]|groupby('a.b')` → `TypeError: Cannot
+convert undefined or null to object`. Only a key whose ToPrimitive throws
+shows the order: `[u]|groupby({'toString': m})` → `TypeError: Cannot convert
+object to primitive value`. The port runs no own `toString` member (k44), so it
+throws the ToObject text there. Over `[{'k': 1}]` upstream throws the same
+TypeError, while the port renders its groupby result without an error.
+
+Measured through `groupby(attr)`, the own properties are:
+
+- an array: its indices and `length`;
+- a string: its code-unit indices and `length`;
+- a SafeString: `val` and `length`;
+- a regex: `lastIndex`;
+- a number or a boolean: nothing;
+- a function: `length` and `name` in JS, nothing in the port (k88).
+
+groupby's result keys are the attribute values' ToPropertyKey:
+`[{'a': 1}, {'a': '1'}, {'a': true}, {'a': 'true'}]|groupby('a')` iterates
+`1=2;true=2;`. With throwOnUndefined the message is built from `${val}`, so
+`groupby(1.5)` → `groupby: attribute "1.5" resolved to undefined` and
+`groupby(['a','b'])` → `... "a,b" ...`.
+
+`lib.toArray`, which select and reject run their input through, is
+`Array.prototype.slice.call(obj)`:
+
+- ToObject comes first: `u|select` → `TypeError: Cannot convert undefined or
+  null to object`.
+- The length goes through ToLength: with `'0': 'a', '1': 'b'`, a length of
+  `2.5` or `'2'` gives `a,b` and `-1` gives nothing.
+- A string is its String object: `'ab'|select|join(',')` → `a,b`. A number has
+  no length: `[]`.
+- A missing index never reaches the filter: `{'length': 3, '1': 'b'}|select|length` → `1`.
+- A length of 2^32 or more (`4294967296`, `1/0`) throws `RangeError: Invalid
+  array length`.
+
+Seams: Lib `has_own_prop`, `get_attr_getter`, `group_by`, `to_array`.
+
+## for-in over a SafeString — port as is, mechanism in Lib
+
+dictsort walks its value with `for (k in val)`, and that loop also visits
+inherited enumerable properties. A SafeString inherits `valueOf` and
+`toString`, which are assigned onto SafeString.prototype, so `m()|dictsort`
+iterates `length;toString;val;valueOf;`. `lib._entries` and `lib.keys` (used
+by urlencode and dump) keep own keys only: `m()|urlencode` →
+`val=x&amp;length=1`. Open: in JS the two inherited values are functions, in
+the port they are undefined (k70), and `.val` reads empty (k72). Seams: Lib
+`js_for_in_keys` for the for-in, `keys` for own keys.
+
+## Object.prototype names in the filter and test registries — open, k87
+
+`env.filters` and `env.tests` are plain JS objects, so a name of an
+Object.prototype member finds that member:
+
+- `[1, 2]|select('constructor')` and `select('toString')` select nothing;
+- `{{ 1 is constructor }}` → `false`;
+- `{{ 1|constructor }}` → `1`;
+- `{{ 1|toString }}` → `[object Object]`.
+
+`__proto__` is not callable: `[1]|select('__proto__')` → `TypeError:
+test.call is not a function`, and `1|__proto__` → `TypeError:
+env.getFilter(...).call is not a function`. For every one of these the port
+throws `test not found: X` or `filter not found: X` (k87).
 
 ## Errors — port as is
 

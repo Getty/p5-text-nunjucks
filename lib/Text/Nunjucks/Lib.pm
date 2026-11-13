@@ -11,9 +11,12 @@ use POSIX ();
 use Scalar::Util qw( blessed refaddr );
 use Text::Nunjucks::Lib::TemplateError;
 use Text::Nunjucks::Lib::Error;
-# Circular with Runtime's `use Text::Nunjucks::Lib`; map's array-like branch
-# and groupBy's result object (make_dict) are the Lib calls up into it -- from
-# inside their subs, run time. Caveat: when Lib loads first,
+# Circular with Runtime's `use Text::Nunjucks::Lib`. Lib calls up into it for
+# the JS semantics Runtime is the one home of -- the property reads and
+# ToPropertyKey of hasOwnProp / getAttrGetter / groupBy / toArray / map's
+# array-like branch, groupBy's result object (make_dict), ToNumber / ToString /
+# the operators in groupBy, toArray, JSON.stringify and the sort comparator --
+# from inside their subs, run time. Caveat: when Lib loads first,
 # this line compiles and runs all of Runtime before the rest of Lib is even
 # compiled -- the Lib subs below this line do not exist yet and its file-scope
 # lexicals (%ESCAPE_MAP, $JS_WORD_CLASS, $NUM_POS_INF, ...) are still unset. So
@@ -48,14 +51,38 @@ my $ESCAPE_REGEX = qr/[&"'<>\\]/;
 
 #### hasOwnProp
 
+# ObjProto.hasOwnProperty.call(obj, k): ToPropertyKey(k) first (Runtime's, the
+# key obj[k] reads), then ToObject(obj), which throws on undefined and null
+# (oracle: [u]|groupby('a') and [{'a': null}]|groupby('a.b') -> "TypeError:
+# Cannot convert undefined or null to object"). The own properties per value
+# kind, oracle-measured through groupby(attr): an object -- caller hash or
+# ordered dict -- its keys; an array its indices and length; a primitive
+# string, a String object after ToObject, its code-unit indices and length
+# (ADR 0012; '01' is no index); a SafeString this.val and this.length; a regex
+# its lastIndex (source and flags are inherited accessors). A number and a
+# boolean own nothing. A function owns length and name in JS (a macro: 0 and
+# 'macro'), which a Perl coderef has no form of, so it owns nothing here; nor
+# does any other blessed object (k47).
 sub has_own_prop {
   my ( $self, $obj, $k ) = @_;
+  my $rt  = $self->_runtime;
+  my $key = $rt->_member_key($k);
+  die Text::Nunjucks::Lib::Error->new( 'Cannot convert undefined or null to object', name => 'TypeError' )
+    if !defined($obj) || $rt->_is_none($obj);
+
   my $r = ref $obj;
-  return exists $obj->{$k} ? 1 : 0 if $r eq 'HASH';
-  # array own indices; full native-member semantics (.length &c) are k6/Runtime
+  return exists $obj->{$key} ? 1 : 0 if $r eq 'HASH';
+  return $obj->exists($key)  ? 1 : 0 if $rt->_is_ordered_hash($obj);
   if ( $r eq 'ARRAY' ) {
-    return ( $k =~ /\A(?:0|[1-9][0-9]*)\z/ && $k <= $#$obj ) ? 1 : 0;
+    return 1 if $key eq 'length';
+    return ( $self->_is_array_index($key) && $key < scalar @$obj ) ? 1 : 0;
   }
+  if ( $self->is_string($obj) ) {
+    return 1 if $key eq 'length';
+    return ( $self->_is_array_index($key) && $key < $self->js_string_length($obj) ) ? 1 : 0;
+  }
+  return ( $key eq 'val' || $key eq 'length' ) ? 1 : 0 if $rt->_is_safe_string($obj);
+  return $key eq 'lastIndex' ? 1 : 0 if $rt->_is_regex($obj);
   return 0;
 }
 
@@ -142,8 +169,9 @@ sub is_object {
 sub _prepare_attribute_parts {
   my ( $self, $attr ) = @_;
 
-  # JS: if (!attr) return [];  -- JS falsiness, NOT Perl's. See _falsy below.
-  return [] if $self->_falsy($attr);
+  # JS: if (!attr) return [];  -- JS falsiness, NOT Perl's: Runtime's, which
+  # knows null (oracle: groupby(null) groups by the item itself)
+  return [] if $self->_runtime->_falsy($attr);
 
   # JS: if (typeof attr === 'string') return attr.split('.');  (-1 keeps trailing empties)
   return [ split /\./, $attr, -1 ] if $self->is_string($attr);
@@ -165,9 +193,9 @@ sub get_attr_getter {
       # If item is not an object, and we still got parts to handle, roll out to
       # undefined.
       if ( $self->has_own_prop( $_item, $part ) ) {
-        $_item = ref($_item) eq 'HASH'  ? $_item->{$part}
-               : ref($_item) eq 'ARRAY' ? $_item->[$part]
-               :                          undef;
+        # _item[part]: the JS property read, Runtime's (ADR 0016) -- a
+        # SafeString's val reads undefined there (k72)
+        $_item = $self->_runtime->member_lookup( $_item, $part );
       } else {
         return undef;
       }
@@ -181,13 +209,21 @@ sub get_attr_getter {
 
 sub group_by {
   my ( $self, $obj, $val, $throw_on_undefined ) = @_;
+  my $rt = $self->_runtime;
   # const result = {} -- an engine-built object, so an ordered dict from
   # Runtime's make_dict (ADR 0011): groups iterate in JS key order
-  my $result   = $self->_runtime->make_dict;
+  my $result   = $rt->make_dict;
   my $iterator = $self->is_function($val) ? $val : $self->get_attr_getter($val);
 
-  for my $i ( 0 .. $#$obj ) {
-    my $value = $obj->[$i];
+  # i < obj.length and obj[i] are JS property reads and a JS comparison,
+  # Runtime's (oracle: undefined|groupby('a') -> "TypeError: Cannot read
+  # properties of undefined (reading 'length')", a number or an object without
+  # length groups nothing, a SafeString's obj[i] is undefined). A primitive
+  # string cannot change under the loop: its split('') units are the same
+  # length and obj[i] (ADR 0012), measured once.
+  my $array_like = $rt->_for_code_units($obj);
+  for ( my $i = 0; $rt->op_lt( $i, $rt->js_member_read( $array_like, 'length' ) ); $i++ ) {
+    my $value = $rt->js_member_read( $array_like, $i );
     my $key   = $iterator->( $value, $i );
 
     # JS: if (key === undefined && throwOnUndefined === true)
@@ -196,16 +232,21 @@ sub group_by {
       && is_bool($throw_on_undefined)
       && $throw_on_undefined )
     {
+      # `${val}` is val's JS ToString (oracle: groupby(['a', 'b']) names
+      # "a,b", groupby({'a': 1}) "[object Object]", groupby(0.1 + 0.2)
+      # "0.30000000000000004")
       die Text::Nunjucks::Lib::Error->new(
-        'groupby: attribute "' . $val . '" resolved to undefined',
+        'groupby: attribute "' . $rt->_js_to_string($val) . '" resolved to undefined',
         name => 'TypeError'
       );
     }
 
-    # JS object keys are strings; an undefined key becomes "undefined". Other
-    # non-string keys (booleans, objects) follow JS string coercion, whose
-    # mechanism is k6/Runtime -- numbers already stringify identically here.
-    my $hkey = defined($key) ? $key : 'undefined';
+    # result[key] reads the key's ToPropertyKey: undefined -> 'undefined', true
+    # -> 'true', null -> 'null', a number its JS ToString (ADR 0007: 0.3 and
+    # 0.30000000000000004 stay apart, -0 is '0'), an array its join, a
+    # SafeString its value (oracle). A key naming an Object.prototype member
+    # groups here where JS throws -- k81.
+    my $hkey = $rt->_member_key($key);
     # (result[key] || (result[key] = [])).push(value)
     push @{ $result->get($hkey) // $result->set( $hkey, [] ) }, $value;
   }
@@ -215,13 +256,35 @@ sub group_by {
 
 #### toArray
 
+# Array.prototype.slice.call(obj): ToObject(obj), a TypeError on undefined and
+# null; len = ToLength(obj.length); then every index below len obj has, in
+# order -- Runtime's property reads (oracle, through select: {'length': '2',
+# '0': 1, '1': 2} -> 1,2, {'length': 1.7, ...} -> 1, {'length': -1} ->
+# nothing, a length above 2^32 - 1 -> "RangeError: Invalid array length"). An
+# array is copied, a primitive string gives its UTF-16 code units, the same
+# list as split('') (ADR 0012). A SafeString has a length but no indices; a
+# number, boolean, function or regex has no length, ToLength(undefined) is 0.
+# An index obj lacks is a hole in JS's result: the value model has none (ADR
+# 0001), so it is left out -- which the one caller, select / reject's filter,
+# cannot tell apart, as filter skips holes.
 sub to_array {
   my ( $self, $obj ) = @_;
-  # Array.prototype.slice.call(obj) -- realistic use is a shallow arrayref copy
+  my $rt = $self->_runtime;
+  die Text::Nunjucks::Lib::Error->new( 'Cannot convert undefined or null to object', name => 'TypeError' )
+    if !defined($obj) || $rt->_is_none($obj);
   return [ @$obj ] if ref($obj) eq 'ARRAY';
-  # slice.call(string) -> its UTF-16 code units, the same list as split('')
   return $self->js_split( $obj, '' ) if $self->is_string($obj);
-  return [];
+
+  my $len = $self->_js_to_integer_or_infinity( $rt->_to_number( $rt->member_lookup( $obj, 'length' ) ) );
+  $len = 0 if $len < 0;
+  # ArraySpeciesCreate(O, count) -> ArrayCreate, which caps an array's length
+  die Text::Nunjucks::Lib::Error->new( 'Invalid array length', name => 'RangeError' ) if $len > 4294967295;
+
+  my $result = [];
+  for my $k ( 0 .. $len - 1 ) {
+    push @$result, $rt->member_lookup( $obj, $k ) if $self->has_own_prop( $obj, $k );
+  }
+  return $result;
 }
 
 #### without
@@ -430,6 +493,11 @@ sub keys {
   # constructor creates them, this.val then this.length.
   return [ 'val', 'length' ] if blessed($obj) && $obj->isa('Text::Nunjucks::Runtime::SafeString');
 
+  # Any other blessed object -- a regex, keyword arguments (k79), a caller's
+  # object (k47) -- enumerates nothing: its hash fields are no JS properties
+  # (a regex's own lastIndex is not enumerable).
+  return [] if blessed($obj);
+
   # Plain hash: sort CORE::keys (per-process-random Perl order) deterministically.
   my $arr = [];
   for my $k ( sort CORE::keys %$obj ) {
@@ -464,6 +532,26 @@ sub _is_array_index {
   my ( $self, $k ) = @_;
   return 0 unless $k =~ /\A(?:0|[1-9][0-9]{0,9})\z/;
   return ( length($k) < 10 || $k le '4294967294' ) ? 1 : 0;
+}
+
+#### js_for_in_keys -- the keys `for (k in obj)` visits
+
+# Port addition: lib.js's for-in loops filter by hasOwnProp, so keys above is
+# their whole iteration; a raw for-in (the dictsort filter's, which upstream
+# notes deliberately includes properties from the object's prototype) visits
+# the enumerable properties up the prototype chain after the own ones, each
+# name once. The own ones are keys', the one ordering seam (ADR 0011). Of the
+# prototypes the value model reaches, only SafeString.prototype has
+# enumerable properties: valueOf and toString, assigned after the
+# Object.create that made its length non-enumerable, and never shadowed by a
+# SafeString's own val and length -- Object.prototype, Array.prototype and
+# String.prototype have none (oracle: 'ab'|safe|dictsort gives length,
+# toString, val, valueOf).
+sub js_for_in_keys {
+  my ( $self, $obj ) = @_;
+  my $keys = $self->keys($obj);
+  push @$keys, qw( valueOf toString ) if blessed($obj) && $obj->isa('Text::Nunjucks::Runtime::SafeString');
+  return $keys;
 }
 
 #### _entries
@@ -582,7 +670,7 @@ sub js_digit_class {
   return $JS_DIGIT_CLASS;
 }
 
-#### JS !x (falsiness) for _prepare_attribute_parts and future !x sites
+#### JS !x (falsiness) for async_for, and Runtime _falsy's kind-based half
 
 # Provisional JS falsiness keyed to ADR 0001 kinds. JS falsy values are
 # undefined/null, false, 0, NaN and '' -- but the string '0' is TRUTHY in JS
@@ -1321,6 +1409,1123 @@ sub _js_utf8_percent_encode {
   my ( $self, $char ) = @_;
   utf8::encode($char);
   return CORE::join( '', CORE::map { sprintf( '%%%02X', ord $_ ) } split //, $char );
+}
+
+#### js_array_sort -- Array.prototype.sort(comparefn), V8's TimSort
+
+# Not a src/lib.js function: the one home of JS Array.prototype.sort -- the
+# Array `sort` member of the ADR 0008 surface and the sort / dictsort filters'
+# array.sort(...). Maintainer decision B (k17): a port of V8's implementation,
+# pinned to the V8 of the oracle's Node (v24.19.0, V8 13.6.233.17), so that a
+# comparator that is no consistent order -- or one that watches its calls --
+# gets exactly the calls V8 makes and leaves the array as V8 leaves it. Source:
+# third_party/v8/builtins/array-sort.tq at V8 tag 13.6.233.17
+# (https://raw.githubusercontent.com/v8/v8/13.6.233.17/third_party/v8/builtins/array-sort.tq),
+# CPython's TimSort: natural runs, binary insertion sort up to the minimum run
+# length, merge_lo / merge_hi with galloping and the min_gallop adaptation. The
+# macros and builtins below are the .tq's, in its order, named in snake_case
+# with a _js_sort_ prefix; the comparator call sequence follows from their
+# control flow, which is therefore kept as is. The sort state is a hash, the
+# .tq's SortState fields in snake_case.
+#
+# Around the TimSort, the spec steps V8 implements: a comparefn that is neither
+# undefined nor callable throws before anything else, even on an empty array
+# (oracle: [].sort(5) -> "TypeError: The comparison function must be either a
+# function or undefined: 5"); fewer than two elements return untouched; the
+# undefined elements are counted out of the work array, never passed to the
+# comparator, and written back after the sorted values (oracle: [u, 'z',
+# 'a'].sort() -> a,z,undefined). Without a comparefn two elements compare as
+# their ToStrings in UTF-16 code-unit order (Runtime's JS ToString, ADR 0012's
+# js_string_compare); a comparefn is called with (x, y) and no this (ADR 0009),
+# its result goes through JS ToNumber and NaN counts as +0 (oracle: a macro's
+# SafeString output ' 2 ' is 2, 'x' is 0); only the sign is used, and -0 is not
+# below 0. Whatever the comparefn throws propagates as is. It sorts a copy of
+# the elements, and the receiver is written once, at the end: the comparefn
+# sees the unsorted array, and an exception leaves it unchanged.
+#
+# What the .tq does that has no counterpart here, and why:
+#   * the elements-kind accessors (Load / Store / Delete for Smi, double, object
+#     and generic elements, CheckAccessor, ResetToGenericAccessor): Perl has one
+#     array kind, and every accessor writes the same values back -- index by
+#     index, so a comparefn that grew the array keeps its tail, as in V8;
+#   * array holes: the Perl value model has none (ADR 0001), so the compaction
+#     skips nothing and the copy back deletes nothing;
+#   * SortCompareDefault's Smi fast path (SmiLexicographicCompare): it returns
+#     what comparing the two decimal strings returns;
+#   * the Smi clamps of the lengths (kSmiMaxValue), the offset overflow guards
+#     in the gallops (Smi wrap-around) and the temp array's size policy: Perl
+#     integers do not wrap at array sizes, and a Perl array grows on demand.
+
+# When we get into galloping mode, we stay there until both runs win less often
+# than kMinGallopWins consecutive times.
+my $JS_SORT_MIN_GALLOP_WINS = 7;
+
+# SortState.Compare
+sub _js_sort_compare {
+  my ( $self, $sort_state, $x, $y ) = @_;
+  return defined( $sort_state->{user_cmp_fn} )
+    ? $self->_js_sort_compare_user_fn( $sort_state->{user_cmp_fn}, $x, $y )
+    : $self->_js_sort_compare_default( $x, $y );
+}
+
+sub _js_sort_new_sort_state {
+  my ( $self, $receiver, $comparefn, $initial_receiver_length ) = @_;
+  return {
+    receiver                => $receiver,
+    initial_receiver_length => $initial_receiver_length,
+    user_cmp_fn             => $comparefn,
+    min_gallop              => $JS_SORT_MIN_GALLOP_WINS,
+    pending_runs_size       => 0,
+    pending_runs            => [],
+    work_array              => [],
+    temp_array              => [],
+    sort_length             => 0,
+    number_of_undefined     => 0,
+  };
+}
+
+sub _js_sort_compare_default {
+  my ( $self, $x, $y ) = @_;
+  my $rt = $self->_runtime;
+
+  # 5. Let xString be ? ToString(x).
+  # 6. Let yString be ? ToString(y).
+  # 7.-11. xString < yString -> -1, yString < xString -> 1, else +0
+  return $self->js_string_compare( $rt->_js_to_string($x), $rt->_js_to_string($y) );
+}
+
+sub _js_sort_compare_user_fn {
+  my ( $self, $comparefn, $x, $y ) = @_;
+
+  # a. Let v be ? ToNumber(? Call(comparefn, undefined, x, y)).
+  my $v = $self->_runtime->_to_number( $comparefn->( $x, $y ) );
+
+  # b. If v is NaN, return +0.
+  return 0 if $v != $v;
+
+  # c. return v.
+  return $v;
+}
+
+# The pending runs, run #i at [2 * i] (base) and [2 * i + 1] (length).
+sub _js_sort_get_pending_runs_size  { my ( $self, $sort_state ) = @_; $sort_state->{pending_runs_size} }
+sub _js_sort_get_pending_run_base   { my ( $self, $pending_runs, $run ) = @_; $pending_runs->[ $run << 1 ] }
+sub _js_sort_set_pending_run_base   { my ( $self, $pending_runs, $run, $value ) = @_; $pending_runs->[ $run << 1 ] = $value; return }
+sub _js_sort_get_pending_run_length { my ( $self, $pending_runs, $run ) = @_; $pending_runs->[ ( $run << 1 ) + 1 ] }
+sub _js_sort_set_pending_run_length { my ( $self, $pending_runs, $run, $value ) = @_; $pending_runs->[ ( $run << 1 ) + 1 ] = $value; return }
+
+sub _js_sort_push_run {
+  my ( $self, $sort_state, $base, $length ) = @_;
+  my $stack_size   = $self->_js_sort_get_pending_runs_size($sort_state);
+  my $pending_runs = $sort_state->{pending_runs};
+
+  $self->_js_sort_set_pending_run_base( $pending_runs, $stack_size, $base );
+  $self->_js_sort_set_pending_run_length( $pending_runs, $stack_size, $length );
+
+  $sort_state->{pending_runs_size} = $stack_size + 1;
+  return;
+}
+
+# Returns the temporary array. V8 makes sure it has at least
+# max(kSortStateTempSize, requestedSize) slots; a Perl array grows on demand.
+sub _js_sort_get_temp_array {
+  my ( $self, $sort_state, $requested_size ) = @_;
+  return $sort_state->{temp_array};
+}
+
+# source and target might be the same array, with overlapping ranges; V8 copies
+# from the back when srcPos < dstPos. A slice assignment reads the whole source
+# range before it writes, which gives the same result.
+sub _js_sort_copy {
+  my ( $self, $source, $src_pos, $target, $dst_pos, $length ) = @_;
+  @{$target}[ $dst_pos .. $dst_pos + $length - 1 ] = @{$source}[ $src_pos .. $src_pos + $length - 1 ];
+  return;
+}
+
+# BinaryInsertionSort is the best method for sorting small arrays: it does few
+# compares, but can do data movement quadratic in the number of elements.
+# [low, high) is a contiguous range of an array, and is sorted via binary
+# insertion. This sort is stable. On entry, must have low <= start <= high, and
+# that [low, start) is already sorted. Pass start == low if you do not know!
+sub _js_sort_binary_insertion_sort {
+  my ( $self, $sort_state, $low, $start_arg, $high ) = @_;
+  my $work_array = $sort_state->{work_array};
+
+  my $start = $low == $start_arg ? $start_arg + 1 : $start_arg;
+
+  for ( ; $start < $high; ++$start ) {
+    # Set left to where a[start] belongs.
+    my $left  = $low;
+    my $right = $start;
+
+    my $pivot = $work_array->[$right];
+
+    # Invariants:
+    #   pivot >= all in [low, left).
+    #   pivot  < all in [right, start).
+    # Find pivot insertion point.
+    while ( $left < $right ) {
+      my $mid   = $left + ( ( $right - $left ) >> 1 );
+      my $order = $self->_js_sort_compare( $sort_state, $pivot, $work_array->[$mid] );
+
+      if ( $order < 0 ) {
+        $right = $mid;
+      } else {
+        $left = $mid + 1;
+      }
+    }
+
+    # The invariants still hold, so pivot belongs at left. Note that if there
+    # are elements equal to pivot, left points to the first slot after them --
+    # that's why this sort is stable. Slide over to make room.
+    @{$work_array}[ $left + 1 .. $start ] = @{$work_array}[ $left .. $start - 1 ];
+    $work_array->[$left] = $pivot;
+  }
+  return;
+}
+
+# Return the length of the run beginning at low, in the range [low, high), low
+# < high is required on entry. "A run" is the longest ascending sequence, with
+#   a[low] <= a[low + 1] <= a[low + 2] <= ...
+# or the longest descending sequence, with
+#   a[low] > a[low + 1] > a[low + 2] > ...
+# The strict ">" ensures there are no equal elements to get out of order when
+# a descending run is reversed, so the returned length is always an ascending
+# sequence.
+sub _js_sort_count_and_make_run {
+  my ( $self, $sort_state, $low_arg, $high ) = @_;
+  my $work_array = $sort_state->{work_array};
+
+  my $low = $low_arg + 1;
+  return 1 if $low == $high;
+
+  my $run_length = 2;
+
+  my $element_low      = $work_array->[$low];
+  my $element_low_pred = $work_array->[ $low - 1 ];
+  my $order            = $self->_js_sort_compare( $sort_state, $element_low, $element_low_pred );
+
+  my $is_descending = $order < 0 ? 1 : 0;
+
+  my $previous_element = $element_low;
+  for ( my $idx = $low + 1; $idx < $high; ++$idx ) {
+    my $current_element = $work_array->[$idx];
+    $order = $self->_js_sort_compare( $sort_state, $current_element, $previous_element );
+
+    if ($is_descending) {
+      last if $order >= 0;
+    } else {
+      last if $order < 0;
+    }
+
+    $previous_element = $current_element;
+    ++$run_length;
+  }
+
+  $self->_js_sort_reverse_range( $work_array, $low_arg, $low_arg + $run_length ) if $is_descending;
+
+  return $run_length;
+}
+
+sub _js_sort_reverse_range {
+  my ( $self, $array, $from, $to ) = @_;
+  @{$array}[ $from .. $to - 1 ] = reverse @{$array}[ $from .. $to - 1 ];
+  return;
+}
+
+# Merges the two runs at stack indices i and i + 1. We are only allowed to
+# either merge the two top-most runs, or leave the top most run alone and merge
+# the two next runs.
+sub _js_sort_merge_at {
+  my ( $self, $sort_state, $i ) = @_;
+  my $stack_size = $self->_js_sort_get_pending_runs_size($sort_state);
+  my $work_array = $sort_state->{work_array};
+
+  my $pending_runs = $sort_state->{pending_runs};
+  my $base_a       = $self->_js_sort_get_pending_run_base( $pending_runs, $i );
+  my $length_a     = $self->_js_sort_get_pending_run_length( $pending_runs, $i );
+  my $base_b       = $self->_js_sort_get_pending_run_base( $pending_runs, $i + 1 );
+  my $length_b     = $self->_js_sort_get_pending_run_length( $pending_runs, $i + 1 );
+
+  # Record the length of the combined runs; if i is the 3rd-last run now, also
+  # slide over the last run (which isn't involved in this merge). The current
+  # run i + 1 goes away in any case.
+  $self->_js_sort_set_pending_run_length( $pending_runs, $i, $length_a + $length_b );
+  if ( $i == $stack_size - 3 ) {
+    my $base   = $self->_js_sort_get_pending_run_base( $pending_runs, $i + 2 );
+    my $length = $self->_js_sort_get_pending_run_length( $pending_runs, $i + 2 );
+    $self->_js_sort_set_pending_run_base( $pending_runs, $i + 1, $base );
+    $self->_js_sort_set_pending_run_length( $pending_runs, $i + 1, $length );
+  }
+  $sort_state->{pending_runs_size} = $stack_size - 1;
+
+  # Where does b start in a? Elements in a before that can be ignored, because
+  # they are already in place.
+  my $key_right = $work_array->[$base_b];
+  my $k         = $self->_js_sort_gallop_right( $sort_state, $work_array, $key_right, $base_a, $length_a, 0 );
+
+  $base_a   = $base_a + $k;
+  $length_a = $length_a - $k;
+  return if $length_a == 0;
+
+  # Where does a end in b? Elements in b after that can be ignored, because
+  # they are already in place.
+  my $key_left = $work_array->[ $base_a + $length_a - 1 ];
+  $length_b = $self->_js_sort_gallop_left( $sort_state, $work_array, $key_left, $base_b, $length_b, $length_b - 1 );
+  return if $length_b == 0;
+
+  # Merge what remains of the runs, using a temp array with min(lengthA,
+  # lengthB) elements.
+  if ( $length_a <= $length_b ) {
+    $self->_js_sort_merge_low( $sort_state, $base_a, $length_a, $base_b, $length_b );
+  } else {
+    $self->_js_sort_merge_high( $sort_state, $base_a, $length_a, $base_b, $length_b );
+  }
+  return;
+}
+
+# Locates the proper position of key in a sorted array; if the array contains
+# an element equal to key, return the position immediately to the left of the
+# leftmost equal element. (GallopRight does the same except returns the
+# position to the right of the rightmost equal element (if any)).
+#
+# The array is sorted with "length" elements, starting at "base". "length" must
+# be > 0. "hint" is an index at which to begin the search, 0 <= hint < n. The
+# closer hint is to the final result, the faster this runs.
+#
+# The return value is the int offset in 0..length such that
+#   array[base + offset] < key <= array[base + offset + 1]
+# pretending that array[base - 1] is minus infinity and array[base + len] is
+# plus infinity. In other words, key belongs at index base + k.
+sub _js_sort_gallop_left {
+  my ( $self, $sort_state, $array, $key, $base, $length, $hint ) = @_;
+
+  my $last_ofs = 0;
+  my $offset   = 1;
+
+  my $base_hint_element = $array->[ $base + $hint ];
+  my $order             = $self->_js_sort_compare( $sort_state, $base_hint_element, $key );
+
+  if ( $order < 0 ) {
+    # a[base + hint] < key: gallop right, until
+    # a[base + hint + lastOfs] < key <= a[base + hint + offset].
+
+    # a[base + length - 1] is highest.
+    my $max_ofs = $length - $hint;
+    while ( $offset < $max_ofs ) {
+      my $offset_element = $array->[ $base + $hint + $offset ];
+      $order = $self->_js_sort_compare( $sort_state, $offset_element, $key );
+
+      # a[base + hint + offset] >= key? Break.
+      last if $order >= 0;
+
+      $last_ofs = $offset;
+      $offset   = ( $offset << 1 ) + 1;
+    }
+
+    $offset = $max_ofs if $offset > $max_ofs;
+
+    # Translate back to positive offsets relative to base.
+    $last_ofs = $last_ofs + $hint;
+    $offset   = $offset + $hint;
+  } else {
+    # key <= a[base + hint]: gallop left, until
+    # a[base + hint - offset] < key <= a[base + hint - lastOfs].
+
+    # a[base + hint] is lowest.
+    my $max_ofs = $hint + 1;
+    while ( $offset < $max_ofs ) {
+      my $offset_element = $array->[ $base + $hint - $offset ];
+      $order = $self->_js_sort_compare( $sort_state, $offset_element, $key );
+
+      last if $order < 0;
+
+      $last_ofs = $offset;
+      $offset   = ( $offset << 1 ) + 1;
+    }
+
+    $offset = $max_ofs if $offset > $max_ofs;
+
+    # Translate back to positive offsets relative to base.
+    my $tmp = $last_ofs;
+    $last_ofs = $hint - $offset;
+    $offset   = $hint - $tmp;
+  }
+
+  # Now a[base+lastOfs] < key <= a[base+offset], so key belongs somewhere to the
+  # right of lastOfs but no farther right than offset. Do a binary search, with
+  # invariant: a[base + lastOfs - 1] < key <= a[base + offset].
+  $last_ofs++;
+  while ( $last_ofs < $offset ) {
+    my $m = $last_ofs + ( ( $offset - $last_ofs ) >> 1 );
+
+    $order = $self->_js_sort_compare( $sort_state, $array->[ $base + $m ], $key );
+
+    if ( $order < 0 ) {
+      $last_ofs = $m + 1;    # a[base + m] < key.
+    } else {
+      $offset = $m;          # key <= a[base + m].
+    }
+  }
+  # so a[base + offset - 1] < key <= a[base + offset].
+  return $offset;
+}
+
+# Exactly like GallopLeft, except that if key already exists in [base, base +
+# length), finds the position immediately to the right of the rightmost equal
+# value. The return value is the int offset in 0..length such that
+#   array[base + offset - 1] <= key < array[base + offset]
+sub _js_sort_gallop_right {
+  my ( $self, $sort_state, $array, $key, $base, $length, $hint ) = @_;
+
+  my $last_ofs = 0;
+  my $offset   = 1;
+
+  my $base_hint_element = $array->[ $base + $hint ];
+  my $order             = $self->_js_sort_compare( $sort_state, $key, $base_hint_element );
+
+  if ( $order < 0 ) {
+    # key < a[base + hint]: gallop left, until
+    # a[base + hint - offset] <= key < a[base + hint - lastOfs].
+
+    # a[base + hint] is lowest.
+    my $max_ofs = $hint + 1;
+    while ( $offset < $max_ofs ) {
+      my $offset_element = $array->[ $base + $hint - $offset ];
+      $order = $self->_js_sort_compare( $sort_state, $key, $offset_element );
+
+      last if $order >= 0;
+
+      $last_ofs = $offset;
+      $offset   = ( $offset << 1 ) + 1;
+    }
+
+    $offset = $max_ofs if $offset > $max_ofs;
+
+    # Translate back to positive offsets relative to base.
+    my $tmp = $last_ofs;
+    $last_ofs = $hint - $offset;
+    $offset   = $hint - $tmp;
+  } else {
+    # a[base + hint] <= key: gallop right, until
+    # a[base + hint + lastOfs] <= key < a[base + hint + offset].
+
+    # a[base + length - 1] is highest.
+    my $max_ofs = $length - $hint;
+    while ( $offset < $max_ofs ) {
+      my $offset_element = $array->[ $base + $hint + $offset ];
+      $order = $self->_js_sort_compare( $sort_state, $key, $offset_element );
+
+      # a[base + hint + ofs] <= key.
+      last if $order < 0;
+
+      $last_ofs = $offset;
+      $offset   = ( $offset << 1 ) + 1;
+    }
+
+    $offset = $max_ofs if $offset > $max_ofs;
+
+    # Translate back to positive offests relative to base.
+    $last_ofs = $last_ofs + $hint;
+    $offset   = $offset + $hint;
+  }
+
+  # Now a[base + lastOfs] <= key < a[base + ofs], so key belongs somewhere to
+  # the right of lastOfs but no farther right than ofs. Do a binary search, with
+  # invariant a[base + lastOfs - 1] < key <= a[base + ofs].
+  $last_ofs++;
+  while ( $last_ofs < $offset ) {
+    my $m = $last_ofs + ( ( $offset - $last_ofs ) >> 1 );
+
+    $order = $self->_js_sort_compare( $sort_state, $key, $array->[ $base + $m ] );
+
+    if ( $order < 0 ) {
+      $offset = $m;          # key < a[base + m].
+    } else {
+      $last_ofs = $m + 1;    # a[base + m] <= key.
+    }
+  }
+  # so a[base + offset - 1] <= key < a[base + offset].
+  return $offset;
+}
+
+# Merge the lengthA elements starting at baseA with the lengthB elements
+# starting at baseB in a stable way, in-place. lengthA and lengthB must be > 0,
+# and baseA + lengthA == baseB. Must also have that array[baseB] <
+# array[baseA], that array[baseA + lengthA - 1] belongs at the end of the
+# merge, and should have lengthA <= lengthB.
+#
+# The .tq's try / label blocks: `goto Succeed` and `goto CopyB` leave the MERGE
+# block with `last MERGE`, the label's name in $goto.
+sub _js_sort_merge_low {
+  my ( $self, $sort_state, $base_a, $length_a_arg, $base_b, $length_b_arg ) = @_;
+
+  my $length_a = $length_a_arg;
+  my $length_b = $length_b_arg;
+
+  my $work_array = $sort_state->{work_array};
+  my $temp_array = $self->_js_sort_get_temp_array( $sort_state, $length_a );
+  $self->_js_sort_copy( $work_array, $base_a, $temp_array, 0, $length_a );
+
+  my $dest        = $base_a;
+  my $cursor_temp = 0;
+  my $cursor_b    = $base_b;
+
+  $work_array->[ $dest++ ] = $work_array->[ $cursor_b++ ];
+
+  my $goto = 'Succeed';
+  MERGE: {
+    last MERGE if --$length_b == 0;
+    if ( $length_a == 1 ) { $goto = 'CopyB'; last MERGE }
+
+    my $min_gallop = $sort_state->{min_gallop};
+    while (1) {
+      my $nof_wins_a = 0;    # # of times A won in a row.
+      my $nof_wins_b = 0;    # # of times B won in a row.
+
+      # Do the straightforward thing until (if ever) one run appears to win
+      # consistently.
+      while (1) {
+        my $order = $self->_js_sort_compare( $sort_state, $work_array->[$cursor_b], $temp_array->[$cursor_temp] );
+
+        if ( $order < 0 ) {
+          $work_array->[ $dest++ ] = $work_array->[ $cursor_b++ ];
+
+          ++$nof_wins_b;
+          --$length_b;
+          $nof_wins_a = 0;
+
+          last MERGE if $length_b == 0;
+          last if $nof_wins_b >= $min_gallop;
+        } else {
+          $work_array->[ $dest++ ] = $temp_array->[ $cursor_temp++ ];
+
+          ++$nof_wins_a;
+          --$length_a;
+          $nof_wins_b = 0;
+
+          if ( $length_a == 1 ) { $goto = 'CopyB'; last MERGE }
+          last if $nof_wins_a >= $min_gallop;
+        }
+      }
+
+      # One run is winning so consistently that galloping may be a huge win. So
+      # try that, and continue galloping until (if ever) neither run appears to
+      # be winning consistently anymore.
+      ++$min_gallop;
+      my $first_iteration = 1;
+      while ( $nof_wins_a >= $JS_SORT_MIN_GALLOP_WINS || $nof_wins_b >= $JS_SORT_MIN_GALLOP_WINS || $first_iteration ) {
+        $first_iteration = 0;
+
+        $min_gallop = $min_gallop - 1 > 1 ? $min_gallop - 1 : 1;    # SmiMax(1, minGallop - 1)
+        $sort_state->{min_gallop} = $min_gallop;
+
+        $nof_wins_a = $self->_js_sort_gallop_right( $sort_state, $temp_array, $work_array->[$cursor_b], $cursor_temp, $length_a, 0 );
+
+        if ( $nof_wins_a > 0 ) {
+          $self->_js_sort_copy( $temp_array, $cursor_temp, $work_array, $dest, $nof_wins_a );
+          $dest        = $dest + $nof_wins_a;
+          $cursor_temp = $cursor_temp + $nof_wins_a;
+          $length_a    = $length_a - $nof_wins_a;
+
+          if ( $length_a == 1 ) { $goto = 'CopyB'; last MERGE }
+
+          # lengthA == 0 is impossible now if the comparison function is
+          # consistent, but we can't assume that it is.
+          last MERGE if $length_a == 0;
+        }
+        $work_array->[ $dest++ ] = $work_array->[ $cursor_b++ ];
+        last MERGE if --$length_b == 0;
+
+        $nof_wins_b = $self->_js_sort_gallop_left( $sort_state, $work_array, $temp_array->[$cursor_temp], $cursor_b, $length_b, 0 );
+        if ( $nof_wins_b > 0 ) {
+          $self->_js_sort_copy( $work_array, $cursor_b, $work_array, $dest, $nof_wins_b );
+
+          $dest     = $dest + $nof_wins_b;
+          $cursor_b = $cursor_b + $nof_wins_b;
+          $length_b = $length_b - $nof_wins_b;
+
+          last MERGE if $length_b == 0;
+        }
+        $work_array->[ $dest++ ] = $temp_array->[ $cursor_temp++ ];
+        if ( --$length_a == 1 ) { $goto = 'CopyB'; last MERGE }
+      }
+      ++$min_gallop;    # Penalize it for leaving galloping mode
+      $sort_state->{min_gallop} = $min_gallop;
+    }
+  }
+
+  if ( $goto eq 'Succeed' ) {
+    $self->_js_sort_copy( $temp_array, $cursor_temp, $work_array, $dest, $length_a ) if $length_a > 0;
+  } else {    # CopyB
+    # The last element of run A belongs at the end of the merge.
+    $self->_js_sort_copy( $work_array, $cursor_b, $work_array, $dest, $length_b );
+    $work_array->[ $dest + $length_b ] = $temp_array->[$cursor_temp];
+  }
+  return;
+}
+
+# Merge the lengthA elements starting at baseA with the lengthB elements
+# starting at baseB in a stable way, in-place. lengthA and lengthB must be > 0.
+# Must also have that array[baseA + lengthA - 1] belongs at the end of the
+# merge and should have lengthA >= lengthB. Labels as in _js_sort_merge_low,
+# here Succeed and CopyA.
+sub _js_sort_merge_high {
+  my ( $self, $sort_state, $base_a, $length_a_arg, $base_b, $length_b_arg ) = @_;
+
+  my $length_a = $length_a_arg;
+  my $length_b = $length_b_arg;
+
+  my $work_array = $sort_state->{work_array};
+  my $temp_array = $self->_js_sort_get_temp_array( $sort_state, $length_b );
+  $self->_js_sort_copy( $work_array, $base_b, $temp_array, 0, $length_b );
+
+  # MergeHigh merges the two runs backwards.
+  my $dest        = $base_b + $length_b - 1;
+  my $cursor_temp = $length_b - 1;
+  my $cursor_a    = $base_a + $length_a - 1;
+
+  $work_array->[ $dest-- ] = $work_array->[ $cursor_a-- ];
+
+  my $goto = 'Succeed';
+  MERGE: {
+    last MERGE if --$length_a == 0;
+    if ( $length_b == 1 ) { $goto = 'CopyA'; last MERGE }
+
+    my $min_gallop = $sort_state->{min_gallop};
+    while (1) {
+      my $nof_wins_a = 0;    # # of times A won in a row.
+      my $nof_wins_b = 0;    # # of times B won in a row.
+
+      # Do the straightforward thing until (if ever) one run appears to win
+      # consistently.
+      while (1) {
+        my $order = $self->_js_sort_compare( $sort_state, $temp_array->[$cursor_temp], $work_array->[$cursor_a] );
+
+        if ( $order < 0 ) {
+          $work_array->[ $dest-- ] = $work_array->[ $cursor_a-- ];
+
+          ++$nof_wins_a;
+          --$length_a;
+          $nof_wins_b = 0;
+
+          last MERGE if $length_a == 0;
+          last if $nof_wins_a >= $min_gallop;
+        } else {
+          $work_array->[ $dest-- ] = $temp_array->[ $cursor_temp-- ];
+
+          ++$nof_wins_b;
+          --$length_b;
+          $nof_wins_a = 0;
+
+          if ( $length_b == 1 ) { $goto = 'CopyA'; last MERGE }
+          last if $nof_wins_b >= $min_gallop;
+        }
+      }
+
+      # One run is winning so consistently that galloping may be a huge win. So
+      # try that, and continue galloping until (if ever) neither run appears to
+      # be winning consistently anymore.
+      ++$min_gallop;
+      my $first_iteration = 1;
+      while ( $nof_wins_a >= $JS_SORT_MIN_GALLOP_WINS || $nof_wins_b >= $JS_SORT_MIN_GALLOP_WINS || $first_iteration ) {
+        $first_iteration = 0;
+
+        $min_gallop = $min_gallop - 1 > 1 ? $min_gallop - 1 : 1;    # SmiMax(1, minGallop - 1)
+        $sort_state->{min_gallop} = $min_gallop;
+
+        my $k = $self->_js_sort_gallop_right( $sort_state, $work_array, $temp_array->[$cursor_temp], $base_a, $length_a, $length_a - 1 );
+        $nof_wins_a = $length_a - $k;
+
+        if ( $nof_wins_a > 0 ) {
+          $dest     = $dest - $nof_wins_a;
+          $cursor_a = $cursor_a - $nof_wins_a;
+          $self->_js_sort_copy( $work_array, $cursor_a + 1, $work_array, $dest + 1, $nof_wins_a );
+
+          $length_a = $length_a - $nof_wins_a;
+          last MERGE if $length_a == 0;
+        }
+        $work_array->[ $dest-- ] = $temp_array->[ $cursor_temp-- ];
+        if ( --$length_b == 1 ) { $goto = 'CopyA'; last MERGE }
+
+        $k = $self->_js_sort_gallop_left( $sort_state, $temp_array, $work_array->[$cursor_a], 0, $length_b, $length_b - 1 );
+        $nof_wins_b = $length_b - $k;
+
+        if ( $nof_wins_b > 0 ) {
+          $dest        = $dest - $nof_wins_b;
+          $cursor_temp = $cursor_temp - $nof_wins_b;
+          $self->_js_sort_copy( $temp_array, $cursor_temp + 1, $work_array, $dest + 1, $nof_wins_b );
+
+          $length_b = $length_b - $nof_wins_b;
+          if ( $length_b == 1 ) { $goto = 'CopyA'; last MERGE }
+
+          # lengthB == 0 is impossible now if the comparison function is
+          # consistent, but we can't assume that it is.
+          last MERGE if $length_b == 0;
+        }
+        $work_array->[ $dest-- ] = $work_array->[ $cursor_a-- ];
+        last MERGE if --$length_a == 0;
+      }
+      ++$min_gallop;
+      $sort_state->{min_gallop} = $min_gallop;
+    }
+  }
+
+  if ( $goto eq 'Succeed' ) {
+    $self->_js_sort_copy( $temp_array, 0, $work_array, $dest - ( $length_b - 1 ), $length_b ) if $length_b > 0;
+  } else {    # CopyA
+    # The first element of run B belongs at the front of the merge.
+    $dest     = $dest - $length_a;
+    $cursor_a = $cursor_a - $length_a;
+    $self->_js_sort_copy( $work_array, $cursor_a + 1, $work_array, $dest + 1, $length_a );
+    $work_array->[$dest] = $temp_array->[$cursor_temp];
+  }
+  return;
+}
+
+# Compute a good value for the minimum run length; natural runs shorter than
+# this are boosted artificially via binary insertion sort. If n < 64, return n
+# (it's too small to bother with fancy stuff). Else if n is an exact power of 2,
+# return 32. Else return an int k, 32 <= k <= 64, such that n/k is close to,
+# but strictly less than, an exact power of 2.
+sub _js_sort_compute_min_run_length {
+  my ( $self, $n_arg ) = @_;
+  my $n = $n_arg;
+  my $r = 0;    # Becomes 1 if any 1 bits are shifted off.
+
+  while ( $n >= 64 ) {
+    $r = $r | ( $n & 1 );
+    $n = $n >> 1;
+  }
+
+  return $n + $r;
+}
+
+# Returns true iff run_length(n - 2) > run_length(n - 1) + run_length(n).
+sub _js_sort_run_invariant_established {
+  my ( $self, $pending_runs, $n ) = @_;
+  return 1 if $n < 2;
+
+  my $run_length_n   = $self->_js_sort_get_pending_run_length( $pending_runs, $n );
+  my $run_length_nm  = $self->_js_sort_get_pending_run_length( $pending_runs, $n - 1 );
+  my $run_length_nmm = $self->_js_sort_get_pending_run_length( $pending_runs, $n - 2 );
+
+  return $run_length_nmm > $run_length_nm + $run_length_n ? 1 : 0;
+}
+
+# Examines the stack of runs waiting to be merged, merging adjacent runs until
+# the stack invariants are re-established:
+#   1. run_length(i - 3) > run_length(i - 2) + run_length(i - 1)
+#   2. run_length(i - 2) > run_length(i - 1)
+sub _js_sort_merge_collapse {
+  my ( $self, $sort_state ) = @_;
+  my $pending_runs = $sort_state->{pending_runs};
+
+  # Reload the stack size because MergeAt might change it.
+  while ( $self->_js_sort_get_pending_runs_size($sort_state) > 1 ) {
+    my $n = $self->_js_sort_get_pending_runs_size($sort_state) - 2;
+
+    if ( !$self->_js_sort_run_invariant_established( $pending_runs, $n + 1 )
+      || !$self->_js_sort_run_invariant_established( $pending_runs, $n ) )
+    {
+      --$n
+        if $self->_js_sort_get_pending_run_length( $pending_runs, $n - 1 )
+        < $self->_js_sort_get_pending_run_length( $pending_runs, $n + 1 );
+
+      $self->_js_sort_merge_at( $sort_state, $n );
+    } elsif ( $self->_js_sort_get_pending_run_length( $pending_runs, $n )
+      <= $self->_js_sort_get_pending_run_length( $pending_runs, $n + 1 ) )
+    {
+      $self->_js_sort_merge_at( $sort_state, $n );
+    } else {
+      last;
+    }
+  }
+  return;
+}
+
+# Regardless of invariants, merge all runs on the stack until only one remains.
+# This is used at the end of the mergesort.
+sub _js_sort_merge_force_collapse {
+  my ( $self, $sort_state ) = @_;
+  my $pending_runs = $sort_state->{pending_runs};
+
+  # Reload the stack size because MergeAt might change it.
+  while ( $self->_js_sort_get_pending_runs_size($sort_state) > 1 ) {
+    my $n = $self->_js_sort_get_pending_runs_size($sort_state) - 2;
+
+    --$n
+      if $n > 0
+      && $self->_js_sort_get_pending_run_length( $pending_runs, $n - 1 )
+      < $self->_js_sort_get_pending_run_length( $pending_runs, $n + 1 );
+    $self->_js_sort_merge_at( $sort_state, $n );
+  }
+  return;
+}
+
+sub _js_array_tim_sort_impl {
+  my ( $self, $sort_state, $length ) = @_;
+  return if $length < 2;
+  my $remaining = $length;
+
+  # March over the array once, left to right, finding natural runs, and
+  # extending short natural runs to minrun elements.
+  my $low            = 0;
+  my $min_run_length = $self->_js_sort_compute_min_run_length($remaining);
+  while ( $remaining != 0 ) {
+    my $current_run_length = $self->_js_sort_count_and_make_run( $sort_state, $low, $low + $remaining );
+
+    # If the run is short, extend it to min(minRunLength, remaining).
+    if ( $current_run_length < $min_run_length ) {
+      my $forced_run_length = $min_run_length < $remaining ? $min_run_length : $remaining;
+      $self->_js_sort_binary_insertion_sort( $sort_state, $low, $low + $current_run_length, $low + $forced_run_length );
+      $current_run_length = $forced_run_length;
+    }
+
+    # Push run onto pending-runs stack, and maybe merge.
+    $self->_js_sort_push_run( $sort_state, $low, $current_run_length );
+
+    $self->_js_sort_merge_collapse($sort_state);
+
+    # Advance to find next run.
+    $low       = $low + $current_run_length;
+    $remaining = $remaining - $current_run_length;
+  }
+
+  $self->_js_sort_merge_force_collapse($sort_state);
+  return;
+}
+
+# Move all non-undefined elements into the work array and count the undefined
+# ones. V8 skips holes here; the Perl value model has none (ADR 0001).
+sub _js_sort_compact_receiver_elements_into_work_array {
+  my ( $self, $sort_state ) = @_;
+  my $receiver        = $sort_state->{receiver};
+  my $receiver_length = $sort_state->{initial_receiver_length};
+  my $work_array      = $sort_state->{work_array};
+
+  my $number_of_undefined = 0;
+  for ( my $i = 0; $i < $receiver_length; ++$i ) {
+    my $element = $receiver->[$i];
+
+    if ( !defined($element) ) {
+      $number_of_undefined++;
+    } else {
+      push @$work_array, $element;
+    }
+  }
+
+  $sort_state->{sort_length}         = $receiver_length;
+  $sort_state->{number_of_undefined} = $number_of_undefined;
+
+  return scalar @$work_array;
+}
+
+# Writing the elements back is a 3 step process:
+#   1. Copy the sorted elements from the workarray to the receiver.
+#   2. Add {nOfUndefined} undefineds to the receiver.
+#   3. Depending on the backing store either delete properties or set them to
+#      the TheHole up to {sortState.sortLength}.
+# Without holes the first two steps reach sortLength, so the third has nothing
+# to do.
+sub _js_sort_copy_work_array_to_receiver {
+  my ( $self, $sort_state, $number_of_non_undefined ) = @_;
+  my $receiver   = $sort_state->{receiver};
+  my $work_array = $sort_state->{work_array};
+
+  my $index = 0;
+  for ( ; $index < $number_of_non_undefined; ++$index ) {
+    $receiver->[$index] = $work_array->[$index];
+  }
+
+  my $number_of_undefined_end = $sort_state->{number_of_undefined} + $number_of_non_undefined;
+  for ( ; $index < $number_of_undefined_end; ++$index ) {
+    $receiver->[$index] = undef;
+  }
+  return;
+}
+
+sub _js_array_tim_sort {
+  my ( $self, $sort_state ) = @_;
+  my $number_of_non_undefined = $self->_js_sort_compact_receiver_elements_into_work_array($sort_state);
+  $self->_js_array_tim_sort_impl( $sort_state, $number_of_non_undefined );
+
+  # The comparison function or toString might have changed the receiver; V8
+  # then writes back through the generic accessor -- the same values.
+  $self->_js_sort_copy_work_array_to_receiver( $sort_state, $number_of_non_undefined );
+  return;
+}
+
+# ArrayPrototypeSort -- https://tc39.github.io/ecma262/#sec-array.prototype.sort
+# Sorts $arr in place and returns it; $comparefn undef is JS undefined.
+sub js_array_sort {
+  my ( $self, $arr, $comparefn ) = @_;
+
+  # 1. If comparefn is not undefined and IsCallable(comparefn) is false, throw
+  #    a TypeError exception. (V8 shows the value without side effects.)
+  if ( defined($comparefn) && !$self->is_function($comparefn) ) {
+    die Text::Nunjucks::Lib::Error->new(
+      'The comparison function must be either a function or undefined: '
+        . $self->_runtime->_js_no_side_effects_to_string($comparefn),
+      name => 'TypeError',
+    );
+  }
+
+  # 2. Let obj be ? ToObject(this value).
+  # 3. Let len be ? ToLength(? Get(obj, "length")).
+  my $len = scalar @$arr;
+
+  return $arr if $len < 2;
+
+  my $sort_state = $self->_js_sort_new_sort_state( $arr, $comparefn, $len );
+  $self->_js_array_tim_sort($sort_state);
+
+  return $arr;
+}
+
+#### js_json_stringify -- JSON.stringify(value, null, space)
+
+# Not a src/lib.js function: the dump filter's JSON.stringify(obj, null,
+# spaces) -- ECMAScript's SerializeJSONProperty, SerializeJSONObject,
+# SerializeJSONArray and QuoteJSONString over the value model, in their order
+# and names, with V8's message for a circular structure. The replacer is null
+# at the one call site, so it has no parameter. Returns undef where
+# JSON.stringify returns undefined (oracle: u|dump and a macro|dump render '').
+#
+# The gap is V8's (InitializeGap; oracle, dump(space)): a string's first ten
+# UTF-16 code units, an astral character two of them; a number above 0 its
+# integer part in spaces, at most ten (1.5 is one, 1/0 ten). V8 departs from
+# the spec below 1: a number in (0, 1) has a gap of no spaces that still
+# breaks the output into lines, "key": value included (oracle: dump(0.5) is
+# "[\n1\n]"). An empty string, a number not above 0 (NaN, -1) and anything
+# else -- a boolean, null, an array, an object, keyword arguments, a
+# SafeString (no primitive wrapper) -- give no gap.
+#
+# The values (oracle): undefined and a function serialize to undefined, so a
+# property holding one is left out and an array element becomes null; null,
+# true and false; a finite number its JS ToString (ADR 0007, -0 is 0), NaN and
+# +-Infinity null; a string quoted -- the control characters, '"' and '\'
+# escaped, each lone surrogate (ADR 0012) as \uXXXX, U+007F, U+2028, U+2029
+# and U+FEFF as they are. An array serializes its elements; any other object
+# its own enumerable properties, in keys' order (ADR 0011), each read as
+# _entries reads it: a SafeString is {"val": ..., "length": ...}, a regex {}
+# (its lastIndex is not enumerable). A callable toJSON member is called with
+# the key -- '' at the top, an index as its string -- and its result
+# serialized instead (oracle: {'toJSON': m} with a macro m dumps m's
+# SafeString output); no prototype the value model reaches has one.
+#
+# An object met again inside itself throws V8's TypeError, "Converting
+# circular structure to JSON" and the circle as V8 prints it (V8 13.6.233.17,
+# src/json/json-stringifier.cc: StackPush,
+# ConstructCircularStructureErrorMessage, CircularStructureMessageBuilder):
+# the object that starts the circle, at most two of the objects after it,
+# '...' when more are skipped, the last one, then the key that closes the
+# circle -- an index as "index N", a property as "property 'k'", the empty key
+# as <anonymous> (oracle). Only arrays and plain objects hold objects, so
+# every constructor named is 'Array' or 'Object'. Every join goes through
+# js_string_append (ADR 0012): a gap may hold lone surrogates.
+
+my %JS_JSON_ESCAPE = (
+  "\x08" => '\b',
+  "\t"   => '\t',
+  "\n"   => '\n',
+  "\f"   => '\f',
+  "\r"   => '\r',
+  '"'    => '\"',
+  '\\'   => '\\\\',
+);
+
+# kCircularErrorMessagePrefixCount / kCircularErrorMessagePostfixCount
+my $JS_JSON_CIRCULAR_PREFIX_COUNT  = 2;
+my $JS_JSON_CIRCULAR_POSTFIX_COUNT = 1;
+
+sub js_json_stringify {
+  my ( $self, $value, $space ) = @_;
+  my $type = $self->_runtime->_js_type($space);
+  # V8's gap_ is a string or none at all; has_gap is "gap_ != nullptr"
+  my ( $gap, $has_gap ) = ( '', 0 );
+  if ( $type eq 'string' ) {
+    $gap     = $self->js_substring( $space, 0, 10 );
+    $has_gap = $gap ne '' ? 1 : 0;
+  } elsif ( $type eq 'number' ) {
+    my $value = $space > 10 ? 10 : $space;    # std::min(value, 10.0); NaN fails both tests
+    if ( $value > 0 ) {
+      $gap     = ' ' x int($value);           # DoubleToUint32
+      $has_gap = 1;
+    }
+  }
+
+  my $state = { stack => [], indent => '', gap => $gap, has_gap => $has_gap };
+  # SerializeJSONProperty(state, '', wrapper) -- wrapper is { '': value }
+  return $self->_js_json_serialize_property( $state, '', 0, $value );
+}
+
+# $key is the property key as a string; $is_index says it is an array index,
+# which V8's circle message prints differently. $value is Get(holder, key).
+sub _js_json_serialize_property {
+  my ( $self, $state, $key, $is_index, $value ) = @_;
+  my $rt = $self->_runtime;
+
+  # 2. If value is an Object, let toJSON be ? GetV(value, "toJSON"); if it is
+  #    callable, value = ? Call(toJSON, value, << key >>) -- no this (ADR 0009)
+  if ( ref($value) && !$rt->_is_none($value) && !$self->is_function($value) ) {
+    my $to_json = $rt->member_lookup( $value, 'toJSON' );
+    $value = $to_json->($key) if $self->is_function($to_json);
+  }
+
+  return undef if !defined($value) || $self->is_function($value);
+  return 'null' if $rt->_is_none($value);
+  return ( $value ? 'true' : 'false' ) if is_bool($value);
+  return $self->_js_json_quote($value) if $self->is_string($value);
+  if ( created_as_number($value) ) {
+    return 'null' if $value != $value || $value == $NUM_POS_INF || $value == $NUM_NEG_INF;
+    return $self->number_to_string($value);
+  }
+  return $self->_js_json_serialize_array( $state, $key, $is_index, $value ) if ref($value) eq 'ARRAY';
+  return $self->_js_json_serialize_object( $state, $key, $is_index, $value );
+}
+
+sub _js_json_quote {
+  my ( $self, $s ) = @_;
+  # A caller string spelling a pair as two surrogate characters is re-paired
+  # first, so both spellings quote alike (ADR 0012); every surrogate character
+  # left is a lone one and comes out escaped, so the quotes cannot pair with
+  # anything.
+  $s = $self->_js_from_units($s);
+  return '"' . ( $s =~ s{([\x{0}-\x{1F}"\\\x{D800}-\x{DFFF}])}{ $JS_JSON_ESCAPE{$1} // sprintf( '\\u%04x', ord $1 ) }ger ) . '"';
+}
+
+sub _js_json_serialize_object {
+  my ( $self, $state, $key, $is_index, $value ) = @_;
+  $self->_js_json_stack_push( $state, $key, $is_index, $value );
+  my $stepback = $state->{indent};
+  $self->js_string_append( $state->{indent}, $state->{gap} );
+
+  my @partial;
+  for my $p ( @{ $self->keys($value) } ) {
+    my $str_p = $self->_js_json_serialize_property( $state, $p, 0, $self->_own_value( $value, $p ) );
+    next unless defined $str_p;
+    my $member = $self->_js_json_quote($p) . ':';
+    $member .= ' ' if $state->{has_gap};
+    $self->js_string_append( $member, $str_p );
+    push @partial, $member;
+  }
+
+  my $final = $self->_js_json_final( $state, '{', '}', \@partial, $stepback );
+  pop @{ $state->{stack} };
+  $state->{indent} = $stepback;
+  return $final;
+}
+
+sub _js_json_serialize_array {
+  my ( $self, $state, $key, $is_index, $value ) = @_;
+  $self->_js_json_stack_push( $state, $key, $is_index, $value );
+  my $stepback = $state->{indent};
+  $self->js_string_append( $state->{indent}, $state->{gap} );
+
+  my @partial;
+  my $len = scalar @$value;
+  for my $index ( 0 .. $len - 1 ) {
+    my $str_p = $self->_js_json_serialize_property( $state, "$index", 1, $value->[$index] );
+    push @partial, defined($str_p) ? $str_p : 'null';
+  }
+
+  my $final = $self->_js_json_final( $state, '[', ']', \@partial, $stepback );
+  pop @{ $state->{stack} };
+  $state->{indent} = $stepback;
+  return $final;
+}
+
+# The final string SerializeJSONObject and SerializeJSONArray both build.
+sub _js_json_final {
+  my ( $self, $state, $open, $close, $partial, $stepback ) = @_;
+  return $open . $close unless @$partial;
+  my $separator = ',';
+  my $final     = $open;
+  if ( $state->{has_gap} ) {
+    $separator = ",\n";
+    $self->js_string_append( $separator, $state->{indent} );
+    $self->js_string_append( $final, "\n" );
+    $self->js_string_append( $final, $state->{indent} );
+  }
+  for my $i ( 0 .. $#$partial ) {
+    $self->js_string_append( $final, $separator ) if $i > 0;
+    $self->js_string_append( $final, $partial->[$i] );
+  }
+  if ( $state->{has_gap} ) {
+    $self->js_string_append( $final, "\n" );
+    $self->js_string_append( $final, $stepback );
+  }
+  $self->js_string_append( $final, $close );
+  return $final;
+}
+
+# If state.[[Stack]] contains value, throw a TypeError; else append it.
+sub _js_json_stack_push {
+  my ( $self, $state, $key, $is_index, $value ) = @_;
+  my $stack = $state->{stack};
+  for my $i ( 0 .. $#$stack ) {
+    die $self->_js_json_circular_error( $stack, $key, $is_index, $i ) if refaddr( $stack->[$i][2] ) == refaddr($value);
+  }
+  push @$stack, [ $key, $is_index, $value ];
+  return;
+}
+
+sub _js_json_circular_error {
+  my ( $self, $stack, $last_key, $last_is_index, $start_index ) = @_;
+  my $index      = $start_index;
+  my $stack_size = scalar @$stack;
+
+  my $message = 'Converting circular structure to JSON';
+  $self->js_string_append( $message,
+    "\n    --> starting at object with constructor " . $self->_js_json_constructor_name( $stack->[ $index++ ][2] ) );
+
+  # Append a maximum of kCircularErrorMessagePrefixCount normal lines.
+  my $prefix_end = $index + $JS_JSON_CIRCULAR_PREFIX_COUNT;
+  $prefix_end = $stack_size if $stack_size < $prefix_end;
+  for ( ; $index < $prefix_end; ++$index ) {
+    $self->_js_json_circular_normal_line( $message, $stack->[$index] );
+  }
+
+  # If the circle consists of too many objects, we skip them and just print
+  # an ellipsis.
+  $self->js_string_append( $message, "\n    |     ..." ) if $stack_size > $index + $JS_JSON_CIRCULAR_POSTFIX_COUNT;
+
+  # The postfix lines count from the back of the stack; none is printed twice.
+  my $postfix_start = $stack_size - $JS_JSON_CIRCULAR_POSTFIX_COUNT;
+  $index = $postfix_start if $index < $postfix_start;
+  for ( ; $index < $stack_size; ++$index ) {
+    $self->_js_json_circular_normal_line( $message, $stack->[$index] );
+  }
+
+  $self->js_string_append( $message, "\n    --- " );
+  $self->js_string_append( $message, $self->_js_json_circular_key( $last_key, $last_is_index ) );
+  $self->js_string_append( $message, ' closes the circle' );
+  return Text::Nunjucks::Lib::Error->new( $message, name => 'TypeError' );
+}
+
+# Appends to the caller's message ($_[1], aliased).
+sub _js_json_circular_normal_line {
+  my ( $self, undef, $entry ) = @_;
+  $self->js_string_append( $_[1], "\n    |     " );
+  $self->js_string_append( $_[1], $self->_js_json_circular_key( $entry->[0], $entry->[1] ) );
+  $self->js_string_append( $_[1], ' -> object with constructor ' . $self->_js_json_constructor_name( $entry->[2] ) );
+  return;
+}
+
+sub _js_json_circular_key {
+  my ( $self, $key, $is_index ) = @_;
+  return 'index ' . $key if $is_index;
+  return '<anonymous>' if $key eq '';
+  my $text = "property '";
+  $self->js_string_append( $text, $key );
+  $self->js_string_append( $text, "'" );
+  return $text;
+}
+
+sub _js_json_constructor_name {
+  my ( $self, $object ) = @_;
+  return ref($object) eq 'ARRAY' ? "'Array'" : "'Object'";
 }
 
 1;

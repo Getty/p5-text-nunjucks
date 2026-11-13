@@ -15817,7 +15817,6 @@
         "c": 3
       }
     },
-    "todo": "k17: dictsort filter not ported yet (job 5)",
     "expected": {
       "ok": true,
       "output": "a=1&amp;b=2&amp;c=3"

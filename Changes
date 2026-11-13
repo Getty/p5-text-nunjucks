@@ -27,9 +27,20 @@ Revision history for Text-Nunjucks
       trim, truncate, upper and wordcount, and the sequence family: batch,
       first, join, last, length, list, random, reverse, slice and sum, and the
       number, escaping and URL family: abs, default (d), escape (e), float,
-      forceescape, int, isNaN, round, safe, string, urlencode and urlize.
-      The remaining built-in filters (dictsort, groupby, sort, select and
-      friends) are not ported yet; their upstream tests are carried as TODO.
+      forceescape, int, round, safe, string, urlencode and urlize.
+      The ordering and predicate family completes the set: dictsort, dump,
+      groupby, reject, rejectattr, select, selectattr and sort. Every
+      built-in filter is ported.
+    - dump follows V8's JSON.stringify: the indent rules (a number gap below
+      1 still breaks lines), toJSON and the circular-structure message with
+      its path. It quotes a split surrogate pair like the astral character.
+    - dictsort enumerates inherited keys as for-in does; groupby keys go
+      through JS ToString; the Array filter is native.
+    - Array sort and the sort and dictsort filters run a port of V8's
+      TimSort (ADR 0017): the same comparator calls in the same order,
+      undefined last.
+    - The comparison-function TypeError and the "Cannot read properties" key
+      text follow V8's NoSideEffectsToString.
     - Case mapping follows JS toLowerCase and toUpperCase, Final_Sigma and
       SpecialCasing included.
     - The replace filter with a regex follows RegExp Symbol.replace: empty

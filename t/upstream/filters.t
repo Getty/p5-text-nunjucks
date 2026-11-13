@@ -16,15 +16,13 @@ no warnings 'experimental::builtin';
 # (k34). 64 it() upstream (48 directly under describe('filter') plus the 16 in
 # describe('the length filter')), 64 it() subtests here.
 #
-# TODO scheme (k34): lib/Text/Nunjucks/Filters.pm is not ported yet (k17) and
-# per ADR 0015 a fresh Environment ships with NO filters, so every it() here
-# fails today. Each it() is marked TODO through the %TODO table below, keyed by
-# the upstream it() title: the worker removes a title's entry when its filter
-# lands (per filter, or a whole family at once). Every assertion still runs; a
-# TODO that starts passing shows up as "unexpectedly succeeded" -- drop the
-# entry then. Nested TODO blocks inside an it() are NOT in %TODO: they mark
-# individual assertions that wait on something other than a filter and stay
-# until that blocker (named in the reason) is decided/fixed. The four length
+# TODO scheme (k34): each it() was marked TODO through the %TODO table below,
+# keyed by the upstream it() title, until its filter landed (k17); every filter
+# has, so the table is empty. Every assertion runs; a TODO that starts passing
+# shows up as "unexpectedly succeeded" -- drop it then. Nested TODO blocks
+# inside an it() are NOT in %TODO: they mark individual assertions that wait on
+# something other than a filter and stay until that blocker (named in the
+# reason) is decided/fixed. The four length
 # it()s with no Perl image (new String, array with properties, Map, Set) are
 # such nested TODO blocks with fail(), as in t/upstream/compiler.t (k44).
 #
@@ -77,13 +75,8 @@ sub equal {
 }
 
 # TODO table: upstream it() title => reason. Remove an entry when it passes.
-my $F = 'k17: filter not ported yet (ADR 0015)';
-my %TODO = map { $_ => $F } (
-  'dump', 'dictsort',
-  'groupby',
-  'reject', 'rejectattr', 'select',
-  'selectattr', 'sort',
-);
+# Empty since k17 job 5: every filter it() passes.
+my %TODO;
 
 # it(title, sub) -- one subtest, TODO'd from %TODO.
 sub it {
@@ -303,45 +296,41 @@ describe 'filter' => sub {
 
     # The next two expect JS's integer-key ordering of the engine-built result
     # object (2018 before 2019 although 2019 is inserted first; 'undefined'
-    # after the integer keys). ADR 0011 makes engine-built objects 1:1 with JS;
-    # k51 fixed the ordering seam (Lib keys, Lib group_by's ordered result), so
-    # they wait only on the groupby filter itself.
-    TODO: {
-      local $TODO = 'k17 job 5: groupby filter not ported yet (ordering fixed by k51)';
-      equal(
-        '{% for year, posts in posts | groupby("date.year") %}'
-          . ':{{ year }}:'
-          . '{% for post in posts %}'
-          . '{{ post.title }}'
-          . '{% endfor %}'
-          . '{% endfor %}',
-        {
-          posts => [
-            { date => { year => 2019 }, title => 'Post 1' },
-            { date => { year => 2018 }, title => 'Post 2' },
-            { date => { year => 2019 }, title => 'Post 3' },
-          ]
-        },
-        ':2018:Post 2:2019:Post 1Post 3'
-      );
+    # after the integer keys). ADR 0011 makes engine-built objects 1:1 with JS
+    # (k51: Lib keys, Lib group_by's ordered result).
+    equal(
+      '{% for year, posts in posts | groupby("date.year") %}'
+        . ':{{ year }}:'
+        . '{% for post in posts %}'
+        . '{{ post.title }}'
+        . '{% endfor %}'
+        . '{% endfor %}',
+      {
+        posts => [
+          { date => { year => 2019 }, title => 'Post 1' },
+          { date => { year => 2018 }, title => 'Post 2' },
+          { date => { year => 2019 }, title => 'Post 3' },
+        ]
+      },
+      ':2018:Post 2:2019:Post 1Post 3'
+    );
 
-      equal(
-        '{% for year, posts in posts | groupby("date.year") %}'
-          . ':{{ year }}:'
-          . '{% for post in posts %}'
-          . '{{ post.title }}'
-          . '{% endfor %}'
-          . '{% endfor %}',
-        {
-          posts => [
-            { date => { year => 2019 }, title => 'Post 1' },
-            { date => { year => 2018 }, title => 'Post 2' },
-            { meta => { month => 2 },   title => 'Post 3' },
-          ]
-        },
-        ':2018:Post 2:2019:Post 1:undefined:Post 3'
-      );
-    }
+    equal(
+      '{% for year, posts in posts | groupby("date.year") %}'
+        . ':{{ year }}:'
+        . '{% for post in posts %}'
+        . '{{ post.title }}'
+        . '{% endfor %}'
+        . '{% endfor %}',
+      {
+        posts => [
+          { date => { year => 2019 }, title => 'Post 1' },
+          { date => { year => 2018 }, title => 'Post 2' },
+          { meta => { month => 2 },   title => 'Post 3' },
+        ]
+      },
+      ':2018:Post 2:2019:Post 1:undefined:Post 3'
+    );
 
     equal(
       '{% for type, items in items | groupby({}) %}'

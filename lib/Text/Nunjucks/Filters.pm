@@ -5,8 +5,10 @@ our $VERSION = '0.001';
 
 use strict;
 use warnings;
-use builtin qw( is_bool true );
+use builtin qw( is_bool true false );
+use Scalar::Util qw( weaken );
 use Text::Nunjucks::Lib;
+use Text::Nunjucks::Lib::Error;
 use Text::Nunjucks::Lib::TemplateError;
 use Text::Nunjucks::Runtime;
 
@@ -16,22 +18,23 @@ no warnings 'experimental::builtin';
 # upstream's order and names (snake_case); each filter is a class method
 # dispatched through $self, like Lib and Runtime, so a filter that calls another
 # one (title -> capitalize, striptags -> trim) goes through the invocant, and a
-# filter named like a Perl builtin (abs, truncate, join, reverse; sort, ...
-# later) never resolves to the builtin. The two filters upstream builds with
-# r.makeMacro (int now, sort later) are their inner function as a method
-# (do_int), wrapped by Runtime make_macro in exports. A filter receives what the
+# filter named like a Perl builtin (abs, dump, truncate, join, reverse, sort)
+# never resolves to the builtin. The two filters upstream builds with
+# r.makeMacro (sort and int) are their inner function as a method (sort_filter,
+# do_int), wrapped by Runtime make_macro in exports. A filter receives what the
 # template passed (ADR 0009): the value, the arguments, keyword arguments as a
 # trailing KwArgs hashref.
 #
 # `exports($env)` builds the { name => coderef } bag that Environment.init
-# registers with add_filter, once per Environment. No filter ported so far reads
-# `this`, so exports takes $env and ignores it: every closure captures only the
-# class name. Upstream calls a filter with `this` set to the render Context; the
-# filters reading `this.env` (groupby, sort, select / reject -- job 5) will take
-# their Environment from the closure exports builds. That closure must hold a
-# weakened copy of $env: the Environment holds the bag, so Environment -> filters
-# -> closure -> Environment is a reference cycle otherwise. A filter not ported
-# yet is absent from the bag, so it is "filter not found" like any unknown name.
+# registers with add_filter, once per Environment. Upstream calls a filter with
+# `this` set to the render Context, which the port does not hand a filter (ADR
+# 0009). The filters that read `this.env` -- groupby, sort, select and reject,
+# for env.opts.throwOnUndefined and env.getTest -- take the Environment as
+# their first argument instead, from the closure exports builds; every other
+# closure captures only the class name. That closure holds a weakened copy of
+# $env: the Environment holds the bag, so Environment -> filters -> closure ->
+# Environment would be a reference cycle otherwise. A filter not ported yet is
+# absent from the bag, so it is "filter not found" like any unknown name.
 #
 # JS operators go through Runtime (ADR 0001 / 0006 / 0007); a native method
 # upstream calls on a value it never checked goes through Runtime
@@ -41,6 +44,7 @@ no warnings 'experimental::builtin';
 
 sub _lib                  { 'Text::Nunjucks::Lib' }
 sub _runtime              { 'Text::Nunjucks::Runtime' }
+sub _error_class          { 'Text::Nunjucks::Lib::Error' }
 sub _template_error_class { 'Text::Nunjucks::Lib::TemplateError' }
 
 #### normalize
@@ -152,6 +156,66 @@ sub default_ {
   }
 }
 
+#### dictsort
+
+sub dictsort {
+  my ( $self, $val, $case_sensitive, $by ) = @_;
+  my $rt  = $self->_runtime;
+  my $lib = $self->_lib;
+  if ( !$lib->is_object($val) ) {
+    die $self->_template_error_class->new('dictsort filter: val must be an object');
+  }
+
+  my $array = [];
+  # deliberately include properties from the object's prototype -- a raw
+  # for-in, Lib's js_for_in_keys; val[k] is the JS property read (ADR 0016),
+  # where a SafeString's val reads undefined (k72)
+  for my $k ( @{ $lib->js_for_in_keys($val) } ) {
+    push @$array, [ $k, $rt->member_lookup( $val, $k ) ];
+  }
+
+  my $si;
+  if ( !defined($by) || $rt->op_seq( $by, 'key' ) ) {
+    $si = 0;
+  } elsif ( $rt->op_seq( $by, 'value' ) ) {
+    $si = 1;
+  } else {
+    die $self->_template_error_class->new('dictsort filter: You can only sort by either key or value');
+  }
+
+  # array.sort: V8's TimSort, the one Lib seam (ADR 0017)
+  $lib->js_array_sort(
+    $array,
+    sub {
+      my ( $t1, $t2 ) = @_;
+      my $a = $t1->[$si];
+      my $b = $t2->[$si];
+
+      if ( $rt->_falsy($case_sensitive) ) {
+        if ( $lib->is_string($a) ) {
+          $a = $lib->js_to_upper_case($a);
+        }
+        if ( $lib->is_string($b) ) {
+          $b = $lib->js_to_upper_case($b);
+        }
+      }
+
+      return $rt->op_gt( $a, $b ) ? 1 : ( $rt->op_seq( $a, $b ) ? 0 : -1 );
+    }
+  );
+
+  return $array;
+}
+
+#### dump
+
+# JSON.stringify(obj, null, spaces): Lib's js_json_stringify, which returns
+# undef -- JS undefined, rendered '' -- where JSON.stringify does.
+sub dump {
+  my ( $self, $obj, $spaces ) = @_;
+  return $self->_lib->js_json_stringify( $obj, $spaces );
+}
+
 #### escape
 
 # str.toString() is the value's JS ToString (Runtime _js_to_string): an array's
@@ -193,6 +257,14 @@ sub forceescape {
   my $rt = $self->_runtime;
   $str = ( !defined($str) || $rt->_is_none($str) ) ? '' : $str;
   return $rt->mark_safe( $self->_lib->escape( $rt->_js_to_string($str) ) );
+}
+
+#### groupby
+
+# this.env.opts.throwOnUndefined: $env comes first, from exports' closure.
+sub groupby {
+  my ( $self, $env, $arr, $attr ) = @_;
+  return $self->_lib->group_by( $arr, $attr, $env->opts->{throwOnUndefined} );
 }
 
 #### indent
@@ -316,6 +388,56 @@ sub random {
   # test asserts membership only. Listed for the divergence ledger (k24).
   return $rt->js_member_read( $arr,
     $self->_lib->js_math_floor( $rt->op_mul( rand(), $rt->js_member_read( $arr, 'length' ) ) ) );
+}
+
+#### getSelectOrReject
+
+# Construct select or reject filter. The filter reads this.env.getTest, so it
+# takes the Environment first, from exports' closure; the test is called with
+# (item, secondArg) and no this (ADR 0009), and its result must be
+# === expectedTestResult (oracle: select('truthy') keeps 1 and 'a' of
+# [1, 0, 'a', '']).
+sub get_select_or_reject {
+  my ( $self, $expected_test_result ) = @_;
+  my $filter = sub {
+    my ( $env, $arr, $test_name, $second_arg ) = @_;
+    my $rt = $self->_runtime;
+    $test_name = 'truthy' unless defined $test_name;    # testName = 'truthy': undefined only
+    my $test = $env->get_test($test_name);
+
+    return $rt->js_method_call(
+      $self->_lib->to_array($arr),
+      'lib.toArray(...)',
+      'filter',
+      sub {
+        my ($item) = @_;
+        return $rt->op_seq( $test->( $item, $second_arg ), $expected_test_result );
+      }
+    );
+  };
+
+  return $filter;
+}
+
+#### rejectattr
+
+# arr.filter and item[attr] are the JS member call and read (ADR 0008 / 0016):
+# a value without filter -- a string, an object -- is "TypeError: arr.filter
+# is not a function", an undefined item "Cannot read properties of undefined
+# (reading 'a')" (oracle).
+sub rejectattr {
+  my ( $self, $arr, $attr ) = @_;
+  my $rt = $self->_runtime;
+  return $rt->js_method_call( $arr, 'arr', 'filter', sub { $rt->op_not( $rt->js_member_read( $_[0], $attr ) ) } );
+}
+
+#### selectattr
+
+sub selectattr {
+  my ( $self, $arr, $attr ) = @_;
+  my $rt = $self->_runtime;
+  return $rt->js_method_call( $arr, 'arr', 'filter',
+    sub { $rt->op_not( $rt->op_not( $rt->js_member_read( $_[0], $attr ) ) ) } );
 }
 
 #### replace
@@ -481,6 +603,55 @@ sub sum {
   }
 
   return $rt->op_add( $start, $rt->js_method_call( $arr, 'arr', 'reduce', sub { $rt->op_add( $_[0], $_[1] ) }, 0 ) );
+}
+
+#### sort
+
+# The function upstream hands to r.makeMacro(['value', 'reverse',
+# 'case_sensitive', 'attribute'], [], sortFilter); exports builds the macro
+# around it. Its comparator reads this.env.opts.throwOnUndefined -- makeMacro
+# passes `this` through --, so $env comes first, from exports' closure.
+sub sort_filter {
+  my ( $self, $env, $arr, $reversed, $case_sens, $attr ) = @_;
+  my $rt  = $self->_runtime;
+  my $lib = $self->_lib;
+  # Copy it
+  my $array         = $lib->map( $arr, sub { $_[0] } );
+  my $get_attribute = $lib->get_attr_getter($attr);
+
+  # array.sort: V8's TimSort, the one Lib seam (ADR 0017)
+  $lib->js_array_sort(
+    $array,
+    sub {
+      my ( $a, $b ) = @_;
+      my $x = ( $rt->_truthy($attr) ) ? $get_attribute->($a) : $a;
+      my $y = ( $rt->_truthy($attr) ) ? $get_attribute->($b) : $b;
+
+      if ( $rt->_truthy( $env->opts->{throwOnUndefined} )
+        && $rt->_truthy($attr)
+        && ( !defined($x) || !defined($y) ) )
+      {
+        # `${attr}`: attr's JS ToString
+        die $self->_error_class->new( 'sort: attribute "' . $rt->_js_to_string($attr) . '" resolved to undefined',
+          name => 'TypeError' );
+      }
+
+      if ( $rt->_falsy($case_sens) && $lib->is_string($x) && $lib->is_string($y) ) {
+        $x = $lib->js_to_lower_case($x);
+        $y = $lib->js_to_lower_case($y);
+      }
+
+      if ( $rt->op_lt( $x, $y ) ) {
+        return $rt->_truthy($reversed) ? 1 : -1;
+      } elsif ( $rt->op_gt( $x, $y ) ) {
+        return $rt->_truthy($reversed) ? -1 : 1;
+      } else {
+        return 0;
+      }
+    }
+  );
+
+  return $array;
 }
 
 #### string
@@ -718,16 +889,23 @@ sub do_int {
 
 sub exports {
   my ( $self, $env ) = @_;
+  # the Environment holds the bag these closures are in (see the header)
+  weaken($env);
+  my $reject = $self->get_select_or_reject(false);
+  my $select = $self->get_select_or_reject(true);
   my $exports = {
     abs         => sub { $self->abs(@_) },
     batch       => sub { $self->batch(@_) },
     capitalize  => sub { $self->capitalize(@_) },
     center      => sub { $self->center(@_) },
     default     => sub { $self->default_(@_) },
+    dictsort    => sub { $self->dictsort(@_) },
+    dump        => sub { $self->dump(@_) },
     escape      => sub { $self->escape(@_) },
     safe        => sub { $self->safe(@_) },
     first       => sub { $self->first(@_) },
     forceescape => sub { $self->forceescape(@_) },
+    groupby     => sub { $self->groupby( $env, @_ ) },
     indent      => sub { $self->indent(@_) },
     join        => sub { $self->join(@_) },
     last        => sub { $self->last(@_) },
@@ -736,11 +914,18 @@ sub exports {
     lower       => sub { $self->lower(@_) },
     nl2br       => sub { $self->nl2br(@_) },
     random      => sub { $self->random(@_) },
+    reject      => sub { $reject->( $env, @_ ) },
+    rejectattr  => sub { $self->rejectattr(@_) },
+    select      => sub { $select->( $env, @_ ) },
+    selectattr  => sub { $self->selectattr(@_) },
     replace     => sub { $self->replace(@_) },
     reverse     => sub { $self->reverse(@_) },
     round       => sub { $self->round(@_) },
     slice       => sub { $self->slice(@_) },
     sum         => sub { $self->sum(@_) },
+    sort        => $self->_runtime->make_macro(
+      [ 'value', 'reverse', 'case_sensitive', 'attribute' ], [], sub { $self->sort_filter( $env, @_ ) }
+    ),
     string      => sub { $self->string(@_) },
     striptags   => sub { $self->striptags(@_) },
     title       => sub { $self->title(@_) },

@@ -2,7 +2,7 @@
 use strict;
 use warnings;
 use Test::More;
-use Scalar::Util qw( blessed );
+use Scalar::Util qw( blessed weaken );
 use builtin qw( true false );
 
 no warnings 'experimental::builtin';
@@ -52,6 +52,28 @@ subtest 'add_filter / get_filter' => sub {
   my $err;
   eval { $env->get_filter('nope'); 1 } or $err = $@;
   is( msg($err), 'filter not found: nope', 'get_filter throws upstream text' );
+};
+
+# The built-in filter bag holds the Environment in the closures of the filters
+# that read this.env (groupby, select, reject, sort); Filters exports weakens it,
+# else Environment -> filters -> closure -> Environment is a cycle Perl never
+# frees. No upstream counterpart: JS collects cycles.
+subtest 'the built-in filters do not keep their Environment alive' => sub {
+  my $env  = Text::Nunjucks::Environment->new;
+  my $weak = $env;
+  weaken($weak);
+  undef $env;
+  ok( !defined $weak, 'a fresh Environment is freed once dropped' );
+
+  $env = Text::Nunjucks::Environment->new;
+  is( $env->render_string(
+      q{{{ [1, 0, 2]|select|join(',') }} {{ [1, 0]|reject|join }} {{ [{'a': 1}]|groupby('a')|dump|safe }} {{ [2, 1]|sort|join }}},
+      {} ),
+    '1,2 0 {"1":[{"a":1}]} 12', 'the filters that read this.env ran' );
+  $weak = $env;
+  weaken($weak);
+  undef $env;
+  ok( !defined $weak, '... and it is freed after a render through them' );
 };
 
 subtest 'add_test / get_test' => sub {

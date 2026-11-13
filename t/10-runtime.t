@@ -270,6 +270,17 @@ subtest 'member_lookup: arrays (incl. in-place mutators)' => sub {
   my $f = [ 3, 1, 2, 10 ];
   _call( $f, 'sort' );
   is( s_($f), '1,10,2,3', 'sort() is a default STRING sort, in place' );
+
+  # the member is Lib's js_array_sort (decision B, k17; its V8 replay is in
+  # t/10-lib.t). Oracle: a macro m(a, b) giving a - b sorts [3, 1, 10, 2] to
+  # 1,2,3,10 and returns the array; [nope, 'z', 'a'].sort() -> a,z, (length 3)
+  my $g = [ 3, 1, 10, 2 ];
+  my $m = sub { $_[0] - $_[1] };
+  is( _call( $g, 'sort', $m ), $g, 'sort(comparefn) returns the array' );
+  is( s_($g), '1,2,3,10', '... sorted by the comparefn, in place' );
+  my $h = [ undef, 'z', 'a' ];
+  _call( $h, 'sort' );
+  is_deeply( $h, [ 'a', 'z', undef ], 'sort() puts undefined last' );
 };
 
 subtest 'member_lookup: numbers, hashes, blessed objects' => sub {
@@ -932,11 +943,31 @@ subtest 'js_member_read: a plain property read and its V8 TypeError' => sub {
     'an array'        => [ [ 1, 2 ],                             '' ],
     'a SafeString'    => [ $R->SafeString->new('k'),             '' ],
     'a regex'         => [ $R->make_regex( 'a', '' ),            '' ],
+    # V8 NoSideEffectsToMaybeString: an own toString, or an own constructor
+    # that is no named function, leaves a plain object no form (oracle:
+    # {'toString': 1}, {'constructor': 1}, toString=1, a context hash
+    # {"constructor": "x"})
+    'an own toString'             => [ { toString => 1 },                               '' ],
+    'an own toString, ordered'    => [ Hash::Ordered->new( toString => 1 ),             '' ],
+    'an own toString, kwargs'     => [ $R->make_keyword_args( { toString => 1 } ),      '' ],
+    'an own constructor'          => [ { constructor => 'x' },                          '' ],
+    'an own constructor, ordered' => [ Hash::Ordered->new( constructor => 1 ),          '' ],
+    'an own constructor, kwargs'  => [ $R->make_keyword_args( { constructor => 1 } ),   '' ],
+    'a nameless constructor'      => [ { constructor => sub { } },                      '' ],
   );
   for my $what ( sort keys %reading ) {
     my ( $key, $clause ) = @{ $reading{$what} };
     is( _type_error( sub { $R->js_member_read( undef, $key ) } ),
       'TypeError: Cannot read properties of undefined' . $clause, "key $what" );
+  }
+
+  # a function constructor shows by its name, from _js_function_name -- the
+  # one place k88 fills (oracle: {'constructor': m}, a macro m -> '#<macro>')
+  {
+    no warnings 'redefine';
+    local *Text::Nunjucks::Runtime::_js_function_name = sub { 'macro' };
+    is( _type_error( sub { $R->js_member_read( undef, { constructor => sub { } } ) } ),
+      q{TypeError: Cannot read properties of undefined (reading '#<macro>')}, 'key: a named function constructor' );
   }
 };
 
@@ -985,6 +1016,33 @@ subtest 'Array reduce' => sub {
       'TypeError: string "' . ( 'a' x 99 ) . "\x{D83D}" . '<...>" is not a function', 'cut in code units' );
   }
   is( _type_error( sub { _call( [], 'reduce', 5 ) } ), 'TypeError: number 5 is not a function', 'callable check first' );
+};
+
+subtest 'Array filter' => sub {
+  # oracle: macro m(x) -> {{ x }}; [1,0,'',2].filter(m)|join(',') -> 1,0,,2 (a
+  # SafeString result is an object, so truthy even when empty)
+  is( s_( _call( [ 1, 0, '', 2 ], 'filter', sub { $R->mark_safe("$_[0]") } ) ), '1,0,,2', 'a SafeString result keeps every element' );
+  is( s_( _call( [ 1, 0, 'a', '' ], 'filter', sub { $_[0] } ) ), '1,a', 'kept where the result is truthy (JS ToBoolean)' );
+  is( s_( _call( [ '0', 0 ], 'filter', sub { $_[0] } ) ), '0', "the string '0' is truthy" );
+  my $arr = [ 'a', 'b' ];
+  my @seen;
+  my $res = _call( $arr, 'filter', sub { push @seen, [ @_[ 1, 2 ] ]; 1 } );
+  is_deeply( [ map { $_->[0] } @seen ], [ 0, 1 ], 'the callback gets the index' );
+  ok( $seen[0][1] == $arr, '... and the array' );
+  ok( $res != $arr, 'a new array' );
+  # the length is read once; an index the callback removed is skipped
+  my $shrinking = [ 1, 2, 3 ];
+  my $calls     = 0;
+  _call( $shrinking, 'filter', sub { $calls++; pop @$shrinking; 1 } );
+  is( $calls, 2, 'a removed index is skipped' );
+  my $growing = [ 1, 2 ];
+  $calls = 0;
+  _call( $growing, 'filter', sub { $calls++; push @$growing, 9; 1 } );
+  is( $calls, 2, 'an added index is not visited' );
+  # oracle: [1].filter(5) -> number 5, [1].filter() -> undefined
+  is( _type_error( sub { _call( [1], 'filter', 5 ) } ), 'TypeError: number 5 is not a function', 'not callable' );
+  is( _type_error( sub { _call( [1], 'filter' ) } ), 'TypeError: undefined is not a function', 'no callbackfn' );
+  is( _type_error( sub { _call( [], 'filter', 5 ) } ), 'TypeError: number 5 is not a function', 'callable check first' );
 };
 
 subtest 'js_array_destructure: ([k, v]) through the iteration protocol' => sub {

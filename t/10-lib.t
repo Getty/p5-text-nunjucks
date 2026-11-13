@@ -3,6 +3,9 @@ use strict;
 use warnings;
 use Test::More;
 use builtin qw( true false is_bool );
+use JSON::MaybeXS ();
+use Path::Tiny ();
+use POSIX ();
 
 no warnings 'experimental::builtin';
 
@@ -65,6 +68,14 @@ subtest 'is_string (ADR 0001 kinds)' => sub {
 
 #### hasOwnProp
 
+# 'Name: message' of what $code throws, or 'no error'.
+sub thrown {
+  my ($code) = @_;
+  my $err = do { local $@; eval { $code->(); 1 } ? undef : $@ };
+  return 'no error' unless defined $err;
+  return ref($err) ? $err->name . ': ' . $err->message : "died: $err";
+}
+
 subtest 'has_own_prop' => sub {
   ok( $L->has_own_prop( { a => 1 }, 'a' ), 'hash: present key' );
   ok( !$L->has_own_prop( { a => 1 }, 'b' ), 'hash: absent key' );
@@ -72,6 +83,45 @@ subtest 'has_own_prop' => sub {
   ok( $L->has_own_prop( [ 10, 20 ], 1 ),   'array: index 1' );
   ok( !$L->has_own_prop( [ 10, 20 ], 2 ),  'array: out-of-range index' );
   ok( !$L->has_own_prop( 'scalar', 'x' ),  'non-container: false' );
+
+  # ObjProto.hasOwnProperty.call(obj, k), oracle-measured through groupby(attr)
+  my $R = 'Text::Nunjucks::Runtime';
+  ok( $L->has_own_prop( Hash::Ordered->new( a => undef ), 'a' ), 'ordered dict: present key, undefined value' );
+  ok( !$L->has_own_prop( Hash::Ordered->new( a => 1 ), 'b' ),    'ordered dict: absent key' );
+  ok( $L->has_own_prop( [ 10, 20 ], 'length' ), 'array: length is own' );
+  ok( !$L->has_own_prop( [ 10, 20 ], '01' ),    "array: '01' is no index" );
+  ok( !$L->has_own_prop( [ 10, 20 ], 'push' ),  'array: a method is inherited' );
+  ok( $L->has_own_prop( 'ab', 1 ),              'string: a code-unit index' );
+  ok( $L->has_own_prop( "\x{1F600}", 1 ),       'string: indices count code units (ADR 0012)' );
+  ok( !$L->has_own_prop( 'ab', 2 ),             'string: past the end' );
+  ok( !$L->has_own_prop( 'ab', '01' ),          "string: '01' is no index" );
+  ok( $L->has_own_prop( 'ab', 'length' ),       'string: length is own' );
+  my $safe = $R->SafeString->new('ab');
+  ok( $L->has_own_prop( $safe, 'val' ),    'SafeString: this.val' );
+  ok( $L->has_own_prop( $safe, 'length' ), 'SafeString: this.length' );
+  ok( !$L->has_own_prop( $safe, '0' ),     'SafeString: no index (a String object, not a string)' );
+  my $re = $R->make_regex( 'a', 'g' );
+  ok( $L->has_own_prop( $re, 'lastIndex' ), 'regex: lastIndex is own' );
+  ok( !$L->has_own_prop( $re, 'source' ),   'regex: source is an inherited accessor' );
+  ok( !$L->has_own_prop( 5, 'x' ),          'number: nothing' );
+  ok( !$L->has_own_prop( true, 't' ),       'boolean: nothing' );
+
+  # ToPropertyKey of k (oracle: groupby(1), groupby(true), groupby(['a']))
+  ok( $L->has_own_prop( { 1 => 'x' }, 1 ),           'a number key is its ToString' );
+  ok( $L->has_own_prop( { '1.5' => 'x' }, 1.5 ),     '... 1.5' );
+  ok( $L->has_own_prop( { true => 'x' }, true ),     "true is 'true'" );
+  ok( !$L->has_own_prop( { 1 => 'x' }, true ),       '... not 1' );
+  ok( $L->has_own_prop( { a => 1 }, ['a'] ),         "['a'] is 'a'" );
+  # null and undefined keys never come from a template: upstream lib.hasOwnProp in node
+  ok( $L->has_own_prop( { null => 1 }, $R->None ),   "null is 'null'" );
+  ok( $L->has_own_prop( { undefined => 1 }, undef ), "undefined is 'undefined'" );
+  ok( $L->has_own_prop( { a => 1 }, $R->SafeString->new('a') ), 'a SafeString is its value' );
+
+  # ToObject(obj) throws on undefined and null (oracle: [u]|groupby('a'))
+  is( thrown( sub { $L->has_own_prop( undef, 'a' ) } ),
+    'TypeError: Cannot convert undefined or null to object', 'undefined' );
+  is( thrown( sub { $L->has_own_prop( $R->None, 'a' ) } ),
+    'TypeError: Cannot convert undefined or null to object', 'null' );
 };
 
 #### _prepareAttributeParts -- exercises the JS "'0' is truthy" trap
@@ -110,6 +160,23 @@ subtest 'get_attr_getter' => sub {
 
   my $id = $L->get_attr_getter(undef);
   is_deeply( $id->( { a => 1 } ), { a => 1 }, 'empty parts -> identity' );
+
+  # oracle, through groupby(attr)
+  my $R = 'Text::Nunjucks::Runtime';
+  is_deeply( $L->get_attr_getter( $R->None )->( { a => 1 } ), { a => 1 }, 'null is falsy too: identity' );
+  is( $L->get_attr_getter('a.b')->( Hash::Ordered->new( a => Hash::Ordered->new( b => 7 ) ) ), 7,
+    'ordered dicts (template literals) are read' );
+  is( $L->get_attr_getter('length')->( [ 1, 2 ] ), 2,   "an array's length" );
+  is( $L->get_attr_getter('1')->('ab'),            'b', "a string's code unit" );
+  is( $L->get_attr_getter('length')->( $R->SafeString->new('abc') ), 3, "a SafeString's length" );
+  is( $L->get_attr_getter('lastIndex')->( $R->make_regex( 'a', 'g' ) ), 0, "a regex's lastIndex" );
+  is( $L->get_attr_getter(1)->( [ 'x', 'y' ] ), 'y', 'a number attribute is one part' );
+  is( $L->get_attr_getter( $R->SafeString->new('a') )->( { a => 5 } ), 5, 'a SafeString attribute is one part' );
+  is( $L->get_attr_getter('length.x')->('ab'), undef, 'a number owns nothing' );
+  is( thrown( sub { $L->get_attr_getter('a.b')->( { a => $R->None } ) } ),
+    'TypeError: Cannot convert undefined or null to object', 'a null on the way throws' );
+  is( thrown( sub { $L->get_attr_getter('a')->(undef) } ),
+    'TypeError: Cannot convert undefined or null to object', 'an undefined item throws' );
 };
 
 #### groupBy
@@ -141,6 +208,43 @@ subtest 'group_by' => sub {
   ok( ref($err) && $err->isa('Text::Nunjucks::Lib::Error'), 'throwOnUndefined dies with an Error object' );
   is( $err->name, 'TypeError', 'error name is TypeError' );
   is( $err->message, 'groupby: attribute "k" resolved to undefined', 'error message text' );
+
+  # result[key] is the key's ToPropertyKey (oracle, groupby by a macro or an
+  # attribute giving these keys)
+  my $R    = 'Text::Nunjucks::Runtime';
+  my @keys = ( true, $R->None, 0.3, 0.1 + 0.2, -0.0, 0, 1e21, '1e+21', [ 1, [ 2, $R->None ] ],
+    $R->SafeString->new('s'), $R->make_regex( 'a', 'g' ), Hash::Ordered->new );
+  my $by_key = $L->group_by( [ 0 .. $#keys ], sub { $keys[ $_[0] ] } );
+  is_deeply( $L->keys($by_key),
+    [ '0', 'true', 'null', '0.3', '0.30000000000000004', '1e+21', '1,2,', 's', '/a/g', '[object Object]' ],
+    'keys through JS ToString: -0 and 0 meet, 1e21 and "1e+21" meet' );
+  is( scalar @{ $by_key->get('0') },     2, '-0 and 0 are one group' );
+  is( scalar @{ $by_key->get('1e+21') }, 2, '1e21 and "1e+21" are one group' );
+  my $true_one = $L->group_by( [ { t => true }, { t => 'true' } ], 't' );
+  is( scalar @{ $true_one->get('true') }, 2, "true groups with 'true'" );
+
+  # i < obj.length and obj[i] are JS reads (oracle)
+  is_deeply( $L->keys( $L->group_by( 'aba', sub { $_[0] } ) ), [ 'a', 'b' ], 'a string groups its code units' );
+  is_deeply( $L->keys( $L->group_by( 5, 't' ) ), [], 'a number has no length' );
+  is_deeply( $L->keys( $L->group_by( Hash::Ordered->new( length => 1, 0 => { t => 'x' } ), 't' ) ), ['x'],
+    'an array-like object' );
+  is( thrown( sub { $L->group_by( undef, 't' ) } ),
+    "TypeError: Cannot read properties of undefined (reading 'length')", 'undefined input' );
+  is( thrown( sub { $L->group_by( $R->None, 't' ) } ),
+    "TypeError: Cannot read properties of null (reading 'length')", 'null input' );
+  is( thrown( sub { $L->group_by( $R->SafeString->new('ab'), 't' ) } ),
+    'TypeError: Cannot convert undefined or null to object', "a SafeString's obj[i] is undefined" );
+
+  # `${val}` in the throwOnUndefined message is val's ToString (oracle)
+  for my $c ( [ 5, '5' ], [ [ 'a', 'b' ], 'a,b' ], [ { a => 1 }, '[object Object]' ], [ true, 'true' ],
+    [ 0.1 + 0.2, '0.30000000000000004' ], [ $R->SafeString->new('a'), 'a' ] )
+  {
+    is( thrown( sub { $L->group_by( [ {} ], $c->[0], true ) } ),
+      'TypeError: groupby: attribute "' . $c->[1] . '" resolved to undefined', "message names $c->[1]" );
+  }
+  # upstream lib.groupBy in node; Environment's !!opts.throwOnUndefined makes a
+  # template's 1 a true before it gets here
+  is( thrown( sub { $L->group_by( [ {} ], 'k', 1 ) } ), 'no error', 'throwOnUndefined must be === true' );
 };
 
 #### toArray
@@ -154,6 +258,22 @@ subtest 'to_array' => sub {
   # node: Array.prototype.slice.call('a😀') -> ['a', '\ud83d', '\ude00']
   is_deeply( $L->to_array("a\x{1F600}"), [ 'a', "\x{D83D}", "\x{DE00}" ],
     'string -> UTF-16 code units, an astral char as two lone surrogates (ADR 0012)' );
+
+  # Array.prototype.slice.call(obj), oracle-measured through select
+  my $R = 'Text::Nunjucks::Runtime';
+  is( thrown( sub { $L->to_array(undef) } ),     'TypeError: Cannot convert undefined or null to object', 'undefined' );
+  is( thrown( sub { $L->to_array( $R->None ) } ), 'TypeError: Cannot convert undefined or null to object', 'null' );
+  is_deeply( $L->to_array( Hash::Ordered->new( length => 2, 0 => 1, 1 => 0 ) ), [ 1, 0 ], 'an array-like object' );
+  is_deeply( $L->to_array( { length => '2', 0 => 'x', 1 => 'y' } ), [ 'x', 'y' ], 'ToLength of a string length' );
+  is_deeply( $L->to_array( { length => 1.7, 0 => 'x', 1 => 'y' } ), ['x'], '... truncated' );
+  is_deeply( $L->to_array( { length => -1, 0 => 'x' } ), [], '... negative is 0' );
+  is_deeply( $L->to_array( Hash::Ordered->new( length => 3, 1 => undef ) ), [undef],
+    'a missing index (a hole in JS) is left out, a present undefined kept' );
+  is_deeply( $L->to_array( $R->SafeString->new('ab') ), [], 'a SafeString has a length but no indices' );
+  is_deeply( $L->to_array($_), [], 'no length: ' . ( ref($_) || $_ ) )
+    for 5, true, sub { }, $R->make_regex( 'a', '' ), { a => 1 };
+  is( thrown( sub { $L->to_array( { length => 9**9**9 } ) } ),   'RangeError: Invalid array length', 'Infinity' );
+  is( thrown( sub { $L->to_array( { length => 4294967296 } ) } ), 'RangeError: Invalid array length', '2^32' );
 };
 
 #### without
@@ -438,6 +558,22 @@ subtest 'keys: a plain hash puts array-index keys first, then sorts the rest (AD
   );
   is_deeply( $L->keys( { zeta => 1, alpha => 2, Beta => 3 } ), [qw( Beta alpha zeta )], 'no index keys: plain key sort' );
   is_deeply( $L->_values( { b => 'B', 10 => 'T', 9 => 'N' } ), [qw( N T B )], '_values in key order' );
+};
+
+#### js_for_in_keys -- the keys for (k in obj) visits
+
+subtest 'js_for_in_keys: own keys, then the enumerable inherited ones' => sub {
+  my $R = 'Text::Nunjucks::Runtime';
+  # oracle: 'ab'|safe|dictsort -> length, toString, val, valueOf (sorted); the
+  # for-in order is val, length, then SafeString.prototype's valueOf, toString
+  is_deeply( $L->js_for_in_keys( $R->SafeString->new('ab') ), [qw( val length valueOf toString )],
+    'a SafeString: its prototype adds valueOf and toString' );
+  is_deeply( $L->js_for_in_keys( Hash::Ordered->new( b => 1, 1 => 2, a => 3 ) ), [qw( 1 b a )],
+    'an ordered dict: keys (Object.prototype has nothing enumerable)' );
+  is_deeply( $L->js_for_in_keys( { b => 1, a => 2 } ), [qw( a b )], 'a plain hash: keys' );
+  is_deeply( $L->js_for_in_keys( { toString => 1 } ), ['toString'], 'an own toString is just an own key' );
+  is_deeply( $L->js_for_in_keys( $R->make_regex( 'a', 'g' ) ), [], 'a regex: nothing' );
+  is_deeply( $L->js_for_in_keys(undef), [], 'undefined: nothing' );
 };
 
 #### extend / _assign
@@ -884,6 +1020,360 @@ subtest 'js_encode_uri_component (encodeURIComponent)' => sub {
     ok( $err && $err->isa('Text::Nunjucks::Lib::Error'), 'a lone surrogate throws' );
     is( $err && $err->name,    'URIError',      '... a URIError' );
     is( $err && $err->message, 'URI malformed', '... URI malformed (oracle: "\u{1F600}"|first|urlencode)' );
+  }
+};
+
+#### js_json_stringify -- JSON.stringify(value, null, space) for the dump filter
+
+# Every expectation below was measured with the oracle through dump
+# (maint/oracle.js); a macro stood in for the toJSON functions.
+subtest 'js_json_stringify: values' => sub {
+  my $R   = 'Text::Nunjucks::Runtime';
+  my $inf = 9**9**9;
+  my $nan = $inf - $inf;
+  is( $L->js_json_stringify(undef), undef, 'undefined -> undefined' );
+  is( $L->js_json_stringify( $R->None ), 'null', 'null' );
+  is( $L->js_json_stringify(true) . $L->js_json_stringify(false), 'truefalse', 'booleans' );
+  is( $L->js_json_stringify( "a\"b\\c/\n\t\r\b\f\x01\x1f\x7f\x{2028}\x{1F600}" ),
+    '"a\\"b\\\\c/\\n\\t\\r\\b\\f\\u0001\\u001f' . "\x7f\x{2028}\x{1F600}" . '"',
+    'QuoteJSONString: the short escapes, \\u00XX below 0x20, the rest as is' );
+  is( $L->js_json_stringify("\x{D83D}") . $L->js_json_stringify("\x{DE00}"), '"\\ud83d""\\ude00"',
+    'a lone surrogate is escaped (well-formed JSON.stringify)' );
+  # ADR 0012: a caller string spelling a pair as two surrogate characters is the
+  # same JS string as the one astral character -- both dump the pair as is
+  # (oracle: 'a😀b'|dump -> "a😀b", a context hash {"a😀b": 1}|dump -> {"a😀b":1})
+  is( $L->js_json_stringify("a\x{D83D}\x{DE00}b"), qq("a\x{1F600}b"), 'a pair spelled as two surrogates: a value' );
+  is( $L->js_json_stringify("a\x{1F600}b"),        qq("a\x{1F600}b"), '... the same as the one character' );
+  is( $L->js_json_stringify( { "a\x{D83D}\x{DE00}b" => 1 } ), qq({"a\x{1F600}b":1}), '... a key' );
+  is( $L->js_json_stringify( { "a\x{1F600}b" => 1 } ),        qq({"a\x{1F600}b":1}), '... the same as the one character' );
+  is( $L->js_json_stringify("\x{DE00}\x{D83D}"), '"\\ude00\\ud83d"', 'a low then a high surrogate is no pair: both escaped' );
+  is( $L->js_json_stringify( [ 1.5, -0.0, 0.1 + 0.2, 1e21, -1e-7, $inf, -$inf, $nan ] ),
+    '[1.5,0,0.30000000000000004,1e+21,-1e-7,null,null,null]', 'numbers: Number::toString, non-finite -> null' );
+  is( $L->js_json_stringify( sub { } ), undef, 'a function -> undefined' );
+  is( $L->js_json_stringify( [ sub { }, 1 ] ), '[null,1]', '... null in an array' );
+  is( $L->js_json_stringify( Hash::Ordered->new( a => sub { }, b => 1 ) ), '{"b":1}', '... left out of an object' );
+  is( $L->js_json_stringify( [ undef, 1 ] ), '[null,1]', 'undefined: null in an array' );
+  is( $L->js_json_stringify( Hash::Ordered->new( a => undef, b => 1 ) ), '{"b":1}', '... left out of an object' );
+  is( $L->js_json_stringify( $R->SafeString->new('ab') ), '{"val":"ab","length":2}',
+    'a SafeString is no String wrapper: its own val and length' );
+  is( $L->js_json_stringify( $R->make_regex( 'a', 'g' ) ), '{}', 'a regex: lastIndex is not enumerable' );
+  is( $L->js_json_stringify( [ $R->make_regex( 'a', '' ) ] ), '[{}]', '... in an array' );
+  is( $L->js_json_stringify( Hash::Ordered->new( a => [ 1, Hash::Ordered->new( b => $R->None ) ], c => {} ) ),
+    '{"a":[1,{"b":null}],"c":{}}', 'nested' );
+  my $a = [1];
+  is( $L->js_json_stringify( [ $a, $a ] ), '[[1],[1]]', 'a shared value is no circle' );
+
+  # toJSON(key): the property key, '' at the top, an index as a string
+  my @seen;
+  my $to_json = sub { push @seen, $_[0]; 'K' . $_[0] . 'K' };
+  is( $L->js_json_stringify( [ { toJSON => $to_json }, { x => { toJSON => $to_json } } ] ), '["K0K",{"x":"KxK"}]',
+    'toJSON gets the key' );
+  is( $L->js_json_stringify( { toJSON => $to_json } ), '"KK"', '... the empty key at the top' );
+  ok( builtin::created_as_string( $seen[0] ), '... an index key is a string' );
+  is( $L->js_json_stringify( Hash::Ordered->new( toJSON => 5, a => 1 ) ), '{"toJSON":5,"a":1}',
+    'a toJSON that is no function is a plain property' );
+};
+
+subtest 'js_json_stringify: the gap (V8 InitializeGap)' => sub {
+  my $R   = 'Text::Nunjucks::Runtime';
+  my $inf = 9**9**9;
+  is( $L->js_json_stringify( Hash::Ordered->new( a => [ 1, {} ], b => {}, c => [] ), 2 ),
+    qq({\n  "a": [\n    1,\n    {}\n  ],\n  "b": {},\n  "c": []\n}), '2: indent and ": ", empty containers stay closed' );
+  is( $L->js_json_stringify( [1], 2.9 ), qq([\n  1\n]),           '2.9: truncated' );
+  is( $L->js_json_stringify( [1], 11 ),  qq([\n          1\n]),   '11: at most 10' );
+  is( $L->js_json_stringify( [1], $inf ), qq([\n          1\n]),  'Infinity: 10' );
+  is( $L->js_json_stringify( [1], $_ ), '[1]', "$_: no gap" ) for -1, 0;
+  is( $L->js_json_stringify( [1], 0.5 ), qq([\n1\n]), '0.5: an empty gap that still breaks lines (V8, not the spec)' );
+  is( $L->js_json_stringify( Hash::Ordered->new( a => 1 ), 0.5 ), qq({\n"a": 1\n}), '... and still writes ": "' );
+  is( $L->js_json_stringify( [1], 'abcdefghijkl' ), qq([\nabcdefghij1\n]), 'a string: its first 10 code units' );
+  is( $L->js_json_stringify( [1], '' ), '[1]', "'': no gap" );
+  is( $L->js_json_stringify( Hash::Ordered->new( a => 1 ), '-' ), qq({\n-"a": 1\n}), "'-'" );
+  is( $L->js_json_stringify( [1], 'x' . "\x{1F600}" x 5 ), "[\nx" . "\x{1F600}" x 4 . "\x{D83D}1\n]",
+    '10 code units can cut a pair in half (ADR 0012)' );
+  is( $L->js_json_stringify( [1], $_ ), '[1]', 'no gap: ' . ( ref($_) || $_ ) )
+    for $R->SafeString->new('  '), true, $R->None, [2], $inf - $inf;
+};
+
+subtest 'js_json_stringify: the V8 circular-structure message' => sub {
+  my $head = 'TypeError: Converting circular structure to JSON';
+  my $a    = [];
+  push @$a, $a;
+  is( thrown( sub { $L->js_json_stringify($a) } ),
+    "$head\n    --> starting at object with constructor 'Array'\n    --- index 0 closes the circle", 'self' );
+
+  my $x = [];
+  my $o = { x => $x };
+  push @$x, $o;
+  is( thrown( sub { $L->js_json_stringify($o) } ),
+    "$head\n    --> starting at object with constructor 'Object'\n"
+      . "    |     property 'x' -> object with constructor 'Array'\n    --- index 0 closes the circle",
+    'an object, through a property' );
+
+  # d -> '' -> c -> 0 -> b -> k -> a -> 0 -> d
+  my $chain = sub {
+    my $ca = [];
+    my $cb = { k => $ca };
+    my $cc = [$cb];
+    my $cd = { '' => $cc };
+    return ( $ca, $cd );
+  };
+  my ( $ca, $cd ) = $chain->();
+  push @$ca, $cd;
+  is( thrown( sub { $L->js_json_stringify($cd) } ),
+    "$head\n    --> starting at object with constructor 'Object'\n"
+      . "    |     <anonymous> -> object with constructor 'Array'\n"
+      . "    |     index 0 -> object with constructor 'Object'\n"
+      . "    |     property 'k' -> object with constructor 'Array'\n    --- index 0 closes the circle",
+    'four levels: every line, the empty key as <anonymous>' );
+
+  ( $ca, $cd ) = $chain->();
+  my $e = [ 0, $cd ];
+  push @$ca, $e;
+  is( thrown( sub { $L->js_json_stringify($e) } ),
+    "$head\n    --> starting at object with constructor 'Array'\n"
+      . "    |     index 1 -> object with constructor 'Object'\n"
+      . "    |     <anonymous> -> object with constructor 'Array'\n    |     ...\n"
+      . "    |     property 'k' -> object with constructor 'Array'\n    --- index 0 closes the circle",
+    'five levels: two lines, ..., the last one' );
+
+  ( $ca, $cd ) = $chain->();
+  $e = [ 0, $cd ];
+  my $f = { 0 => $e };
+  push @$ca, $f;
+  is( thrown( sub { $L->js_json_stringify($f) } ),
+    "$head\n    --> starting at object with constructor 'Object'\n"
+      . "    |     property '0' -> object with constructor 'Array'\n"
+      . "    |     index 1 -> object with constructor 'Object'\n    |     ...\n"
+      . "    |     property 'k' -> object with constructor 'Array'\n    --- index 0 closes the circle",
+    "an object's integer key is a property, not an index" );
+
+  my $ia = [];
+  my $ib = [$ia];
+  my $ic = { z => $ib };
+  push @$ia, $ib;
+  is( thrown( sub { $L->js_json_stringify($ic) } ),
+    "$head\n    --> starting at object with constructor 'Array'\n"
+      . "    |     index 0 -> object with constructor 'Array'\n    --- index 0 closes the circle",
+    'the circle starts below the top' );
+};
+
+#### js_array_sort -- V8's Array.prototype.sort (decision B, k17)
+
+# t/data/js-array-sort.json is written by maint/js-array-sort-fixtures with the
+# oracle's node (V8 13.6.233.17): every comparator call V8 made, as element
+# ids in call order, and the sorted ids -- a long sequence as count + digest.
+# The comparator names are implemented here with the same results as there.
+# The call sequence is the strong pin: for an inconsistent comparator it is
+# what decides the result.
+my $SORT_FIXTURES = do {
+  my $file = Path::Tiny::path(__FILE__)->parent->child( 'data', 'js-array-sort.json' );
+  JSON::MaybeXS->new( utf8 => 1 )->decode( $file->slurp_raw );
+};
+
+sub sort_digest {
+  my ($seq) = @_;
+  my $h = 0;
+  $h = ( $h * 31 + $_ + 1 ) % 4294967296 for @$seq;
+  return $h;
+}
+
+my $JS_NONE = 'Text::Nunjucks::Runtime'->None;
+my %SORT_COMPARATOR = (
+  'numeric'           => sub { sub { $_[0]{key} - $_[1]{key} } },
+  'numeric-desc'      => sub { sub { $_[1]{key} - $_[0]{key} } },
+  'mod5'              => sub { sub { POSIX::fmod( $_[0]{key}, 5 ) - POSIX::fmod( $_[1]{key}, 5 ) } },    # JS %: sign of the dividend
+  'fraction'          => sub { sub { ( $_[0]{key} - $_[1]{key} ) / 1024 } },
+  'neg-zero'          => sub { sub { $_[0]{key} == $_[1]{key} ? -0.0 : $_[0]{key} - $_[1]{key} } },
+  'string-result'     => sub { sub { $L->number_to_string( $_[0]{key} - $_[1]{key} ) } },
+  'whitespace-result' => sub { sub { " \n" . $L->number_to_string( $_[0]{key} - $_[1]{key} ) . "\t " } },
+  'array-result'      => sub { sub { [ $_[0]{key} - $_[1]{key} ] } },
+  'null-result'       => sub { sub { $_[0]{key} < $_[1]{key} ? -1 : $_[0]{key} > $_[1]{key} ? 1 : $JS_NONE } },
+  'undefined-result'  => sub { sub { $_[0]{key} < $_[1]{key} ? -1 : $_[0]{key} > $_[1]{key} ? undef : 0 } },
+  'gt-boolean'        => sub { sub { $_[0]{key} > $_[1]{key} ? true : false } },
+  'sign-flip'         => sub { sub { $_[0]{key} < $_[1]{key} ? -1 : 1 } },
+  'nan-result'        => sub { sub { 'x' } },
+  'hash3'             => sub { sub { ( ( $_[0]{id} * 7919 + $_[1]{id} * 104729 + 12345 ) % 3 ) - 1 } },
+  'minstd'     => sub { my ($s) = @_; sub { $s = ( $s * 48271 ) % 2147483647; ( $s % 3 ) - 1 } },
+  'minstd-neg' => sub { my ($s) = @_; sub { $s = ( $s * 48271 ) % 2147483647; $s % 8 == 0 ? 1 : -1 } },
+  'minstd-pos' => sub { my ($s) = @_; sub { $s = ( $s * 48271 ) % 2147483647; $s % 8 == 0 ? -1 : 1 } },
+);
+
+# The tagged element form of the fixture (see maint/js-array-sort-fixtures).
+my $SORT_INF = 9**9**9;
+sub sort_fixture_value {
+  my ($v) = @_;
+  return $JS_NONE unless defined $v;
+  return ( $v ? true : false ) if JSON::MaybeXS::is_bool($v);
+  return [ map { sort_fixture_value($_) } @$v ] if ref $v eq 'ARRAY';
+  if ( ref $v eq 'HASH' ) {
+    my $t = $v->{'$'};
+    return $t eq 'undefined' ? undef
+      : $t eq 'NaN'       ? $SORT_INF - $SORT_INF
+      : $t eq 'Infinity'  ? $SORT_INF
+      : $t eq '-Infinity' ? -$SORT_INF
+      : $t eq '-0'        ? -0.0
+      : $t eq 'object'    ? {}
+      :                     die "unknown fixture tag $t";
+  }
+  return $v;
+}
+
+sub sort_fixture_tag {
+  my ($v) = @_;
+  return 'u' unless defined $v;
+  return 'l' if 'Text::Nunjucks::Runtime'->_is_none($v);
+  return 'b:' . ( $v ? 'true' : 'false' ) if is_bool($v);
+  if ( builtin::created_as_number($v) ) {
+    return 'n:-0' if $v == 0 && sprintf( '%g', $v ) eq '-0';
+    return 'n:' . $L->number_to_string($v);
+  }
+  return 's:' . $v unless ref $v;
+  return 'a[' . join( ',', map { sort_fixture_tag($_) } @$v ) . ']' if ref $v eq 'ARRAY';
+  return 'o';
+}
+
+subtest 'js_array_sort: the fixture is the pinned V8' => sub {
+  like( $SORT_FIXTURES->{v8}, qr/\A13\.6\.233\.17(?:-|\z)/, 'generated with V8 13.6.233.17 (' . $SORT_FIXTURES->{node} . ')' );
+  cmp_ok( scalar @{ $SORT_FIXTURES->{cases} }, '>', 900, 'and it has its cases' );
+};
+
+subtest 'js_array_sort: comparator call sequence and result match V8' => sub {
+  for my $case ( grep { defined $_->{comparator} } @{ $SORT_FIXTURES->{cases} } ) {
+    my $input = $case->{input};
+    my @arr   = map { defined $input->[$_] ? { id => $_, key => $input->[$_] } : undef } 0 .. $#$input;
+    my $cmp   = $SORT_COMPARATOR{ $case->{comparator} }->( $case->{seed} );
+    my @calls;
+    my $recording = sub {
+      push @calls, map { defined $_ ? $_->{id} : -1 } @_[ 0, 1 ];
+      return $cmp->(@_);
+    };
+    my $ret = eval { $L->js_array_sort( \@arr, $recording ) };
+    my $err = $@;
+    my @ids = map { defined $_ ? $_->{id} : undef } @arr;
+    my $ok  = !$err
+      && $ret == \@arr
+      && @calls / 2 == $case->{calls_count}
+      && sort_digest( \@calls ) == $case->{calls_digest}
+      && ( defined $case->{result}
+        ? join( ',', map { $_ // 'u' } @ids ) eq join( ',', map { $_ // 'u' } @{ $case->{result} } )
+        : sort_digest( [ map { $_ // -1 } @ids ] ) == $case->{result_digest} );
+    ok( $ok, $case->{name} ) or do {
+      diag( 'died: ' . $err ) if $err;
+      diag( 'calls: ' . ( @calls / 2 ) . ' (V8 ' . $case->{calls_count} . ')' );
+      is_deeply( \@calls, $case->{calls}, '... the call sequence' ) if $case->{calls};
+      is_deeply( \@ids, $case->{result}, '... the result' ) if $case->{result};
+    };
+  }
+};
+
+subtest 'js_array_sort: the default comparator over mixed kinds matches V8' => sub {
+  for my $case ( grep { !defined $_->{comparator} } @{ $SORT_FIXTURES->{cases} } ) {
+    my @arr = map { sort_fixture_value($_) } @{ $case->{input} };
+    $L->js_array_sort( \@arr );
+    is_deeply( [ map { sort_fixture_tag($_) } @arr ], $case->{result}, $case->{name} );
+  }
+};
+
+# What the fixture cannot carry, each measured in node (V8 13.6.233.17).
+subtest 'js_array_sort: the receiver, comparator exceptions, the spec prelude' => sub {
+  my $arr = [ 3, 1, 2 ];
+  my @seen;
+  $L->js_array_sort( $arr, sub { push @seen, join( ',', @$arr ); $_[0] - $_[1] } );
+  is_deeply( \@seen, [ ('3,1,2') x 4 ], 'the comparator sees the unsorted receiver: it is written once, at the end' );
+  is( join( ',', @$arr ), '1,2,3', '... and then sorted' );
+
+  my $boom = bless {}, 'Some::Exception';
+  $arr = [ 5, 4, 3, 2, 1 ];
+  my $k   = 0;
+  my $err = do { local $@; eval { $L->js_array_sort( $arr, sub { die $boom if ++$k == 4; $_[0] - $_[1] } ); 1 } ? undef : $@ };
+  ok( defined $err && $err == $boom, 'whatever the comparator throws propagates as is' );
+  is( join( ',', @$arr ), '5,4,3,2,1', '... and leaves the receiver unchanged (V8: 5,4,3,2,1)' );
+
+  $arr = [ 3, 1, 2 ];
+  $L->js_array_sort( $arr, sub { push @$arr, 9 if @$arr < 6; $_[0] - $_[1] } );
+  is( join( ',', @$arr ), '1,2,3,9,9,9', 'a comparator that grows the array keeps its tail (V8: 1,2,3,9,9,9)' );
+  $arr = [ 3, 1, 2, 0 ];
+  $L->js_array_sort( $arr, sub { pop @$arr if @$arr > 1; $_[0] - $_[1] } );
+  is( join( ',', @$arr ), '0,1,2,3', 'one that shrinks it is written back to the old length (V8: 0,1,2,3)' );
+  $arr = [ 3, undef, 1 ];
+  $L->js_array_sort( $arr, sub { @$arr = (); $_[0] - $_[1] } );
+  is_deeply( $arr, [ 1, 3, undef ], 'one that empties it too, undefined last (V8: [1,3,undefined])' );
+
+  my @args;
+  $L->js_array_sort( [ 2, 1 ], sub { push @args, scalar @_; -1 } );
+  is_deeply( \@args, [2], 'the comparator gets (x, y) and nothing else' );
+
+  my $calls = 0;
+  for my $short ( [], [5], [undef], [ undef, 1 ], [ 1, undef, undef ] ) {
+    $L->js_array_sort( $short, sub { $calls++; 0 } );
+  }
+  is( $calls, 0, 'fewer than two values that are not undefined: the comparator is never called' );
+  my $one_def = [ undef, 'b', undef ];
+  $L->js_array_sort($one_def);
+  is_deeply( $one_def, [ 'b', undef, undef ], '... and the undefined still go last (V8: [b,undefined,undefined])' );
+
+  my $same = [ 2, 1 ];
+  ok( $L->js_array_sort($same) == $same, 'returns the receiver' );
+
+  for my $c (
+    [ 5,                                   '5' ],
+    [ 'x',                                 'x' ],
+    [ '',                                  '' ],
+    [ $JS_NONE,                            'null' ],
+    [ true,                                'true' ],
+    [ 1.5,                                 '1.5' ],
+    [ -0.0,                                '0' ],
+    [ $SORT_INF,                           'Infinity' ],
+    [ {},                                  '#<Object>' ],
+    [ [ 1, 2 ],                            '[object Array]' ],
+    [ 'Text::Nunjucks::Runtime'->make_regex( 'a', 'g' ),  '[object RegExp]' ],
+    [ 'Text::Nunjucks::Runtime'->SafeString->new('ab'),   '[object Object]' ],
+    # V8 NoSideEffectsToString on a plain object (oracle: [2, 1].sort(x)): an
+    # own toString hides Object.prototype's -- '[object Object]' whatever it
+    # holds; else an own constructor that is no named function does
+    [ { a => 1 },                                          '#<Object>' ],
+    [ { toString => 1 },                                   '[object Object]' ],
+    [ { toString => undef },                               '[object Object]' ],
+    [ { toString => 1, constructor => sub { } },           '[object Object]' ],
+    [ { constructor => 1 },                                '[object Object]' ],
+    [ { constructor => '' },                               '[object Object]' ],
+    [ { constructor => undef },                            '[object Object]' ],
+    [ { constructor => [] },                               '[object Object]' ],
+    [ { constructor => 'x' },                              '[object Object]' ],
+    [ { valueOf => 1 },                                    '#<Object>' ],
+    [ Hash::Ordered->new( toString => 1 ),                 '[object Object]' ],
+    [ Hash::Ordered->new( constructor => 1 ),              '[object Object]' ],
+    [ Hash::Ordered->new( a => 1 ),                        '#<Object>' ],
+    [ 'Text::Nunjucks::Runtime'->make_keyword_args( { toString => 1 } ),    '[object Object]' ],
+    [ 'Text::Nunjucks::Runtime'->make_keyword_args( { constructor => 1 } ), '[object Object]' ],
+    [ 'Text::Nunjucks::Runtime'->make_keyword_args( { a => 1 } ),           '#<Object>' ],
+    # a coderef has no name yet (k88): V8's anonymous-function constructor
+    # (node: {constructor: [function(){}][0]}) -- '[object Object]'
+    [ { constructor => sub { } },                          '[object Object]' ],
+  ) {
+    my ( $cmpfn, $shown ) = @$c;
+    for my $target ( [], [ 2, 1 ] ) {
+      my $e = do { local $@; eval { $L->js_array_sort( $target, $cmpfn ); 1 } ? undef : $@ };
+      ok( $e && $e->isa('Text::Nunjucks::Lib::Error') && $e->name eq 'TypeError'
+          && $e->message eq 'The comparison function must be either a function or undefined: ' . $shown,
+        'a comparefn neither undefined nor callable throws, before the length is looked at: ' . $shown );
+    }
+  }
+
+  # A function constructor shows by its name (oracle: {'constructor': m} with a
+  # macro m -> '#<macro>'; node: a named function foo -> '#<foo>'), which comes
+  # from Runtime _js_function_name -- the one place k88 gives functions theirs.
+  {
+    no warnings 'redefine';
+    local *Text::Nunjucks::Runtime::_js_function_name = sub { 'macro' };
+    for my $cmpfn ( { constructor => sub { } }, Hash::Ordered->new( constructor => sub { } ) ) {
+      my $e = do { local $@; eval { $L->js_array_sort( [ 2, 1 ], $cmpfn ); 1 } ? undef : $@ };
+      is( $e && $e->message, 'The comparison function must be either a function or undefined: #<macro>',
+        'an own constructor that is a named function: #<name> (' . ref($cmpfn) . ')' );
+    }
+    my $e = do { local $@; eval { $L->js_array_sort( [ 2, 1 ], { toString => 1, constructor => sub { } } ); 1 } ? undef : $@ };
+    is( $e && $e->message, 'The comparison function must be either a function or undefined: [object Object]',
+      '... unless an own toString hides Object.prototype.toString' );
   }
 };
 

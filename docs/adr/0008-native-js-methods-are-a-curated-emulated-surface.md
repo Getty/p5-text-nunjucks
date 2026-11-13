@@ -58,3 +58,34 @@ separately.
   (render mode, once the runtime lands in k14), not a guess.
 - String indexing/`.length`/`slice` interact with the UTF-16 question (k5) —
   their code-unit vs character behaviour follows that decision.
+
+## Surface as of 2026-11-13
+
+The decision above is unchanged; this is the inventory the code carries today.
+The tables are `%STRING_METHODS`, `%ARRAY_METHODS` and `%NUMBER_METHODS` in
+`Text::Nunjucks::Runtime`, reached through `member_lookup` (property reads) and
+`member_lookup_method` (call sites, ADR 0016). The "…" and "as needed" in the
+lists above are now concrete:
+
+- **`.length`**: strings (counted in UTF-16 code units, ADR 0012) and arrays.
+  Plain strings also have index access (`s[0]`); a SafeString has `length` and
+  the methods but no index access.
+- **String**: `toUpperCase`, `toLowerCase`, `trim`, `replace`, `slice`,
+  `substring`, `substr`, `split`, `indexOf`, `lastIndexOf`, `charAt`,
+  `concat`. A SafeString exposes the same methods on its value.
+- **Array**: `join`, `indexOf`, `lastIndexOf`, `slice`, `concat`, `filter`,
+  `reduce`, and the in-place mutators `push`, `pop`, `shift`, `unshift`,
+  `sort`, `reverse`. `sort` runs through `Text::Nunjucks::Lib::js_array_sort`
+  (ADR 0017), the same seam the `sort` and `dictsort` filters use.
+- **Number**: `toFixed`.
+- **Regex** (outside the String/Array/Number tables): `test` and `exec` at call
+  sites; `source`, `flags` and `global` are properties.
+
+Known missing members, each tracked on a card and not yet emulated:
+
+- Array `toSorted` (k84) and `splice` (k86).
+- Array `map` (k70).
+- Template-level `toString` (k70).
+
+A call to any of these fails loud with the upstream text, as for every
+member outside the surface.

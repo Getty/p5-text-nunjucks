@@ -267,10 +267,15 @@ package Text::Nunjucks::Environment {
 
   sub get_test {
     my ( $self, $name ) = @_;
-    if ( !$self->tests->{$name} ) {
-      die $self->_error_class->new( 'test not found: ' . $name );
+    # this.tests[name] and 'test not found: ' + name read the name's JS
+    # ToString -- the select / reject filters hand it any template value
+    # (oracle: select(null) finds the null test, select(testName='odd') gives
+    # "test not found: [object Object]")
+    my $key = $self->_runtime_class->_member_key($name);
+    if ( !$self->tests->{$key} ) {
+      die $self->_error_class->new( 'test not found: ' . $key );
     }
-    return $self->tests->{$name};
+    return $self->tests->{$key};
   }
 
   sub resolve_template {

@@ -935,6 +935,28 @@ my %ARRAY_METHODS = (
     }
     return \@new;
   },
+  filter => sub {
+    # Array.prototype.filter(callbackfn[, thisArg]): the length is read once,
+    # callbackfn gets (element, index, array) and no this (ADR 0009), an index
+    # the callback removed is skipped, an element is kept when the result is
+    # truthy. Oracle: [1, 0, '', 2].filter(m) with a macro m printing its
+    # argument keeps 1,0,,2 (its output is a SafeString, an object); a
+    # callbackfn that is not callable -> "TypeError: number 5 is not a
+    # function", none -> "TypeError: object null is not a function", no
+    # argument -> "TypeError: undefined is not a function". The select /
+    # reject / selectattr / rejectattr filters' .filter reaches it.
+    my ( $self, $arr, $callbackfn ) = @_;
+    die $self->_error_class->new( $self->_js_not_callable_text($callbackfn) . ' is not a function', name => 'TypeError' )
+      unless Text::Nunjucks::Lib->is_function($callbackfn);
+    my $len = scalar @$arr;
+    my @a;
+    for ( my $k = 0; $k < $len; $k++ ) {
+      next if $k >= scalar @$arr;    # HasProperty(O, k)
+      my $k_value = $arr->[$k];
+      push @a, $k_value if $self->_truthy( $callbackfn->( $k_value, $k, $arr ) );
+    }
+    return \@a;
+  },
   reduce => sub {
     # Array.prototype.reduce(callbackfn[, initialValue]): the length is read
     # once, callbackfn gets (accumulator, element, index, array), an index the
@@ -985,13 +1007,14 @@ my %ARRAY_METHODS = (
     return scalar @$arr;
   },
   sort => sub {
-    # JS Array.sort() with no comparator sorts by the String form of elements,
-    # in UTF-16 code-unit order (ADR 0012).
-    my ( $self, $arr ) = @_;
-    @$arr = sort {
-      Text::Nunjucks::Lib->js_string_compare( $self->_js_to_string($a), $self->_js_to_string($b) )
-    } @$arr;
-    return $arr;
+    # Array.prototype.sort([comparefn]): V8's TimSort, the one Lib seam
+    # (decision B, k17) -- undefined last and never compared, ToStrings in
+    # UTF-16 code-unit order without a comparefn, a comparefn's result through
+    # ToNumber. Oracle: [u, 'z', 'a'].sort() -> a,z,undefined; a macro m(a, b)
+    # giving a - b sorts [3, 1, 10, 2] to 1,2,3,10; sort(5) -> "TypeError: The
+    # comparison function must be either a function or undefined: 5".
+    my ( $self, $arr, $comparefn ) = @_;
+    return Text::Nunjucks::Lib->js_array_sort( $arr, $comparefn );
   },
   reverse => sub {
     my ( $self, $arr ) = @_;
@@ -1209,22 +1232,88 @@ sub js_member_read {
 }
 
 # V8's text for a property read on undefined / null. It names the key as V8
-# prints it without side effects (oracle, with v undefined in [v]|join(',', k)):
-# a string as is, a number or boolean as its ToString ('1.5', 'true'), a plain
-# object -- dict literal, caller hash, keyword arguments -- as '#<Object>'; an
-# array, a SafeString or a regex has no such form and drops the "(reading ...)"
-# clause. A function key would print its JS source, which has no Perl form; it
-# and other blessed objects drop the clause too.
+# prints it without side effects, Object::NoSideEffectsToMaybeString (oracle,
+# with v undefined in [v]|join(',', k)): a string as is, a number or boolean as
+# its ToString ('1.5', 'true'), a plain object as '#<Object>' or its
+# constructor's name; a key with no such form drops the "(reading ...)" clause
+# -- an array, a SafeString, a regex, a plain object with an own toString
+# ({'toString': 1}) or an own constructor that is no named function
+# ({'constructor': 1}).
 sub _js_read_error {
   my ( $self, $obj, $key ) = @_;
-  my $name =
-      ( !ref($key) || $self->_is_none($key) ) ? $self->_member_key($key)
-    : ( ref($key) eq 'HASH' || $self->_is_ordered_hash($key) || $self->_is_kwargs($key) ) ? '#<Object>'
-    :   undef;
+  my $name = $self->_js_no_side_effects_to_maybe_string($key);
   return $self->_error_class->new(
     'Cannot read properties of ' . $self->_js_type($obj) . ( defined($name) ? " (reading '" . $name . "')" : '' ),
     name => 'TypeError'
   );
+}
+
+# V8's rendering of a value in a message it formats itself, where it may also
+# have none (Object::NoSideEffectsToMaybeString, V8 13.6.233.17
+# src/objects/objects.cc): undefined, null, a boolean, a number and a string
+# as their ToString -- a string as is, not cut. An object is looked at without
+# running anything: GetDataProperty(o, 'toString'), an own key first, else the
+# prototype's. Only an object whose toString is Object.prototype's has a form,
+# and only through GetDataProperty(o, 'constructor'): a function with a
+# non-empty name shows as '#<name>'. For the plain objects the port models --
+# a dict literal, a caller hash, keyword arguments, all with Object.prototype
+# as their prototype -- that is (oracle, [2, 1].sort(x) and [v]|join(',', x)):
+#   * an own toString key, whatever it holds ({'toString': 1}, {'toString':
+#     u}, toString=1): no form;
+#   * else an own constructor key: '#<name>' when it is a function with a name
+#     ({'constructor': m}, a macro m -> '#<macro>'; in node a function with an
+#     empty name gives no form), else no form ({'constructor': 1}, '', u, none,
+#     [] and a SafeString all have none);
+#   * else Object.prototype.constructor, Object: '#<Object>'.
+# An array, a regex and a SafeString have a toString of their own: no form. A
+# function would show its JS source, which has no Perl form; it has none here,
+# and neither does any other blessed object. Returns undef for no form.
+sub _js_no_side_effects_to_maybe_string {
+  my ( $self, $v ) = @_;
+  return $self->_js_to_string($v) if !ref($v) || $self->_is_none($v);
+  return undef unless ref($v) eq 'HASH' || $self->_is_ordered_hash($v) || $self->_is_kwargs($v);
+  my $own = $self->_is_ordered_hash($v)
+    ? sub { $v->exists( $_[0] ) }
+    : sub { exists $v->{ $_[0] } };
+  return undef if $own->('toString');
+  return '#<Object>' unless $own->('constructor');
+  my $ctor = Text::Nunjucks::Lib->_own_value( $v, 'constructor' );
+  my $name = Text::Nunjucks::Lib->is_function($ctor) ? $self->_js_function_name($ctor) : '';
+  return $name ne '' ? '#<' . $name . '>' : undef;
+}
+
+# V8's rendering of a value in a message it formats itself
+# (Object::NoSideEffectsToString; oracle with [2, 1].sort(x), Array sort's
+# comparison-function TypeError): its NoSideEffectsToMaybeString form, else
+# '[object ' . its class name . ']' -- a dict literal, caller hash or keyword
+# arguments with an own toString or a constructor that is no named function
+# ({'toString': 1}, {'constructor': 1}) as '[object Object]', an array as
+# '[object Array]', a regex as '[object RegExp]' and a SafeString as '[object
+# Object]'. No Symbol.toStringTag is reachable from a template. A function
+# would show its JS source; the one caller never hands it one. Any other
+# blessed object shows as '#<Object>', a plain object's form (the port's
+# choice, no JS counterpart to measure).
+sub _js_no_side_effects_to_string {
+  my ( $self, $v ) = @_;
+  my $shown = $self->_js_no_side_effects_to_maybe_string($v);
+  return $shown if defined $shown;
+  return '[object Array]'  if ref($v) eq 'ARRAY';
+  return '[object RegExp]' if $self->_is_regex($v);
+  return '[object Object]'
+    if ref($v) eq 'HASH' || $self->_is_ordered_hash($v) || $self->_is_kwargs($v) || $self->_is_safe_string($v);
+  return '#<Object>';
+}
+
+# JSFunction::GetName, the name V8 shows for a function in its own messages.
+# A template cannot rename a function, so it is the function's name property
+# as a template reads it: a macro's is 'macro' upstream (makeMacro returns
+# `function macro(...)`), a caller's function has the name JS gave it. A Perl
+# coderef owns no name property yet (k88), so this is '' -- V8's "no name" --
+# until member_lookup gives functions their own properties.
+sub _js_function_name {
+  my ( $self, $fn ) = @_;
+  my $name = $self->member_lookup( $fn, 'name' );
+  return Text::Nunjucks::Lib->is_string($name) ? $name : '';
 }
 
 # V8's rendering of a value a builtin was handed to call that is not callable

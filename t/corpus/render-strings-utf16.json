@@ -324,7 +324,6 @@
     "context": {
       "e": "😀ab"
     },
-    "todo": "k17: the select filter is not ported yet (job 5)",
     "expected": {
       "ok": true,
       "output": "4"
