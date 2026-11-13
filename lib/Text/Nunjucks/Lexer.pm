@@ -680,11 +680,10 @@ package Text::Nunjucks::Lexer::Tokenizer {
 
 __END__
 
-=head1 NAME
-
-Text::Nunjucks::Lexer - the template tokenizer
-
 =head1 DESCRIPTION
+
+Engine-internal: this module is a stage of the template pipeline, used by
+L<Text::Nunjucks::Environment>, and not an interface for applications.
 
 A 1:1 port of Nunjucks C<src/lexer.js>. Turns a template string into a stream
 of tokens.

@@ -1867,3 +1867,22 @@ sub _is_index_key {
 }
 
 1;
+
+__END__
+
+=description
+
+A 1:1 port of Nunjucks C<src/runtime.js>: the C<Frame> scope chain, macros and keyword
+arguments, member and call lookup, output suppression and C<SafeString>, and the
+JavaScript operators the compiled templates call (ADR 0001, 0006, 0007, 0009).
+It also defines the C<None> object that stands for JavaScript's C<null> (ADR 0006)
+and the small value classes (C<KwArgs>, C<Regex>, C<SafeString>, C<Frame>) the
+engine passes around. Everything is called as a class method; C<$runtime> in the
+compiled code is this class's name.
+
+Engine-internal: used by L<Text::Nunjucks::Environment> and the code the compiler emits, and
+not an interface for applications, with two exceptions: C<< Text::Nunjucks::Runtime->None >>
+returns the null object for template contexts, and filters receive keyword arguments as a
+C<Text::Nunjucks::Runtime::KwArgs> object.
+
+=cut

@@ -77,3 +77,7 @@ Revision history for Text-Nunjucks
       throw V8's TypeError on non-strings, mapping is typeof object minus
       arrays and iterable checks Symbol.iterator with V8's not-iterable
       TypeError. Environment loads Tests and Globals directly.
+    - Documentation: the public POD for Text::Nunjucks, Environment (with
+      Template), Loader, Loader::FileSystem, Loader::Precompiled, EmitterObj,
+      Lib::Error and Lib::TemplateError, with a SYNOPSIS that the test suite
+      runs. The engine-internal modules carry a short DESCRIPTION.

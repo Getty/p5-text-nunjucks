@@ -46,16 +46,110 @@ sub is_relative {
 
 __END__
 
-=head1 NAME
+=description
 
-Text::Nunjucks::Loader - base template loader
+The base class of every template loader, a port of Nunjucks C<src/loader.js>.
+A loader finds the source of a template by name for an
+L<Text::Nunjucks::Environment>. L<Text::Nunjucks::Loader::FileSystem> and
+L<Text::Nunjucks::Loader::Precompiled> extend it, and so does a loader of your
+own. It does the C<resolve> / C<is_relative> work for relative template names
+and takes the C<on> / C<emit> event methods from L<Text::Nunjucks::EmitterObj>.
 
-=head1 DESCRIPTION
+=head2 Writing a loader
 
-A 1:1 port of Nunjucks C<src/loader.js>: the abstract base every loader extends.
-It supplies C<resolve> / C<is_relative> for relative template names and, through
-the C<Text::Nunjucks::EmitterObj> role, the C<on> / C<emit> event surface the
-Environment wires up (C<update> / C<load>). Concrete loaders
-(C<FileSystemLoader>, C<PrecompiledLoader>) are not part of this module.
+Extend this class and provide C<get_source>:
+
+    package My::Loader;
+    use Moo;
+    extends 'Text::Nunjucks::Loader';
+
+    sub get_source {
+      my ( $self, $name ) = @_;
+      return unless exists $self->templates->{$name};
+      return { src => $self->templates->{$name}, path => $name, noCache => 0 };
+    }
+    has templates => ( is => 'ro', default => sub { {} } );
+
+    my $env = Text::Nunjucks::Environment->new( My::Loader->new( templates => { 'hi.njk' => 'Hi {{ who }}' } ) );
+
+C<get_source($name)> returns a hash reference, or C<undef> (or an empty
+return) when the loader does not have the template, so the next loader is
+asked. The hash has these keys:
+
+=over 4
+
+=item src
+
+The template source as a string. A hash reference C<< { type => 'code', obj =>
+\%compiled } >> is a precompiled template, see
+L<Text::Nunjucks::Loader::Precompiled>.
+
+=item path
+
+The template's path or name, shown in error messages.
+
+=item noCache
+
+True to keep the Environment from caching the template, so the next lookup
+asks the loader again. The key keeps its JavaScript spelling because the
+Environment reads it by that name.
+
+=back
+
+A loader that finds its templates asynchronously defines C<async> to return a
+true value; its C<get_source> then receives a callback as the second argument
+and calls it, instead of returning:
+
+    sub async { 1 }
+    sub get_source {
+      my ( $self, $name, $cb ) = @_;
+      $cb->( undef, { src => $src, path => $path } );   # found
+      $cb->( undef, undef );                            # not found, next loader
+      $cb->($err);                                      # failed
+    }
+
+The callbacks run synchronously unless the loader defers them (ADR 0003).
+An asynchronous loader serves C<render> and C<render_string> with a callback,
+and C<get_template> with a callback.
+
+A loader announces what it did with C<emit>: C<< $self->emit( load => $name,
+$source ) >> after a template was read, C<< $self->emit( update => $name,
+$fullname ) >> when one changed on its own. The Environment listens to both.
+
+=cut
+
+=attr cache
+
+Hash reference of the compiled templates the loader holds. The Environment
+sets it to a fresh hash when it takes the loader over and replaces it on
+C<invalidate_cache>.
+
+=cut
+
+=method async
+
+Returns false. A loader that is asynchronous overrides it to return true, see
+above.
+
+=cut
+
+=method resolve
+
+    my $name = $loader->resolve( $from, $to );
+
+Resolves the relative template name C<$to> against the template C<$from>, as
+Node's C<path.resolve( path.dirname($from), $to )>: purely on the strings (a
+C<..> removes the directory before it, the file system is not asked), and
+against the current working directory when C<$from> is itself relative. The
+result is the name the loader's C<get_source> receives and its cache key
+(ADR 0018).
+
+=cut
+
+=method is_relative
+
+    my $bool = $loader->is_relative($filename);
+
+True (C<1>) when the name starts with C<./> or C<../>, otherwise C<0>.
 
 =cut

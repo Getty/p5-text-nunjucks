@@ -58,13 +58,39 @@ sub get_source {
 
 __END__
 
-=head1 NAME
+=description
 
-Text::Nunjucks::Loader::Precompiled - load templates from precompiled code objects
+Serves templates from a hash of precompiled template objects keyed by name, a
+port of the C<PrecompiledLoader> of Nunjucks C<src/precompiled-loader.js>.
 
-=head1 DESCRIPTION
+    my $loader = Text::Nunjucks::Loader::Precompiled->new( { 'hi.njk' => \%compiled } );
 
-A 1:1 port of the C<PrecompiledLoader> of Nunjucks C<src/precompiled-loader.js>.
-It serves templates from a hash of precompiled template objects keyed by name.
+A compiled template is the hash reference of code references that the Perl
+source emitted by L<Text::Nunjucks::Compiler> evaluates to (a C<root> entry
+and a C<b_NAME> entry per block).
+
+=cut
+
+=attr precompiled
+
+Hash reference of the template names to their compiled objects.
+
+=cut
+
+=method new
+
+    Text::Nunjucks::Loader::Precompiled->new( \%compiled_templates );
+
+Positional. Without a (true) argument the loader is empty.
+
+=cut
+
+=method get_source
+
+    my $source = $loader->get_source($name);
+
+Returns C<< { src => { type => 'code', obj => $compiled }, path => $name } >>
+for a name that is in the hash, otherwise C<undef>. The result carries no
+C<noCache>, so the Environment caches the template.
 
 =cut

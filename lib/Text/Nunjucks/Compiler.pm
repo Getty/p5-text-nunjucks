@@ -1488,11 +1488,10 @@ package Text::Nunjucks::Compiler::Compiler {
 
 __END__
 
-=head1 NAME
-
-Text::Nunjucks::Compiler - compiles a parsed/transformed template to Perl source
-
 =head1 DESCRIPTION
+
+Engine-internal: this module is a stage of the template pipeline, used by
+L<Text::Nunjucks::Environment>, and not an interface for applications.
 
 A 1:1 port of Nunjucks C<src/compiler.js>. Unlike every other ported module,
 this one emits B<Perl> source (upstream emits JavaScript), keeping upstream's

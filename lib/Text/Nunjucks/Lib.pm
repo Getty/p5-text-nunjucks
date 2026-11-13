@@ -2974,3 +2974,18 @@ sub node_console_log {
 }
 
 1;
+
+__END__
+
+=description
+
+A 1:1 port of Nunjucks C<src/lib.js>: the foundation utilities (C<keys>, C<extend>,
+C<is_array>, C<async_iter> and the like), the HTML escaping, and the Node.js
+C<path>, C<fs> and C<console> functions the loaders call, as lexical POSIX
+ports (ADR 0018). Called as class methods. The error classes of C<lib.js> are
+L<Text::Nunjucks::Lib::TemplateError> and L<Text::Nunjucks::Lib::Error>.
+
+Engine-internal: used by L<Text::Nunjucks::Environment> and the code the compiler emits, and
+not an interface for applications.
+
+=cut

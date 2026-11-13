@@ -400,11 +400,10 @@ sub print_nodes {
 
 __END__
 
-=head1 NAME
-
-Text::Nunjucks::Nodes - AST node types
-
 =head1 DESCRIPTION
+
+Engine-internal: this module is a stage of the template pipeline, used by
+L<Text::Nunjucks::Environment>, and not an interface for applications.
 
 A 1:1 port of Nunjucks C<src/nodes.js>. Defines the base node classes
 (C<Node>, C<Value>, C<NodeList>) and the two nodes with a custom constructor

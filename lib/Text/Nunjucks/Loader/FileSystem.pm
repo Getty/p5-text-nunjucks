@@ -123,15 +123,62 @@ sub get_source {
 
 __END__
 
-=head1 NAME
+=description
 
-Text::Nunjucks::Loader::FileSystem - load templates from search paths on disk
+Loads templates from directories on disk, a port of the C<FileSystemLoader> of
+Nunjucks C<src/node-loaders.js>. A template name is looked up in each search
+path in turn and the first file that exists is read as UTF-8 and returned.
 
-=head1 DESCRIPTION
+    use Text::Nunjucks::Environment;
+    use Text::Nunjucks::Loader::FileSystem;
 
-A 1:1 port of the C<FileSystemLoader> of Nunjucks C<src/node-loaders.js>. It
-looks a template name up in each search path in turn and returns the first file
-found, read as UTF-8, with its absolute path. The C<watch> option of upstream
-needs chokidar and is not available.
+    my $loader = Text::Nunjucks::Loader::FileSystem->new( [ 'views', 'shared' ], { noCache => 1 } );
+    my $env    = Text::Nunjucks::Environment->new($loader);
+
+=cut
+
+=attr search_paths
+
+Array reference of the directories searched, in order.
+
+=cut
+
+=attr no_cache
+
+True when the Environment must not cache the templates this loader returns.
+
+=cut
+
+=attr paths_to_names
+
+Hash reference mapping the absolute path of each template the loader has read
+to the name it was asked for.
+
+=cut
+
+=method new
+
+    Text::Nunjucks::Loader::FileSystem->new;
+    Text::Nunjucks::Loader::FileSystem->new( $search_paths, \%opts );
+
+Positional. C<$search_paths> is a directory or an array reference of them;
+without it the search path is C<.>. The options are a hash reference with one
+useful key, C<noCache>: when true the templates are not cached and are read
+again on each lookup. A C<watch> option that is true dies with a
+L<Text::Nunjucks::Lib::Error> whose message is
+C<watch requires chokidar to be installed>.
+
+=cut
+
+=method get_source
+
+    my $source = $loader->get_source($name);
+
+Returns C<< { src => $text, path => $absolute_path, noCache => $bool } >> for
+the first search path that holds the template, or C<undef> when none does. A
+file is only found when its absolute path begins with the absolute search path,
+so C<../outside.njk> is not served from beyond the search path (the check is a
+string prefix test, which a sibling directory whose name starts with the search
+path's name passes). Emits C<load> with the name and the source.
 
 =cut

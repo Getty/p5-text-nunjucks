@@ -947,3 +947,18 @@ sub exports {
 }
 
 1;
+
+__END__
+
+=description
+
+A 1:1 port of Nunjucks C<src/filters.js>: the built-in filters. C<exports> builds
+the name to code reference hash for one Environment, which registers them when
+it is constructed. The filters are described in the Nunjucks template
+documentation, L<https://mozilla.github.io/nunjucks/templating.html#builtin-filters>.
+To add or replace a filter use C<add_filter> of L<Text::Nunjucks::Environment>.
+
+Engine-internal: used by L<Text::Nunjucks::Environment> and the code the compiler emits, and
+not an interface for applications.
+
+=cut

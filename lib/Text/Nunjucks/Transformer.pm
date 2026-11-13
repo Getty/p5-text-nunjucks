@@ -312,11 +312,10 @@ sub transform {
 
 __END__
 
-=head1 NAME
-
-Text::Nunjucks::Transformer - the async CPS AST rewrite
-
 =head1 DESCRIPTION
+
+Engine-internal: this module is a stage of the template pipeline, used by
+L<Text::Nunjucks::Environment>, and not an interface for applications.
 
 A 1:1 port of Nunjucks C<src/transformer.js>. Called as a class method:
 

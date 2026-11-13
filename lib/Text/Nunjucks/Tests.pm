@@ -298,3 +298,18 @@ sub exports {
 }
 
 1;
+
+__END__
+
+=description
+
+A 1:1 port of Nunjucks C<src/tests.js>: the built-in C<is> tests. C<exports> returns
+the name to code reference hash an Environment registers when it is constructed.
+The tests are described in the Nunjucks template documentation,
+L<https://mozilla.github.io/nunjucks/templating.html#builtin-tests>. To add or replace
+a test use C<add_test> of L<Text::Nunjucks::Environment>.
+
+Engine-internal: used by L<Text::Nunjucks::Environment> and the code the compiler emits, and
+not an interface for applications.
+
+=cut

@@ -852,18 +852,402 @@ package Text::Nunjucks::Template {
 
 __END__
 
-=head1 NAME
+=description
 
-Text::Nunjucks::Environment - the Nunjucks Environment, Context and Template
+Defines three classes from the one upstream file C<src/environment.js>:
+L</Text::Nunjucks::Environment>, the object an application holds,
+L</Text::Nunjucks::Template>, a template that renders, and
+C<Text::Nunjucks::Context>, the per-render bookkeeping of variables and blocks,
+which the engine creates itself and callers do not use. Each is a Moo class,
+and each is loaded by loading this module. Callbacks follow ADR 0003 and the
+render API ADR 0009.
 
-=head1 DESCRIPTION
+Every class here takes its constructor arguments by position, as upstream's
+constructors do, not as a hash.
 
-A 1:1 port of Nunjucks C<src/environment.js>. Defines three classes from the one
-upstream file: C<Text::Nunjucks::Environment> (loaders, filters/tests/globals/
-extensions, C<render> / C<render_string>, C<get_template>),
-C<Text::Nunjucks::Context> (per-render variable and block bookkeeping) and
-C<Text::Nunjucks::Template> (lazy compile via C<eval> of the compiler's emitted
-Perl source, root render wiring, C<get_exported>). The render API follows the
-callback protocol of ADR 0003 / ADR 0009.
+=head1 Text::Nunjucks::Environment
+
+    my $env = Text::Nunjucks::Environment->new( $loaders, \%opts );
+
+    $env->add_filter( reverse_words => sub { join ' ', reverse split ' ', $_[0] } );
+    my $out = $env->render( 'page.njk', { title => 'Hi' } );
+
+An Environment owns the loaders, the options, the filters, tests, globals and
+extensions, and a cache of compiled templates per loader. Keep one around and
+render through it: a template is compiled once and cached.
+
+=head2 new
+
+    Text::Nunjucks::Environment->new;
+    Text::Nunjucks::Environment->new( $loader );
+    Text::Nunjucks::Environment->new( [ $loader_a, $loader_b ], \%opts );
+
+Positional: the loaders, then the options. C<$loaders> is one loader object or
+an array reference of them, tried in order. When it is omitted (or false) the
+Environment uses a single L<Text::Nunjucks::Loader::FileSystem> over the
+directory C<views> of the current working directory. An empty array reference
+means no loaders: only C<render_string> can then render, and C<render> fails
+with C<template not found>.
+
+The options are a hash reference with the keys of Nunjucks:
+
+=over 4
+
+=item autoescape
+
+Escape every output with C<{{ }}> unless it is marked safe. B<True by default>:
+an C<undef> or null value leaves the default in place, any other value is taken
+as given.
+
+=item throwOnUndefined
+
+Make outputting an undefined or null value an error
+(C<attempted to output null or undefined value>). Off by default.
+
+=item trimBlocks
+
+Remove the first newline after a block tag. Off by default.
+
+=item lstripBlocks
+
+Remove leading whitespace from the start of a line up to a block tag. Off by
+default.
+
+=item dev
+
+Throw the error objects as they are (L<Text::Nunjucks::Lib::TemplateError>,
+with line, column and cause) instead of the plain
+L<Text::Nunjucks::Lib::Error> carrying the same name and message. Off by
+default. Errors that are not template errors, such as C<template not found>,
+are L<Text::Nunjucks::Lib::Error> either way.
+
+=item tags
+
+A hash reference overriding the template delimiters: any of C<blockStart>,
+C<blockEnd>, C<variableStart>, C<variableEnd>, C<commentStart>, C<commentEnd>.
+The defaults are C<{%>, C<%}>, C<{{>, C<}}>, C<{#> and C<#}>.
+
+=back
+
+The option keys keep their JavaScript spelling because they are the names of
+the template engine's options. The hash reference you pass is the Environment's
+C<opts> itself, changed in place: the defaults are filled in, and the four
+boolean options become booleans.
+
+=cut
+
+=attr loaders
+
+Array reference of the loaders, in lookup order.
+
+=cut
+
+=attr opts
+
+The options hash reference, with defaults filled in. It is the hash you passed
+to C<new>, not a copy.
+
+=cut
+
+=attr globals
+
+Hash reference of the global names to values. Use L</add_global> and
+L</get_global> instead of writing to it.
+
+=cut
+
+=attr filters
+
+Hash reference of the filter names to code references. Use L</add_filter> and
+L</get_filter>.
+
+=cut
+
+=attr tests
+
+Hash reference of the C<is> test names to code references. Use L</add_test> and
+L</get_test>.
+
+=cut
+
+=attr async_filters
+
+Array reference of the names of the filters registered as asynchronous.
+
+=cut
+
+=attr extensions
+
+Hash reference of the extension names to extensions, and C<extensions_list> the
+same extensions as an array reference in registration order. Use
+L</add_extension>.
+
+=cut
+
+=method add_filter
+
+    $env->add_filter( shout => sub { my ($text) = @_; return uc($text) . '!' } );
+    $env->add_filter( $name, sub { my ( $value, @args ) = @_; ... } );
+    $env->add_filter( $name, sub { my $cb = pop; my ( $value, @args ) = @_; $cb->( $err, $result ) }, 1 );
+
+Registers a filter and returns the Environment. A synchronous filter is called
+with the value being filtered followed by the filter's arguments and returns the
+result. With a true third argument the filter is asynchronous: it receives a
+trailing callback instead of returning, and calls C<< $cb->( $err, $result ) >>
+(ADR 0009); take the callback off the end of C<@_> first, as in the example.
+Keyword arguments in the template arrive as a trailing
+C<Text::Nunjucks::Runtime::KwArgs> object; for an asynchronous filter it comes
+before the callback. A name registered twice is
+replaced, so a built-in filter can be overridden.
+
+=cut
+
+=method get_filter
+
+    my $code = $env->get_filter($name);
+
+Returns the filter's code reference. Dies with a
+L<Text::Nunjucks::Lib::Error> C<filter not found: NAME> when there is none.
+
+=cut
+
+=method add_test
+
+    $env->add_test( $name, sub { my ( $value, @args ) = @_; ... } );
+
+Registers an C<is> test (C<{{ x is NAME }}>) and returns the Environment. The
+code reference gets the tested value and the test's arguments and returns the
+truth value.
+
+=cut
+
+=method get_test
+
+    my $code = $env->get_test($name);
+
+Returns the test's code reference. Dies with C<test not found: NAME> when there
+is none.
+
+=cut
+
+=method add_global
+
+    $env->add_global( $name, $value );
+
+Sets a global, visible to every template rendered through this Environment
+unless the context has a variable of the same name. A code reference is a
+function the template can call. Returns the Environment.
+
+=cut
+
+=method get_global
+
+    my $value = $env->get_global($name);
+
+Returns the global. Dies with C<global not found: NAME> when it is not set (or
+undefined). The built-in globals are C<range>, C<cycler> and C<joiner>.
+
+=cut
+
+=method add_extension
+
+    $env->add_extension( $name, $extension );
+
+Registers an extension and returns the Environment. C<$extension> must be a
+hash-based object; the Environment stores C<$name> in its C<__name> key. How an
+extension object is shaped (the tags it claims and how it parses and renders
+them) is not settled and not documented here.
+
+=cut
+
+=method get_extension
+
+    my $extension = $env->get_extension($name);
+
+Returns the registered extension, or C<undef>.
+
+=cut
+
+=method has_extension
+
+True when an extension of that name is registered.
+
+=cut
+
+=method remove_extension
+
+    $env->remove_extension($name);
+
+Unregisters the extension. Does nothing when there is none.
+
+=cut
+
+=method get_template
+
+    my $tmpl = $env->get_template($name);
+    my $tmpl = $env->get_template( $name, $eager_compile, $parent_name, $ignore_missing );
+    $env->get_template( $name, $eager_compile, $parent_name, $ignore_missing, sub {
+      my ( $err, $tmpl ) = @_;
+    } );
+
+Returns the L</Text::Nunjucks::Template> called C<$name>. The cache of each
+loader is consulted first, then each loader's C<get_source> in turn until one
+returns a source; a source whose C<noCache> is false is cached under the resolved
+name (C<$name> resolved against C<$parent_name>, see below).
+C<$name> may also be a template object, which is returned as it is.
+
+C<$eager_compile> compiles the template now instead of on its first render.
+C<$parent_name> is the name of the template doing the asking: a C<$name> that
+starts with C<./> or C<../> is resolved against it (see L</resolve_template>).
+With a true C<$ignore_missing> a template no loader has is an empty template
+instead of an error.
+
+Without a callback the template is returned, or the method dies with a
+L<Text::Nunjucks::Lib::Error> (C<template not found: NAME>, or
+C<template names must be a string: ...>). The callback is the fifth
+argument, or takes the place of C<$eager_compile> or C<$parent_name> (and the
+arguments after it). It cannot take the place of C<$ignore_missing>: a code
+reference there is only a true value, and the callback is never called. With a
+callback, errors go to C<< $cb->($err) >> and the template to
+C<< $cb->( undef, $tmpl ) >>. A loader that is asynchronous
+(see L<Text::Nunjucks::Loader>) can only be used with a callback: without one,
+the method returns before the template has arrived.
+
+=cut
+
+=method resolve_template
+
+    my $name = $env->resolve_template( $loader, $parent_name, $filename );
+
+Returns the name to look up: C<$filename> resolved against C<$parent_name> by
+the loader's C<resolve> when the filename is relative (C<./x>, C<../x>), the
+parent name is given and the loader has C<is_relative> and C<resolve>;
+otherwise C<$filename> unchanged.
+
+=cut
+
+=method render
+
+    my $html = $env->render( 'page.njk', \%context );
+    $env->render( 'page.njk', \%context, sub { my ( $err, $html ) = @_; ... } );
+
+Loads the template with C<get_template> and renders it with the context hash
+reference (the context may be left out). Without a callback it returns the
+text and dies on error. With a callback it calls
+C<< $cb->( $err, $result ) >>, exactly one of the two being set; errors in
+loading and rendering the template go there instead of dying. A name that is
+not a string (C<render( undef, {}, $cb )>) still dies before the callback is
+reached, as in Nunjucks. Rendering is synchronous unless something in the
+template or its loaders defers; a render without a callback that does defer
+returns C<undef> without an error, as Nunjucks returns null. A failed render
+is a L<Text::Nunjucks::Lib::Error>, or a
+L<Text::Nunjucks::Lib::TemplateError> with C<dev>; C<template not found> is a
+L<Text::Nunjucks::Lib::Error> in both cases.
+
+=cut
+
+=method render_string
+
+    my $html = $env->render_string( $source, \%context );
+    my $html = $env->render_string( $source, \%context, { path => 'inline.njk' } );
+    $env->render_string( $source, \%context, $opts, sub { my ( $err, $html ) = @_; ... } );
+
+Renders a template given as a string, with this Environment's filters, tests,
+globals and loaders (so C<include> and C<extends> inside it work). The third
+argument is a hash reference whose only key is C<path>, the name shown in error
+messages (C<unknown path> otherwise); it may be left out, and the callback
+given in its place. Return value, errors and callback are as for L</render>.
+
+=cut
+
+=method invalidate_cache
+
+    $env->invalidate_cache;
+
+Empties the compiled-template cache of every loader.
+
+=cut
+
+=method on
+
+    $env->on( update => sub { my ( $name, $fullname, $loader ) = @_; ... } );
+    $env->on( load   => sub { my ( $name, $source,   $loader ) = @_; ... } );
+
+From L<Text::Nunjucks::EmitterObj>. The Environment re-emits its loaders'
+events: C<update> when a loader reports that a template changed (the loader's
+cache entry for it is dropped first), and C<load> when a loader emits it
+(L<Text::Nunjucks::Loader::FileSystem> does when it reads a template;
+L<Text::Nunjucks::Loader::Precompiled> never does). Both carry the loader as
+the last argument.
+C<emit> calls the listeners in registration order.
+
+=cut
+
+=head1 Text::Nunjucks::Template
+
+    my $tmpl = $env->get_template('page.njk');
+    my $html = $tmpl->render( { title => 'Hi' } );
+
+    my $tmpl = Text::Nunjucks::Template->new( 'Hello {{ name }}', $env, 'greeting.njk' );
+
+A template, compiled to Perl code on first use. Obtain one from
+L</get_template>, or construct it yourself.
+
+=head2 new
+
+    Text::Nunjucks::Template->new( $src, $env, $path, $eager_compile );
+
+Positional. C<$src> is the template's source as a string, or a hash reference
+C<< { type => 'string', obj => $source } >> or, for a template that is already
+compiled, C<< { type => 'code', obj => \%compiled } >> (what
+L<Text::Nunjucks::Loader::Precompiled> hands out); any other C<type> dies.
+C<$env> is the Environment whose filters, tests, globals and loaders the
+template uses; without one a fresh default Environment is made. C<$path> is the
+name shown in error messages. With a true C<$eager_compile> the template is
+compiled now, and a syntax error dies here rather than on the first render.
+
+=cut
+
+=attr env
+
+The L</Text::Nunjucks::Environment> the template belongs to.
+
+=cut
+
+=attr path
+
+The path or name given at construction, shown in error messages.
+
+=cut
+
+=method render
+
+    my $html = $tmpl->render( \%context );
+    $tmpl->render( \%context, sub { my ( $err, $html ) = @_; ... } );
+
+Renders the template. Compiles it first if needed. The return value, the death
+on error and the callback form are those of C<render> of the Environment. The
+context is copied, so the template's C<set> never changes the hash you passed.
+
+=cut
+
+=method compile
+
+    $tmpl->compile;
+
+Compiles the template if it is not compiled yet. A syntax error dies with the
+raw L<Text::Nunjucks::Lib::TemplateError>, without the path and line prefix a
+render adds (as C<compile> does in Nunjucks). Called by C<render>; call it yourself
+to find errors early.
+
+=cut
+
+=method get_exported
+
+    $tmpl->get_exported( \%context, sub { my ( $err, $exported ) = @_; ... } );
+
+Runs the template and passes its callback the hash of the top-level variables
+it exports, as C<import> and C<from ... import> read them. The callback is
+required.
 
 =cut

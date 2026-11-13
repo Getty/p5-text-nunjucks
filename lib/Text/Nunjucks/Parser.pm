@@ -1456,11 +1456,10 @@ package Text::Nunjucks::Parser::Parser {
 
 __END__
 
-=head1 NAME
-
-Text::Nunjucks::Parser - the recursive-descent parser
-
 =head1 DESCRIPTION
+
+Engine-internal: this module is a stage of the template pipeline, used by
+L<Text::Nunjucks::Environment>, and not an interface for applications.
 
 A 1:1 port of Nunjucks C<src/parser.js>. Turns a template string into an AST of
 L<Text::Nunjucks::Nodes> nodes.

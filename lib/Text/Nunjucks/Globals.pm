@@ -134,3 +134,17 @@ sub globals {
 }
 
 1;
+
+__END__
+
+=description
+
+A 1:1 port of Nunjucks C<src/globals.js>: the built-in global functions C<range>,
+C<cycler> and C<joiner>. C<globals> returns a fresh hash of them for each
+Environment. To add a global use C<add_global> of
+L<Text::Nunjucks::Environment>.
+
+Engine-internal: used by L<Text::Nunjucks::Environment> and the code the compiler emits, and
+not an interface for applications.
+
+=cut

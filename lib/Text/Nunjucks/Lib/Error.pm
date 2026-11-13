@@ -28,3 +28,45 @@ around BUILDARGS => sub {
 };
 
 1;
+
+__END__
+
+=description
+
+A plain error with a name and a message. The engine throws it where JavaScript
+throws a built-in C<Error> or C<TypeError> (ADR 0010) and where Nunjucks throws
+C<new Error(...)>: C<template not found: NAME>, C<filter not found: NAME>,
+C<watch requires chokidar to be installed> and so on. Without the C<dev>
+option, a failed render also arrives as one of these, with the name
+C<Template render error> and the message of the L<Text::Nunjucks::Lib::TemplateError>
+it was made from. Catch it with C<eval>:
+
+    eval { $env->render( 'page.njk', {} ); 1 } or do {
+      my $err = $@;
+      print $err->name, ': ', $err->message, "\n";
+    };
+
+=cut
+
+=attr message
+
+The error text.
+
+=cut
+
+=attr name
+
+The error's name: C<Error> unless given, C<TypeError> for the type errors, C<RangeError> for an invalid array length,
+C<URIError> for malformed URI input, C<Template render error> for a failed render.
+
+=cut
+
+=method new
+
+    Text::Nunjucks::Lib::Error->new('something broke');
+    Text::Nunjucks::Lib::Error->new( 'wrong type', name => 'TypeError' );
+
+Takes the message and, optionally, C<< name => ... >>; a single hash reference
+of attributes works too.
+
+=cut
