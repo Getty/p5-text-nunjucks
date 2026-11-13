@@ -1,0 +1,14 @@
+---
+class: standard
+created: 2026-11-13T13:56:09Z
+id: 90
+priority: medium
+status: backlog
+tags:
+- bug
+- compiler
+title: 'Compiler: ''is not (test)'' with a parenthesised test name crashes in compile_is'
+updated: 2026-11-13T13:56:09Z
+---
+
+Oracle: {{ 1 is not (equalto(2)) }} renders 'true'. Port dies with: Can't locate object method "value" via package "Text::Nunjucks::Nodes::Group" at lib/Text/Nunjucks/Compiler.pm line 517. Found by the k35 corpus probe t/corpus/render-tests-globals.json ('tests: is not with parenthesised test', carries todo). Not a Tests.pm issue; belongs to the Compiler/Parser audit.
