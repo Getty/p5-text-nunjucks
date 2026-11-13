@@ -1,0 +1,16 @@
+---
+class: standard
+created: 2026-11-13T06:19:06Z
+id: 62
+priority: low
+status: backlog
+tags:
+- bug
+- lexer
+- utf16
+title: Lexer string escape handling joins non-adjacent source characters (lone surrogates
+  in template source)
+updated: 2026-11-13T06:19:06Z
+---
+
+Found by the k17 job 1 worker (2026-11-13). Lexer _parse_string's backslash-escape path builds the literal by joining source characters that were not adjacent; with the k17 re-pair invariant (Lib js_string_append, ADR 0012) a template source that itself holds lone surrogates could pair them where JS would not, or vice versa. Edge case: only template sources containing lone surrogates. Check against the oracle before fixing.
