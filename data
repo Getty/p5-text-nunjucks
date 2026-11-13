@@ -1,0 +1,22 @@
+---
+class: standard
+created: 2026-11-13T16:39:37Z
+id: 102
+priority: medium
+status: backlog
+tags:
+- decision
+- environment
+- api
+title: Extension object surface is undecided; comments still point at k8 (done) and
+  k22
+updated: 2026-11-13T16:39:58Z
+---
+
+Found by the k20 doc-writer (2026-11-13). Comments say the extension object representation is open: Parser.pm:720 ("ext.tags -- extension representation is k8 (undecided)"), Environment.pm:212 ("k8/k22: object surface open"), Compiler.pm:46, :84, :300. k8 is done (ADR 0009), but ADR 0009 only says extensions are "ordinary Perl coderefs/objects registered on the Environment" (add_extension); it does not fix how a Perl extension exposes tags, parse(parser, nodes, lexer), preprocess, or how Environment stores __name on it (today: a hash-based object, $extension->{__name} = $name). k22 (jinja-compat) is not about extensions. So the public POD can only say "hash-based object, shape not settled". No card owned this question until now.
+Needs: the maintainer decides the Perl shape of an extension (blessed object with methods tags/parse/preprocess? hashref with coderefs? both?), recorded as an ADR; then the comments are rewritten to cite it. Upstream reference: docs/api.md "Custom Tags", tests/compiler.js extension it()s already ported in t/upstream/compiler.t.
+Separate stale comment, same sweep: lib/Text/Nunjucks/Lib/Error.pm:16-17 "NOTE (open mapping): how JS built-in error types map to Perl is not yet settled by an ADR" -- ADR 0010 settled it.
+
+Options (main agent, 2026-11-13). Today's port is inconsistent: Parser reads tags from a blessed ->tags method OR a hashref {tags}; Compiler _ext_preprocess takes a blessed ->preprocess OR a hash coderef; compile_call_extension and the parser's ext.parse call assume a blessed object with methods; Environment add_extension writes $extension->{__name} (hash-based). (A) a blessed object (any class) with methods tags, parse($parser, $nodes, $lexer), optional preprocess, and the tag handler methods called as $ext->$prop($context, ...); __name stored by Environment in its own table or the hash slot; (B) a plain hashref of coderefs; (C) both, as today, via one Lib helper. Recommendation: (A) -- the upstream shape is an object with methods called through , ADR 0002 makes subclassing/objects the extension point, and the compiler already assumes it; drop the hashref branches in one change with an ADR.
+
+Correction to the note above: "methods called through this" -- the word this was lost to shell quoting.
