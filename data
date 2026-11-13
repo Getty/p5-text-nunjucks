@@ -1,0 +1,21 @@
+---
+class: standard
+created: 2026-11-13T14:43:04Z
+id: 93
+priority: low
+status: backlog
+tags:
+- decision
+- runtime
+title: 'Decision: engine-built methods that read this (cycler next/reset) called without
+  memberLookup'
+updated: 2026-11-13T14:43:04Z
+---
+
+Found by the k18 fidelity audit (2026-11-13). Upstream globals.js cycler(): next()/reset() write this.current. Reached through memberLookup (c.next(), {% set n = c.next %}{{ n() }}) `this` is the cycler, and the port (Globals.pm closes over a weakened cycler) matches. Reached without memberLookup the call gets another `this` upstream, and the port still moves the cycler. Oracle vs port:
+- for-in next: {% set cls = cycler(1, 2) %}{% for k, v in cls %}{% if k == 'next' %}{{ v() }}{% endif %}{% endfor %}[{{ cls.current }}] -> upstream 1[], port 1[1] (Context as this, compiler.js:707 raw read)
+- for-in reset: {% set c = cycler('a','b') %}{% for k, v in c %}{% if k == 'reset' %}{{ c.next() }}{{ v() }}{% endif %}{% endfor %}[{{ c.current }}]{{ c.next() }} -> upstream a[a]a, port a[]a
+- list path: {% for item in c | list %}{% if item.key == 'next' %}{{ item.value() }}{% endif %}{% endfor %}[{{ c.current }}] -> upstream a[], port a[a]
+- sort comparator: {% for k, v in c %}{% if k == 'next' %}{{ [3,1].sort(v) | join }}{% endif %}{% endfor %} -> upstream TypeError: Cannot set properties of undefined (setting 'current'), port 31
+ADR 0009 records no-this only for user coderefs; this is an engine object whose upstream methods depend on this.
+Options: (A) keep the closures, amend ADR 0009 for engine-built methods that read this, listing the four paths as a recorded divergence; (B) a dynamic `this` in Runtime: member_lookup returns a fresh wrapper setting a this slot, call_wrap sets it to the Context, native callbacks to undefined (also fixes k92). Recommendation (auditor and main agent): (A) -- the paths need a method pulled off the object without a member call, B touches every function-member read. Until decided: the port keeps the closures (member-call behaviour is identical under A and B); the four cases sit in t/corpus/render-tests-globals.json with todo naming this card.
