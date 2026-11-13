@@ -1,0 +1,15 @@
+---
+class: standard
+created: 2026-11-13T15:39:13Z
+id: 98
+priority: low
+status: backlog
+tags:
+- tests
+- drift
+title: 'Test harness: t/lib Test::Nunjucks::Util renders through a MemoryLoader, upstream
+  util.js through FileSystemLoader(tests/templates)'
+updated: 2026-11-13T15:39:13Z
+---
+
+Noted by the k19 worker (2026-11-13), recorded in ADR 0018 Consequences. Upstream tests/util.js builds its env with FileSystemLoader over tests/templates; t/lib/Test/Nunjucks/Util.pm stands in a MemoryLoader (it predates k19). Now that Loader::FileSystem exists the harness could use it over t/upstream/templates, so template-name resolution in the ported suites runs the same path as upstream (resolve, guard, not-found texts). Check which t/upstream suites depend on the MemoryLoader shape before switching.
