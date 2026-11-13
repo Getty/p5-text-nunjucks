@@ -1,0 +1,19 @@
+---
+class: standard
+created: 2026-11-13T12:57:55Z
+id: 87
+priority: medium
+status: backlog
+tags:
+- decision
+- runtime
+title: 'Decision: Object.prototype member names outside Context.lookup (filter/test
+  registries, member reads, groupby result)'
+updated: 2026-11-13T12:57:55Z
+---
+
+ADR 0014 decided own-key lookup (no prototype chain) for Context.lookup only, and keeps such templates out of the corpus. The same JS artifact shows up elsewhere (oracle, k17 job 5, 2026-11-13):
+- env filter/test registries are plain JS objects: select("constructor"/"toString"/"hasOwnProperty"/"valueOf") -> "" (inherited function used as a test), select("__proto__") -> TypeError: test.call is not a function; {{ 1 is constructor }} -> false; {{ 1|constructor }} -> 1; {{ 1|toString }} -> [object Object]; {{ 1|__proto__ }} -> TypeError: env.getFilter(...).call is not a function. Port: test not found / filter not found.
+- member reads of prototype names as values: selectattr("constructor") over dicts is truthy, selectattr("toString") over numbers is truthy (oracle 3, port 0).
+- groupby result object: keys toString/constructor/__proto__ etc. throw "(result[key] || result[key]).push is not a function" upstream; the port groups (k81).
+Options: (a) emulate Object.prototype (and primitive prototype) members on registries, member reads and the groupby result; (b) extend ADR 0014 own-key rule to all three as one recorded divergence (pathological name collisions, never normal data), cases kept out of the corpus; (c) split: emulate the error paths only (groupby throw, __proto__ TypeError), own-key elsewhere. Recommendation: (b) -- same reasoning as ADR 0014, one rule across the engine, no curated map of native functions; k81 then closes as covered by the amended ADR. Until decided: the affected corpus cases carry todo naming this card (render-filters-ordering.json), k81 cases stay todo.
