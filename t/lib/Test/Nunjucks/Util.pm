@@ -15,10 +15,10 @@ package Test::Nunjucks::Util;
 # template's name as its path where FileSystemLoader reports the absolute file
 # path, so moving the suites over is a change of its own (k98).
 #
-# util.js also exports `jinjaEqual` and `normEOL`. Neither is ported here yet --
-# no suite ported so far needs them. Port each alongside the first t/upstream/*.t
-# that calls it, oracle-grounded like everything else, rather than writing them
-# speculatively/unexercised now.
+# util.js also exports `jinjaEqual`, not ported here yet -- no suite ported so
+# far needs it. Port it alongside the first t/upstream/*.t that calls it,
+# oracle-grounded like everything else, rather than writing it speculatively.
+# `normEOL` is ported below (first caller: t/upstream/api.t).
 #
 # `finish(done)` has no Perl counterpart and is never ported: it exists in
 # util.js only to coordinate mocha's async done() with nunjucks' CPS callbacks
@@ -37,7 +37,7 @@ use Path::Tiny qw( path );
 use Text::Nunjucks::Environment;
 use Text::Nunjucks::Loader;
 
-our @EXPORT_OK = qw( render equal );
+our @EXPORT_OK = qw( render equal normEOL );
 
 #### MemoryLoader -- Perl analogue of maint/oracle.js's MemoryLoader; it stands
 #### in for the FileSystemLoader(templatesPath) util.js's render() builds,
@@ -109,6 +109,16 @@ package Test::Nunjucks::Util::_Extension {
   sub __name     { my $self = shift; $self->{__name} = shift if @_; return $self->{__name} }
   sub parse      { my $self = shift; return $self->{_parse}->( $self, @_ ) }
   sub run        { my $self = shift; return $self->{_run}->( $self, @_ ) }
+}
+
+#### normEOL(str) -> str
+#
+# JS: if (!str) return str; return str.replace(/\r\n|\r/g, '\n');
+sub normEOL {
+  my ($str) = @_;
+  return $str unless $str;
+  $str =~ s/\r\n|\r/\n/g;
+  return $str;
 }
 
 #### render(template, ctx, opts, env) -> (err, output)
