@@ -1,0 +1,24 @@
+---
+class: standard
+created: 2026-11-13T14:41:00Z
+id: 92
+priority: low
+status: backlog
+tags:
+- bug
+- runtime
+title: memberLookup wraps a function member in a fresh closure per read upstream;
+  the port returns the same coderef (o.f === o.f)
+updated: 2026-11-13T14:41:00Z
+---
+
+Found by the k18 fidelity audit (2026-11-13), predates k18.
+
+Upstream runtime.js:235-236: memberLookup returns `(...args) => obj[val].apply(obj, args)`, a new arrow on every read, so two reads of the same function member are never ===. The port (Runtime member_lookup / member_lookup_method, lib/Text/Nunjucks/Runtime.pm:1034ff, 1130ff) returns the stored coderef itself.
+
+Oracle vs port:
+- {% set c = cycler(1) %}{{ c.next === c.next }}|{{ c.next is sameas(c.next) }} -> upstream `false|false`; port `true|true`
+- {% macro m() %}x{% endmacro %}{% set o = {"f": m} %}{{ o.f === o.f }}|{{ m === m }}|{{ o.f is sameas(m) }} -> upstream `false|true|false`; port `true|true|true`
+- {{ cycler().next }} prints the wrapper source `(...args) => obj[val].apply(obj, args)` upstream (function source text: k44), `[object Object]` in the port.
+
+Fix sketch: member_lookup returns `sub { $fn->(@_) }` for a function-valued member, as upstream does. Note: this is also the natural seam for binding `this` (the open cycler question noted on k18: upstream cycler methods read `this`, which memberLookup binds; reached via for-in they get the Context). Decide together with that question rather than separately.
