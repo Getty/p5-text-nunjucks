@@ -1,0 +1,19 @@
+---
+class: standard
+created: 2026-09-21T22:47:09Z
+depends_on:
+- 16
+- 19
+id: 23
+priority: low
+status: backlog
+tags:
+- port
+- decision
+title: Port precompile.js → ::Precompile (+ bin/ CLI decision)
+updated: 2026-11-13T16:31:41Z
+---
+
+src/precompile.js (134 lines) + bin/precompile: precompile templates to Perl source files that ::Loader::Precompiled can load. Decide with the maintainer: the on-disk format (a .pm returning the props hash? a single bundle?), whether a nunjucks-precompile script ships in bin/, and the wrapper option. ADR for the format. Port tests/precompile.js. Port per skill text-nunjucks-core: same functions, same order, snake_case names, upstream control flow kept. Probe surprises with the oracle and commit them as corpus cases. Any deliberate difference needs an ADR in the same change.
+
+From the k20 scout (2026-11-13): precompile.js requires ./precompile-global and uses precompileGlobal as the default wrapper (precompile.js:8, 21, 46), but SKILL.md:59-61 lists precompile-global.js as out of scope ('do not port, no stubs'). This card's format decision has to settle that conflict. The top-level precompile/precompile_string exports wait on this card.
