@@ -1,0 +1,36 @@
+---
+class: standard
+completed: 2026-11-13T11:24:04Z
+created: 2026-11-13T04:09:37Z
+id: 51
+priority: high
+started: 2026-11-13T10:39:20Z
+status: done
+tags:
+- bug
+- runtime
+- ordering
+title: 'Lib::keys: JS array-index key order for literal and engine-built dicts (bug
+  against ADR 0011)'
+updated: 2026-11-13T11:24:23Z
+---
+
+ADR 0011 decides that template dict literals and engine-built objects are byte-identical / 1:1 with JS. JS orders own keys array-index keys first (ascending numeric), then string keys by insertion (OrdinaryOwnPropertyKeys). The port iterates Hash::Ordered in pure insertion order (Lib::keys, lib/Text/Nunjucks/Lib.pm ~360), so integer-like keys diverge without an ADR.
+
+Oracle vs port (k34 fidelity audit, 2026-11-13):
+- {% for k, v in {"b":1, "2":2, "1":3} %}{{k}};{% endfor %} -> oracle 1;2;b; port b;2;1;
+- keys a, 10, 9, 01, -1, 4294967295, 4294967294, 1.5 -> oracle 9;10;4294967294;a;01;-1;4294967295;1.5; port a;10;9;01;-1;4294967295;4294967294;1.5;
+- dump of the first literal -> {"1":3,"2":2,"b":1}
+- groupby over years: 9|10|2018|2019|b|a (k34: 2 assertions in t/upstream/filters.t TODO on this card)
+
+Fix in the one ordering seam (covers for, dump, list, dictsort, groupby result), with oracle corpus cases for the probes above. Open part for the maintainer (k17 note A): should plain caller hashes, sorted per ADR 0011, also put array-index keys first numerically (today 10 sorts before 9)?
+
+2026-11-13 04:37 MAINTAINER DECISION (Getty, 2026-11-13): yes, plain caller hashes also order array-index keys numerically first, then the rest sorted by key. Amend ADR 0011 accordingly.
+
+2026-11-13 11:03 Worker: seam fixed in Lib keys -> new _ordinary_own_property_keys/_is_array_index (index = /\A(?:0|[1-9][0-9]{0,9})\z/ and <= 4294967294; indices numeric-ascending first, then rest in given order: insertion for Hash::Ordered, key-sorted for plain hashes). Lib group_by now returns an engine-built ordered dict (Runtime make_dict) -- groupby result was a plain hash. Lib extend reads obj2 via _own_value (a Hash::Ordered top-level ctx died 'Not a HASH reference' at Lib.pm:461). Sites checked: for k,v (Compiler emits runtime keys), asyncEach/asyncAll (Lib async_for, Runtime async_all), list/urlencode/length (_entries/keys), extend, Environment blocks/props -- all go through Lib keys; Compiler compile_extends' CORE::keys over parentTemplate.blocks left as is (upstream raw for-in, add_block per name is order-free). Oracle probes: 0/00/-0/+1/' 1'/1e3/0x1/''/'1\n'/'1٣'/2^32/20-digit keys, groupby years and colours, asyncEach/asyncAll -- port identical. OPEN (not decided): (1) ADR 0011 'Open' -- engine-built and caller Hash::Ordered are the same class, so the JS rule now applies to every Hash::Ordered; the alternative needs an engine subclass. (2) Tie::IxHash: ADR 0011 says own order, port never implemented it -- tied hashes take the plain-hash branch (tie b,10,9,a -> 9,10,a,b). (3) KwArgs as a template value: upstream u|default(b=1,a=2) iterates b=1;a=2;__keywords=true;, length 3, x.b 1 -- port iterates nothing, length '', x.b '' (not an order bug; KwArgs value model, new card). Drift for k17 job 5: Lib get_attr_getter/has_own_prop ignore Hash::Ordered items -- [{t:'b'},{t:'a'}]|groupby('t') oracle b|a|, port (scratch filter) undefined|; group_by key coercion true->'1', null->None vs JS 'true'/'null'.
+
+2026-11-13 11:03 Done, NOT committed. Changed: lib/Text/Nunjucks/Lib.pm (keys seam + _ordinary_own_property_keys/_is_array_index, group_by ordered result, extend via _own_value, comments), lib/Text/Nunjucks/Runtime.pm (make_dict comment only), t/10-lib.t (+2 subtests, group_by + extend asserts), t/upstream/filters.t (2 nested groupby TODOs re-pointed to k17 job 5 -- ordering verified with a scratch groupby filter: :2018:Post 2:2019:Post 1Post 3 and ...:undefined:Post 3), t/corpus.t (comment), 8 k51 corpus todos dropped (6 sequences, 2 values; all passed), js-semantics.md key-order entry. Verified: prove -lr t/ 15 files 3420 tests 0 failed 0 skipped; TODO 74 (corpus 26, upstream/filters 37 nested, upstream/compiler 10 nested, upstream/runtime 1 nested), 0 TODO passing; render-key-order.json 47/47 pass with no todo. prove -l xt/ 13/13. Mutation check: 11 mutants on the seam (string sort of indices, no partition for ordered/plain, boundary 4294967295, leading zeros, unbounded length, ^$ anchors, \d, indices after rest, group_by plain hash, extend deref) all killed by t/10-lib.t; corpus kills 7 of them too. Open mappings in the previous note.
+
+2026-11-13 k51 audit (fidelity-auditor, read-only): no wrong output in scope. Ordering fuzz 3000 key lists vs V8 for-in identical; template probes for k,v / list / urlencode / length / asyncEach / asyncAll identical; one seam confirmed (compile_extends raw for-in left alone, correct: upstream compiler.js:1046 raw for-in, order across block names unobservable). 11/11 upstream functions in scope ported. Findings, fix round dispatched: F1 Runtime make_dict comment overclaims (loop object + import namespace are plain hashes -> k80); F2 js-semantics.md points at a nonexistent ADR 'Open' section, open items lack ticket ids; F3 ADR 0011 intro must say the Decision's third bullet is superseded (pending maintainer confirmation); F4 render-key-order.json: ~17 order-blind cases, 3 misnamed, async_all index order unpinned. Drift filed by the auditor: k80 (loop object / import namespace iterate key-sorted), k81 (group_by with toString/constructor/__proto__ key), k82 ({% set x.b = 1 %} raw Perl error).
+
+Committed as 25c0576
