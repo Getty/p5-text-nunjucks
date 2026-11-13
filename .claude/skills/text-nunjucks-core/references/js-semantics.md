@@ -205,6 +205,32 @@ SafeString has a length but no indices (`abc` from a macro, `|reverse` → `,,`)
 no array length, `{length: 2.5}` or `{length: -1}`, throws `RangeError: Invalid
 array length` (`results.length = obj.length`). Seam: Lib `map`.
 
+## The `is` tests and the globals — port as is, mechanism in Runtime
+
+`lower` / `upper` call `value.toLowerCase()` / `toUpperCase()` unchecked, with
+the receiver TypeError above: `5 is lower` → `TypeError: value.toLowerCase is
+not a function` · `null is lower` → `... of null (reading 'toLowerCase')`. A
+SafeString's result is a primitive: `('abc'|safe) is lower` → `false`.
+`iterable` is `!!value[Symbol.iterator]`: true for an array, a string and a
+SafeString (`m() is iterable` → `true`), false for a number, boolean, object,
+regex or function; undefined and null throw `TypeError: undefined is not
+iterable (cannot read property Symbol(Symbol.iterator))` / `object null ...`.
+`mapping` is `typeof value === 'object'` minus arrays: `r/a/`, a SafeString and
+an engine-built object are mappings, a function is not. Seams: Runtime
+`js_method_call`, `js_has_symbol_iterator`.
+
+`range` runs JS `<`, `>` and `+=`: `range('3')` → `0,1,2` · `range('3', 5)` →
+`["3"]` (`'3' + 1` is `'31'`) · `range(0, 3, '1')` → `[0,"01"]`;
+`range('1', '3')` never ends upstream (string `<`). A falsy step is 1, and a
+step that is not `> 0` takes the descending loop: `range(0, 3, 'a')` → `[]`.
+`cycler()` is a plain object, own keys `current;reset;next;`, dumped
+`{"current":null}`. Its methods use `this`, which memberLookup binds to the
+cycler on every read, so `{% set n = c.next %}{{ n() }}` moves `c.current`.
+Reached through `{% for k, v in c %}` and called bare, the method gets the
+Context as `this` upstream and `c.current` stays null; the port's methods close
+over their cycler, so it moves. ADR 0009's no-`this` covers user coderefs, not
+engine-built methods: this mapping is open, decision k93. Seam: Globals `cycler`.
+
 ## Case mapping — port as is, mechanism in Lib; Unicode version open, k64
 
 JS maps by code point with the full default case conversion, SpecialCasing

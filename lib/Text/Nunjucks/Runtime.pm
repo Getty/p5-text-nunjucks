@@ -1357,12 +1357,36 @@ sub js_array_destructure {
     my $s = $self->_is_safe_string($value) ? $value->val : $value;
     $items = [ split //, Text::Nunjucks::Lib->_js_from_units($s) ];
   } else {
-    die $self->_error_class->new(
-      $self->_js_not_callable_text($value) . ' is not iterable (cannot read property Symbol(Symbol.iterator))',
-      name => 'TypeError'
-    );
+    die $self->_js_not_iterable_error($value);
   }
   return CORE::map { $items->[$_] } 0 .. $count - 1;
+}
+
+# Port addition, same seam: value[Symbol.iterator] read for its truth value --
+# the iterable test's !!value[Symbol.iterator]. Of the values the port models,
+# an array, a string and a SafeString (a String object, String.prototype's
+# iterator) have one; a number, a boolean, a plain or ordered object, keyword
+# arguments, a regex and a function do not. On undefined / null V8 throws its
+# not-iterable TypeError for the read (oracle: {{ null is iterable }} ->
+# "TypeError: object null is not iterable (cannot read property
+# Symbol(Symbol.iterator))"). A Map, a Set and a generator have no Perl image
+# (k44).
+sub js_has_symbol_iterator {
+  my ( $self, $value ) = @_;
+  die $self->_js_not_iterable_error($value) if !defined($value) || $self->_is_none($value);
+  return (
+         Text::Nunjucks::Lib->is_array($value)
+      || Text::Nunjucks::Lib->is_string($value)
+      || $self->_is_safe_string($value)
+  ) ? 1 : 0;
+}
+
+sub _js_not_iterable_error {
+  my ( $self, $value ) = @_;
+  return $self->_error_class->new(
+    $self->_js_not_callable_text($value) . ' is not iterable (cannot read property Symbol(Symbol.iterator))',
+    name => 'TypeError'
+  );
 }
 
 #### callWrap

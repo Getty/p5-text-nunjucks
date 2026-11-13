@@ -12031,7 +12031,6 @@
   {
     "name": "ordering: select: select iterable",
     "template": "{{ [[1],'ab',1,{'a':1},null]|select('iterable')|dump|safe }}",
-    "todo": "k35: Tests module semantics (iterable on null)",
     "expected": {
       "ok": false,
       "error": {
@@ -12075,7 +12074,6 @@
   {
     "name": "ordering: select: select upper on number errors",
     "template": "{{ [1,'A']|select('upper')|dump|safe }}",
-    "todo": "k35: Tests module semantics (upper on a number)",
     "expected": {
       "ok": false,
       "error": {
@@ -12087,7 +12085,6 @@
   {
     "name": "ordering: select: select lower on null errors",
     "template": "{{ [null]|select('lower')|dump|safe }}",
-    "todo": "k35: Tests module semantics (lower on null)",
     "expected": {
       "ok": false,
       "error": {

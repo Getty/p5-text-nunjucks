@@ -6,197 +6,295 @@ our $VERSION = '0.001';
 use strict;
 use warnings;
 use builtin qw( true false );
-use Text::Nunjucks::Runtime;
 use Text::Nunjucks::Lib;
+use Text::Nunjucks::Runtime;
 
 no warnings 'experimental::builtin';
 
-# tests.js is a bag of `exports.<name> = fn` test functions. The port mirrors
-# that: `exports` returns { name => coderef } (what Environment.init iterates via
-# lib._entries(tests) and registers with add_test). Every test returns a JS
-# boolean, because the compiler wraps a test call in op_seq(result, true) -- a
-# 1/0 result would strict-compare unequal to `true`. So each returns true/false.
+# tests.js is a bag of `exports.<name> = fn` test functions. The port keeps
+# upstream's order and names (snake_case: nullTest -> null_test, undefinedTest
+# -> undefined_test); each test is a class method dispatched through $self,
+# like Filters, so a test named like a Perl builtin (defined, ne, lt) never
+# resolves to the builtin. `exports` builds the { name => coderef } bag, aliases
+# included, that Environment.init registers with add_test. A test is called the
+# way the compiler calls it, env.getTest(name)(value, args...) with no `this`
+# (ADR 0009), and its result is compared === true (op_seq), so every test
+# returns a JS boolean.
 #
-# JS operators (===, %, <, ...) go through Runtime (never Perl's native ones):
-# ADR 0001 kinds, ADR 0006 None, ADR 0007 numbers. Value kinds come from Lib.
-#
-# NOTE (porting order): tests.js sits after environment.js in the pipeline, but
-# environment.js `require`s it and the render corpus's `x is none` needs the
-# `null` test, so it is ported here alongside k16. `iterable` (Symbol.iterator)
-# and `mapping` (ES6 Set) have no direct Perl analogue and are mapped to the
-# array/string and object-hash surfaces (ADR 0008/0011); flagged for the k17
-# tests audit -- no corpus case exercises them yet.
+# JS operators (===, %, <, !, ...) go through Runtime, never Perl's native ones
+# (ADR 0001 kinds, ADR 0006 null, ADR 0007 numbers); value kinds come from Lib.
+# The native calls upstream makes on a value it never checked -- lower's
+# value.toLowerCase(), iterable's value[Symbol.iterator] -- go through Runtime
+# js_method_call / js_has_symbol_iterator, which throw V8's TypeError (ADR
+# 0010). A JS Map, Set or generator has no Perl image (k44).
 
-sub _rt { 'Text::Nunjucks::Runtime' }
-sub _lib { 'Text::Nunjucks::Lib' }
+sub _lib     { 'Text::Nunjucks::Lib' }
+sub _runtime { 'Text::Nunjucks::Runtime' }
 
-# callable(value): typeof value === 'function'
+#### callable
+
+# Returns `true` if the object is a function, otherwise `false`.
 sub callable {
-  my ($value) = @_;
-  return __PACKAGE__->_lib->is_function($value) ? true : false;
+  my ( $self, $value ) = @_;
+  return $self->_lib->is_function($value) ? true : false;    # typeof value === 'function'
 }
 
-# defined(value): value !== undefined  (JS null is defined, ADR 0006)
+#### defined
+
+# Returns `true` if the object is strictly not `undefined` (null is defined,
+# ADR 0006).
 sub defined {
-  my ($value) = @_;
-  return defined($value) ? true : false;
+  my ( $self, $value ) = @_;
+  return defined($value) ? true : false;    # value !== undefined
 }
 
-# divisibleby(one, two): (one % two) === 0
+#### divisibleby
+
+# Returns `true` if the operand (one) is divisble by the test's argument (two).
 sub divisibleby {
-  my ( $one, $two ) = @_;
-  return __PACKAGE__->_rt->op_seq( __PACKAGE__->_rt->op_mod( $one, $two ), 0 );
+  my ( $self, $one, $two ) = @_;
+  my $rt = $self->_runtime;
+  return $rt->op_seq( $rt->op_mod( $one, $two ), 0 );
 }
 
-# escaped(value): value instanceof SafeString
+#### escaped
+
+# Returns true if the string has been escaped (i.e., is a SafeString).
 sub escaped {
-  my ($value) = @_;
-  return __PACKAGE__->_rt->_is_safe_string($value) ? true : false;
+  my ( $self, $value ) = @_;
+  return $self->_runtime->_is_safe_string($value) ? true : false;    # value instanceof SafeString
 }
 
-# equalto(one, two): one === two
+#### equalto
+
+# Returns `true` if the arguments are strictly equal.
 sub equalto {
-  my ( $one, $two ) = @_;
-  return __PACKAGE__->_rt->op_seq( $one, $two );
+  my ( $self, $one, $two ) = @_;
+  return $self->_runtime->op_seq( $one, $two );
 }
 
-# even(value): value % 2 === 0
+#### even
+
+# Returns `true` if the value is evenly divisible by 2.
 sub even {
-  my ($value) = @_;
-  return __PACKAGE__->_rt->op_seq( __PACKAGE__->_rt->op_mod( $value, 2 ), 0 );
+  my ( $self, $value ) = @_;
+  my $rt = $self->_runtime;
+  return $rt->op_seq( $rt->op_mod( $value, 2 ), 0 );
 }
 
-# falsy(value): !value
+#### falsy
+
+# Returns `true` if the value is falsy - '', 0, false, undefined, NaN or null
+# (JS falsiness: '0', [] and {} are truthy).
 sub falsy {
-  my ($value) = @_;
-  return __PACKAGE__->_rt->_falsy($value) ? true : false;
+  my ( $self, $value ) = @_;
+  return $self->_runtime->op_not($value);    # !value
 }
 
-# ge(one, two): one >= two
+#### ge
+
+# Returns `true` if the operand (one) is greater or equal to the test's
+# argument (two).
 sub ge {
-  my ( $one, $two ) = @_;
-  return __PACKAGE__->_rt->op_ge( $one, $two );
+  my ( $self, $one, $two ) = @_;
+  return $self->_runtime->op_ge( $one, $two );
 }
 
-# greaterthan(one, two): one > two
+#### greaterthan
+
+# Returns `true` if the operand (one) is greater than the test's argument (two).
 sub greaterthan {
-  my ( $one, $two ) = @_;
-  return __PACKAGE__->_rt->op_gt( $one, $two );
+  my ( $self, $one, $two ) = @_;
+  return $self->_runtime->op_gt( $one, $two );
 }
 
-# le(one, two): one <= two
+#### le
+
+# Returns `true` if the operand (one) is less than or equal to the test's
+# argument (two).
 sub le {
-  my ( $one, $two ) = @_;
-  return __PACKAGE__->_rt->op_le( $one, $two );
+  my ( $self, $one, $two ) = @_;
+  return $self->_runtime->op_le( $one, $two );
 }
 
-# lessthan(one, two): one < two
+#### lessthan
+
+# Returns `true` if the operand (one) is less than the test's passed argument
+# (two).
 sub lessthan {
-  my ( $one, $two ) = @_;
-  return __PACKAGE__->_rt->op_lt( $one, $two );
+  my ( $self, $one, $two ) = @_;
+  return $self->_runtime->op_lt( $one, $two );
 }
 
-# lower(value): value.toLowerCase() === value
+#### lower
+
+# Returns `true` if the string is lowercased. value.toLowerCase() on a value
+# without it throws V8's TypeError (oracle: {{ 5 is lower }} -> "TypeError:
+# value.toLowerCase is not a function", {{ null is lower }} -> "TypeError:
+# Cannot read properties of null (reading 'toLowerCase')"); a SafeString's
+# result is a primitive, never === the SafeString.
 sub lower {
-  my ($value) = @_;
-  return __PACKAGE__->_rt->op_seq( lc($value), $value );
+  my ( $self, $value ) = @_;
+  my $rt = $self->_runtime;
+  return $rt->op_seq( $rt->js_method_call( $value, 'value', 'toLowerCase' ), $value );
 }
 
-# ne(one, two): one !== two
+#### ne
+
+# Returns `true` if the operand (one) is not strictly equal to the test's
+# argument (two).
 sub ne {
-  my ( $one, $two ) = @_;
-  return __PACKAGE__->_rt->op_sne( $one, $two );
+  my ( $self, $one, $two ) = @_;
+  return $self->_runtime->op_sne( $one, $two );
 }
 
-# null(value): value === null  (JS null is the None sentinel, ADR 0006)
-sub null {
-  my ($value) = @_;
-  return __PACKAGE__->_rt->op_seq( $value, __PACKAGE__->_rt->None );
+#### nullTest
+
+# Returns true if the value is strictly equal to `null` (the None sentinel,
+# ADR 0006).
+sub null_test {
+  my ( $self, $value ) = @_;
+  my $rt = $self->_runtime;
+  return $rt->op_seq( $value, $rt->None );
 }
 
-# number(value): typeof value === 'number'
+#### number
+
+# Returns true if value is a number (ADR 0001: created as a number; NaN and
+# Infinity are numbers, a numeric string is not).
 sub number {
-  my ($value) = @_;
-  return ( defined($value) && builtin::created_as_number($value) ) ? true : false;
+  my ( $self, $value ) = @_;
+  return ( defined($value) && builtin::created_as_number($value) ) ? true : false;    # typeof value === 'number'
 }
 
-# odd(value): value % 2 === 1
+#### odd
+
+# Returns `true` if the value is *not* evenly divisible by 2.
 sub odd {
-  my ($value) = @_;
-  return __PACKAGE__->_rt->op_seq( __PACKAGE__->_rt->op_mod( $value, 2 ), 1 );
+  my ( $self, $value ) = @_;
+  my $rt = $self->_runtime;
+  return $rt->op_seq( $rt->op_mod( $value, 2 ), 1 );
 }
 
-# string(value): typeof value === 'string'
+#### string
+
+# Returns `true` if the value is a string, `false` if not (ADR 0001; a
+# SafeString is an object).
 sub string {
-  my ($value) = @_;
-  return __PACKAGE__->_lib->is_string($value) ? true : false;
+  my ( $self, $value ) = @_;
+  return $self->_lib->is_string($value) ? true : false;    # typeof value === 'string'
 }
 
-# truthy(value): !!value
+#### truthy
+
+# Returns `true` if the value is not in the list of things considered falsy:
+# '', null, undefined, 0, NaN and false.
 sub truthy {
-  my ($value) = @_;
-  return __PACKAGE__->_rt->_truthy($value) ? true : false;
+  my ( $self, $value ) = @_;
+  my $rt = $self->_runtime;
+  return $rt->op_not( $rt->op_not($value) );    # !!value
 }
 
-# undefined(value): value === undefined
-sub undefined {
-  my ($value) = @_;
-  return !defined($value) ? true : false;
+#### undefinedTest
+
+# Returns `true` if the value is undefined.
+sub undefined_test {
+  my ( $self, $value ) = @_;
+  return !defined($value) ? true : false;    # value === undefined
 }
 
-# upper(value): value.toUpperCase() === value
+#### upper
+
+# Returns `true` if the string is uppercased; value.toUpperCase() throws as
+# lower's value.toLowerCase() does.
 sub upper {
-  my ($value) = @_;
-  return __PACKAGE__->_rt->op_seq( uc($value), $value );
+  my ( $self, $value ) = @_;
+  my $rt = $self->_runtime;
+  return $rt->op_seq( $rt->js_method_call( $value, 'value', 'toUpperCase' ), $value );
 }
 
-# iterable(value): !!value[Symbol.iterator] -- string or Array (ADR 0008; a plain
-# object is NOT iterable in JS). Symbol.iterator has no Perl analogue: k17 audit.
+#### iterable
+
+# Returns `true` if the value implements the `Symbol.iterator` method. Upstream
+# falls back to Array.isArray(value) || typeof value === 'string' where the
+# engine has no Symbol; every engine the port mirrors has it, so only the first
+# branch is ported. undefined and null throw (oracle: {{ x is iterable }} ->
+# "TypeError: undefined is not iterable (cannot read property
+# Symbol(Symbol.iterator))"); a SafeString is iterable (String.prototype).
 sub iterable {
-  my ($value) = @_;
-  return ( __PACKAGE__->_lib->is_array($value) || __PACKAGE__->_lib->is_string($value) )
-    ? true : false;
+  my ( $self, $value ) = @_;
+  return $self->_runtime->js_has_symbol_iterator($value) ? true : false;    # !!value[Symbol.iterator]
 }
 
-# mapping(value): a non-null object hash that is not an Array and not a Set. Perl
-# has no Set; an ordered dict (ADR 0011) counts as a mapping. k17 audit.
+#### mapping
+
+# Returns `true` if the value is an object hash or an ES6 Map: typeof value ===
+# 'object', so a regex, a SafeString, an engine-built object and any blessed
+# object count; an array and a function do not. typeof 'object' is a reference
+# that is not a coderef once undefined and null are out (ADR 0001: every JS
+# primitive is a non-reference scalar, null the None sentinel of ADR 0006).
+# The `!(value instanceof Set)` half has nothing to exclude: Perl has no Set
+# (k44).
 sub mapping {
-  my ($value) = @_;
-  return false if !defined($value) || __PACKAGE__->_rt->_is_none($value);
-  return true if __PACKAGE__->_rt->_is_ordered_hash($value);
-  return __PACKAGE__->_lib->is_object($value) ? true : false;
+  my ( $self, $value ) = @_;
+  # only maps and object hashes
+  my $bool = defined($value)                         # value !== undefined
+    && !$self->_runtime->_is_none($value)           # value !== null
+    && ref($value) && !$self->_lib->is_function($value)    # typeof value === 'object'
+    && !$self->_lib->is_array($value);              # !Array.isArray(value)
+  return $bool ? true : false;
 }
 
-# exports -- { name => coderef }, including the aliases tests.js registers.
+#### exports -- { name => coderef }, in tests.js's order, aliases included
+
+# tests.js's functions are module-level: every Environment registers the same
+# ones (environment.js: lib._entries(tests).forEach(... this.addTest ...)). So
+# the coderefs are built once per class and kept here; each call hands out a
+# fresh hash of them, which Environment.init only reads.
+my %exports_of;
+
 sub exports {
-  return {
-    callable    => \&callable,
-    defined     => \&defined,
-    divisibleby => \&divisibleby,
-    escaped     => \&escaped,
-    equalto     => \&equalto,
-    eq          => \&equalto,
-    sameas      => \&equalto,
-    even        => \&even,
-    falsy       => \&falsy,
-    ge          => \&ge,
-    greaterthan => \&greaterthan,
-    gt          => \&greaterthan,
-    le          => \&le,
-    lessthan    => \&lessthan,
-    lt          => \&lessthan,
-    lower       => \&lower,
-    ne          => \&ne,
-    null        => \&null,
-    number      => \&number,
-    odd         => \&odd,
-    string      => \&string,
-    truthy      => \&truthy,
-    undefined   => \&undefined,
-    upper       => \&upper,
-    iterable    => \&iterable,
-    mapping     => \&mapping,
+  my ($self) = @_;
+  return { %{ $exports_of{$self} } } if $exports_of{$self};
+  my $exports = $exports_of{$self} = {
+    callable    => sub { $self->callable(@_) },
+    defined     => sub { $self->defined(@_) },
+    divisibleby => sub { $self->divisibleby(@_) },
+    escaped     => sub { $self->escaped(@_) },
+    equalto     => sub { $self->equalto(@_) },
   };
+
+  # Aliases
+  $exports->{eq}     = $exports->{equalto};
+  $exports->{sameas} = $exports->{equalto};
+
+  $exports->{even}        = sub { $self->even(@_) };
+  $exports->{falsy}       = sub { $self->falsy(@_) };
+  $exports->{ge}          = sub { $self->ge(@_) };
+  $exports->{greaterthan} = sub { $self->greaterthan(@_) };
+
+  # alias
+  $exports->{gt} = $exports->{greaterthan};
+
+  $exports->{le}       = sub { $self->le(@_) };
+  $exports->{lessthan} = sub { $self->lessthan(@_) };
+
+  # alias
+  $exports->{lt} = $exports->{lessthan};
+
+  $exports->{lower}     = sub { $self->lower(@_) };
+  $exports->{ne}        = sub { $self->ne(@_) };
+  $exports->{null}      = sub { $self->null_test(@_) };
+  $exports->{number}    = sub { $self->number(@_) };
+  $exports->{odd}       = sub { $self->odd(@_) };
+  $exports->{string}    = sub { $self->string(@_) };
+  $exports->{truthy}    = sub { $self->truthy(@_) };
+  $exports->{undefined} = sub { $self->undefined_test(@_) };
+  $exports->{upper}     = sub { $self->upper(@_) };
+  $exports->{iterable}  = sub { $self->iterable(@_) };
+  $exports->{mapping}   = sub { $self->mapping(@_) };
+
+  return {%$exports};
 }
 
 1;

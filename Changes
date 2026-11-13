@@ -67,3 +67,8 @@ Revision history for Text-Nunjucks
       ascending, for template dict literals, engine-built objects (the
       groupby result included) and plain caller hashes, whose other keys stay
       key-sorted (ADR 0011). A Hash::Ordered render context no longer dies.
+    - The globals are ported: range, cycler, joiner and the globals
+      function; the built-in "is" tests are re-ported, so lower and upper
+      throw V8's TypeError on non-strings, mapping is typeof object minus
+      arrays and iterable checks Symbol.iterator with V8's not-iterable
+      TypeError. Environment loads Tests and Globals directly.

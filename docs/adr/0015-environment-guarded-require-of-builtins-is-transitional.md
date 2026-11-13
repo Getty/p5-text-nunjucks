@@ -55,3 +55,18 @@ ADR first named globals as k17 work. The k17 run ports the filters only:
 guarded require no longer covers it. `Text::Nunjucks::Tests` (present since k16)
 and `Globals` (k18, "Port tests.js + globals.js") still load through the guarded
 require, so the guard stays until k18 lands, and the loaders (k19) follow.
+
+## Update (2026-11-13, k18)
+
+The guard is gone. `Text::Nunjucks::Globals` (globals.js) is ported, and with
+`Filters`, `Tests` and `Globals` all present no built-in bag can be absent, so
+`Environment` loads all three with a plain `use` and `init` calls their
+`exports` / `exports` / `globals` directly; `_load_builtin`, the guarded
+require, is removed. As the Consequences above say, nothing renders differently
+for it: a fresh `Environment` now has upstream's `range`, `cycler` and
+`joiner`, as upstream's does.
+
+What this ADR still covers is k19: `init`'s server-side default,
+`[new FileSystemLoader('views')]` when no loaders are given, waits for the
+concrete loaders, so a fresh `Environment` still starts with no loader. The ADR
+closes when k19 lands.

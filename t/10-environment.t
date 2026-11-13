@@ -89,6 +89,20 @@ subtest 'add_test / get_test' => sub {
   is( msg($err), 'test not found: nope', 'get_test throws upstream text' );
 };
 
+# tests.js's functions are module-level, so every Environment registers the
+# same ones (environment.js: lib._entries(tests).forEach(... addTest ...)).
+subtest 'the built-in tests are the same functions in every Environment' => sub {
+  my $env  = Text::Nunjucks::Environment->new;
+  my $env2 = Text::Nunjucks::Environment->new;
+  is( $env->get_test('odd'), $env2->get_test('odd'), 'two Environments, one odd' );
+  is( $env->get_test($_), $env->get_test('equalto'), "$_ is equalto" ) for qw( eq sameas );
+  is( $env->get_test('gt'), $env->get_test('greaterthan'), 'gt is greaterthan' );
+  is( $env->get_test('lt'), $env->get_test('lessthan'), 'lt is lessthan' );
+  my ( $bag, $bag2 ) = map { Text::Nunjucks::Tests->exports } 1 .. 2;
+  isnt( $bag, $bag2, 'exports hands out a fresh hash per call' );
+  is( $bag->{odd}, $bag2->{odd}, '... of the same coderefs' );
+};
+
 #### globals
 
 subtest 'add_global / get_global' => sub {
@@ -101,6 +115,34 @@ subtest 'add_global / get_global' => sub {
   my $err;
   eval { $env->get_global('missing'); 1 } or $err = $@;
   is( msg($err), 'global not found: missing', 'get_global throws upstream text' );
+};
+
+# globals.js's globals() builds a fresh bag per call, so each Environment owns
+# its range / cycler / joiner (environment.js: this.globals = globals()).
+subtest 'the built-in globals are a fresh bag per Environment' => sub {
+  my $env  = Text::Nunjucks::Environment->new;
+  my $env2 = Text::Nunjucks::Environment->new;
+  is_deeply( [ sort keys %{ $env->globals } ], [qw( cycler joiner range )], 'range, cycler, joiner' );
+  isnt( $env->globals, $env2->globals, 'two Environments, two bags' );
+  $env->add_global( 'range', 'mine' );
+  is( $env2->render_string( '{{ range(3) }}', {} ), '0,1,2', 'add_global on one leaves the other alone' );
+};
+
+# A cycler's methods close over the cycler through a weakened copy -- the
+# interim choice while decision k93 is open (ADR 0009 covers user coderefs
+# only); the cycler holds the methods, so a strong copy would be a cycle Perl
+# never frees. No upstream counterpart: JS collects cycles.
+subtest 'a cycler is freed with its last reference' => sub {
+  my $env = Text::Nunjucks::Environment->new;
+  my $cls = $env->get_global('cycler')->( 'odd', 'even' );
+  my $weak = $cls;
+  weaken($weak);
+  is( $cls->get('next')->(), 'odd', 'next() steps' );
+  is( $cls->get('current'), 'odd', '... and sets current' );
+  my $next = $cls->get('next');
+  undef $cls;
+  ok( !defined $weak, 'the cycler is freed once dropped' );
+  is( $next->(), 'even', 'a next() kept past its cycler still steps' );
 };
 
 #### extensions

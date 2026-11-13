@@ -13,6 +13,8 @@ use Text::Nunjucks::Runtime;
 use Text::Nunjucks::Compiler;
 use Text::Nunjucks::Loader;
 use Text::Nunjucks::Filters;
+use Text::Nunjucks::Tests;
+use Text::Nunjucks::Globals;
 
 no warnings 'experimental::builtin';
 
@@ -29,12 +31,12 @@ no warnings 'experimental::builtin';
 # 'Text::Nunjucks::Runtime' (class-method-only module), so $runtime->None,
 # $runtime->Frame->new, $runtime->member_lookup(...) all resolve.
 #
-# PORTING-ORDER NOTES (flagged for the maintainer / k17 / k19):
+# PORTING-ORDER NOTES (flagged for the maintainer / k19):
 #   * environment.js require()s ./filters, ./tests, ./globals and registers them
-#     all in init. Filters are a plain load (`use` above, ADR 0015): exports($env)
-#     builds the bag per Environment. Tests and globals still go through the
-#     transitional guarded require of ADR 0015 (empty set if the module is
-#     absent); Text::Nunjucks::Tests exists, Globals is k18.
+#     all in init. All three are plain loads (`use` above): the transitional
+#     guarded require of ADR 0015 is gone since k18. Filters exports($env)
+#     builds the filter bag per Environment, Tests exports the test bag, and
+#     Globals globals() returns a fresh globals bag per Environment.
 #   * the no-loaders default (FileSystemLoader) and window.nunjucksPrecompiled
 #     are k19 / browser and intentionally inert here.
 
@@ -150,23 +152,12 @@ package Text::Nunjucks::Environment {
     }
   }
 
-  # Guarded require of the built-in bags (see PORTING-ORDER NOTES). A module that
-  # is simply not ported yet -> empty set; any OTHER load error (a real syntax
-  # error once the module exists) propagates rather than being masked.
-  sub _load_builtin {
-    my ( $self, $module, $method ) = @_;
-    my $ok = eval "require $module; 1";    ## no critic (ProhibitStringyEval)
-    return $module->$method if $ok;
-    ( my $path = $module ) =~ s{::}{/}g;
-    $path .= '.pm';
-    die $@ unless $@ =~ /\QCan't locate $path\E/;    # absent -> empty
-    return {};
-  }
-
-  # filters.js's exports, built for this Environment (ADR 0015: no guard)
+  # The built-in bags (see PORTING-ORDER NOTES): filters.js's exports, built for
+  # this Environment; tests.js's exports; globals.js's globals(), a fresh bag
+  # per call.
   sub _load_filters { $_[0]->filters_module->exports( $_[0] ) }
-  sub _load_tests   { $_[0]->_load_builtin( $_[0]->tests_module,   'exports' ) }
-  sub _load_globals { $_[0]->_load_builtin( $_[0]->globals_module, 'globals' ) }
+  sub _load_tests   { $_[0]->tests_module->exports }
+  sub _load_globals { $_[0]->globals_module->globals }
 
   sub _init_loaders {
     my ($self) = @_;
