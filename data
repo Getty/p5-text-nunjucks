@@ -1,0 +1,24 @@
+---
+class: standard
+created: 2026-11-13T15:39:03Z
+id: 96
+priority: medium
+status: backlog
+tags:
+- bug
+- environment
+- loader
+- memory
+- release-limitation
+- release-0.001
+title: 'Environment with a caching loader is never freed: Environment -> loader ->
+  cache -> Template -> Environment cycle'
+updated: 2026-11-13T20:26:20Z
+---
+
+Found and verified by the k19 worker (2026-11-13); predates k19. A Template cached in loader.cache holds its Environment, so Environment -> loaders -> loader -> cache -> Template -> env is a strong cycle and never freed under Perl refcounting (node has a tracing GC). Since k19 every Environment without explicit loaders gets FileSystemLoader("views") without noCache, so this is the default path once a template is loaded. k19 weakened the _init_loaders closures (Environment and loader), which fixed the cycle the default loader itself added; the cache cycle remains. Fix needs a weak back-reference somewhere in Template/cache without changing upstream-visible sharing (a loader shared across Environments).
+
+From the k19 audit (2026-11-13), same family: k19 weakened the Environment/loader captures in _init_loaders (worker's interim choice, to avoid a second cycle). Observable from the Perl API, not from templates: node keeps an Environment alive while a shared loader's listener references it (tracing GC: env1 dropped, env2 loads → env1's 'load' handler still fires); the port frees env1 and its handler stops. Strong refs would match node there but leak once every Environment is dropped. Neither is 1:1 under refcounting — whoever fixes the cache cycle here should settle both together; ADR 0018 records the interim weakening as the worker's choice.
+
+2026-11-13 20:24 Pre-release audit (fidelity-auditor): cycle confirmed with Devel::Cycle. ~55 kB per Environment that loaded one template; noCache does NOT avoid it (44 kB); invalidate_cache before dropping does not help; an Environment that only used render_string is freed. Only per-request Environments leak this way. The per-render leaks with ONE Environment are separate: k107 (waterfall/async_iter $next), k108 (macro/caller <-> Context), k109 (super()).
+Release: fine as a documented limitation ('keep one long-lived Environment', k24) once k107/k108 are fixed; whether to fix the cycle itself is the maintainer's decision.
