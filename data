@@ -1,0 +1,18 @@
+---
+class: standard
+created: 2026-11-13T07:43:16Z
+id: 70
+priority: low
+status: backlog
+tags:
+- bug
+- runtime
+- decision
+title: Template-level x.toString() and Array map/filter/reduce missing from the native
+  method surface
+updated: 2026-11-13T12:58:14Z
+---
+
+From the k17 job 2 worker (2026-11-13). {{ x.toString() }} with x=5 gives 5 in the oracle; the port says 'Unable to call ..., which is undefined or falsey'. {{ [1,2].map(f) }} gives &lt;1&gt;,&lt;2&gt; in the oracle, the port the same call error. ADR 0008 already allows growing the String/Array/Number surface on demand (toString on String/Number/Array, Array map/filter/reduce; Number toString(radix) must be implemented or fail loud). Open for the maintainer (ADR 0008 amendment): (a) a Boolean surface (ADR 0008 names String, Array, Number only); (b) an Object.prototype toString fallback on the method seam for dicts/hashes/blessed objects and toString on the Regex surface -- touches ADR 0014/0016's own-key rule and k44's null-prototype objects. Recommendation: grow the allowed surfaces now; (a) yes; (b) together with k44's toString-member decision.
+
+From k17 job 5 (2026-11-13): toString and valueOf on a SafeString are functions in JS (dictsort values, 'is callable'); the port reads undefined. Same surface as this card.
