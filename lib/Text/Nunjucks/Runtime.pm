@@ -87,6 +87,12 @@ package Text::Nunjucks::Runtime::Regex {
   # the JS RegExp.prototype.exec contract never produces. Zero means: drop the
   # boolean before assembling the [full, ...captures] array.
   has _captures_count => ( is => 'ro', required => 1 );
+  # _group_names is every group name of the JS regex body in source order, each
+  # once (a duplicate name keeps its first place), cached at construction like
+  # _captures_count. Perl's %+ / %- carry no order, but JS builds a match's
+  # groups object in group order (oracle: 'ab' with r/(?<z>a)(?<b>b)/ iterates
+  # z, then b), so the engine-built groups object is filled from this list.
+  has _group_names => ( is => 'ro', required => 1 );
   # lastIndex is the JS RegExp's mutable match position. JS resets it on every
   # successful match (g/y) and on every failed match (g/y); for non-g/non-y
   # regexes it is left alone. The current value is template-visible
@@ -241,7 +247,9 @@ package Text::Nunjucks::Runtime::Regex {
     return [ $&, @captures ];
   }
 
-  # k48: count capture groups in a JS regex body. ECMAScript regex syntax:
+  # k48: the capture groups of a JS regex body, in source order: one entry per
+  # group, its name for a named group, undef for a numbered one (the count is
+  # the array's size). ECMAScript regex syntax:
   # `(` starts a group; `(?:` / `(?=` / `(?!` / `(?<=` / `(?<!` / `(?#` are
   # non-capturing / zero-width / comment forms; `(?<NAME>` is a NAMED
   # capture group (counts); everything else is a numbered capture group.
@@ -249,9 +257,9 @@ package Text::Nunjucks::Runtime::Regex {
   # where parens are literals. Walk the body byte-by-byte (the JS body is
   # ASCII for every pattern in the corpus; UTF-8 non-ASCII literals would
   # still walk correctly because substr/skip is over bytes, not codepoints).
-  sub _count_capture_groups {
+  sub _capture_groups {
     my ( $self, $body ) = @_;
-    my $count    = 0;
+    my @groups;
     my $i        = 0;
     my $len      = length $body;
     my $in_class = 0;
@@ -279,20 +287,23 @@ package Text::Nunjucks::Runtime::Regex {
         elsif ( $after eq '<' ) {
           my $after_lt = $i + 3 < $len ? substr( $body, $i + 3, 1 ) : '';
           if ( $after_lt ne '=' && $after_lt ne '!' ) {
-            $count++;                # (?<NAME> -- named capture
+            # (?<NAME> -- named capture; the name runs to the next '>' (the
+            # pattern already compiled, so there is one)
+            my $gt = index( $body, '>', $i + 3 );
+            push @groups, substr( $body, $i + 3, $gt - ( $i + 3 ) );
           }
           # (?<= / (?<! -- lookbehind, non-capturing
         }
         else {
-          $count++;                  # (?xyz -- invalid ECMAScript; count defensively
+          push @groups, undef;       # (?xyz -- invalid ECMAScript; count defensively
         }
       }
       elsif ( $c eq '(' ) {
-        $count++;                    # plain ( ... ) -- numbered capture
+        push @groups, undef;         # plain ( ... ) -- numbered capture
       }
       $i++;
     }
-    return $count;
+    return \@groups;
   }
 
   # Stringification: `/source/flags` -- matches RegExp.prototype.toString so
@@ -304,6 +315,109 @@ package Text::Nunjucks::Runtime::Regex {
   }
 
   sub to_string { return '/' . $_[0]->source . '/' . $_[0]->flags }
+
+  sub _runtime { 'Text::Nunjucks::Runtime' }
+  sub _lib     { 'Text::Nunjucks::Lib' }
+
+  # RegExp.prototype[Symbol.replace](string, replaceValue) -- what
+  # String.prototype.replace runs for a regex pattern, so the replace filter's
+  # regex branch (str.replace(old, new_)) lands here (ADR 0013). A coderef
+  # replaceValue is called once per match with (matched, captures..., position,
+  # string[, groups]) and its result goes through ToString; anything else goes
+  # through ToString and then GetSubstitution (Lib js_get_substitution: $&,
+  # $1..$99, $<name>, $`, $', $$). The g / y state follows RegExpBuiltinExec: g
+  # resets lastIndex to 0 and replaces every match, an empty match stepping
+  # lastIndex one on; y matches only at lastIndex; a regex with neither replaces
+  # the first match from 0 and leaves lastIndex alone. Oracle: 'aaa' with
+  # r/a*/g -> '--', 'ab' with r/x*|a/g -> '-a-b-' (Perl's own s///g gives
+  # '--b-'), 'aab' with r/a/y -> '-ab' and with r/a/gy -> '--b'.
+  # Matching and lastIndex reckon in code points, as test / exec do (k53); the
+  # position GetSubstitution and a replacer see is counted in code units (ADR
+  # 0012); the pieces are joined through js_string_append.
+  sub symbol_replace {
+    my ( $self, $string, $replace_value ) = @_;
+    my $rt  = $self->_runtime;
+    my $lib = $self->_lib;
+
+    my $s          = $rt->_js_to_string($string);
+    my $functional = $lib->is_function($replace_value);
+    $replace_value = $rt->_js_to_string($replace_value) unless $functional;
+    my $global = index( $self->flags, 'g' ) >= 0;
+    $self->lastIndex(0) if $global;
+
+    my @results;
+    while ( my $result = $self->_regexp_exec($s) ) {
+      push @results, $result;
+      last unless $global;
+      # AdvanceStringIndex past an empty match
+      $self->lastIndex( $self->lastIndex + 1 ) if $result->{matched} eq '';
+    }
+
+    my $accumulated_result   = '';
+    my $next_source_position = 0;
+    # the code-unit position of each match, counted on from the previous one
+    my ( $chars, $units ) = ( 0, 0 );
+    for my $result (@results) {
+      my $position = $result->{index};
+      $units += $lib->js_string_length( substr( $s, $chars, $position - $chars ) );
+      $chars = $position;
+      my $replacement = $functional
+        ? $rt->_js_to_string(
+            $replace_value->(
+              $result->{matched}, @{ $result->{captures} }, $units, $s,
+              defined( $result->{named} ) ? $result->{named} : (),
+            ) )
+        : $lib->js_get_substitution( $result->{matched}, $s, $units, $result->{captures},
+            $result->{named}, $replace_value );
+      if ( $position >= $next_source_position ) {
+        $lib->js_string_append( $accumulated_result,
+          substr( $s, $next_source_position, $position - $next_source_position ) );
+        $lib->js_string_append( $accumulated_result, $replacement );
+        $next_source_position = $position + length( $result->{matched} );
+      }
+    }
+    return $accumulated_result if $next_source_position >= length($s);
+    $lib->js_string_append( $accumulated_result, substr( $s, $next_source_position ) );
+    return $accumulated_result;
+  }
+
+  # RegExpBuiltinExec for symbol_replace: the next match under the g / y state as
+  # { matched, index (a character offset), captures (undef for a group that did
+  # not take part), named (the groups object, or undef if the regex has no named
+  # group) }, or nothing. The groups object is engine-built, so it is an ordered
+  # dict (ADR 0011) with every group name in group order (_group_names), undef
+  # for a group that did not take part. lastIndex is read and moved only for a g
+  # or y regex; a failed match resets it to 0.
+  sub _regexp_exec {
+    my ( $self, $s ) = @_;
+    my $sticky     = $self->_is_sticky;
+    my $stateful   = $sticky || index( $self->flags, 'g' ) >= 0;
+    my $last_index = $stateful ? $self->lastIndex : 0;
+    if ( $last_index > length($s) ) {
+      $self->lastIndex(0) if $stateful;
+      return;
+    }
+    # CAVEAT (see the test method): the qr must sit in a lexical before interpolation
+    my $qr = $sticky ? $self->_qr_anchored : $self->_qr;
+    pos($s) = $last_index;
+    if ( !( $s =~ /$qr/g ) ) {
+      $self->lastIndex(0) if $stateful;
+      return;
+    }
+    # every group of the pattern ($#+), not @{^CAPTURE}: that one stops at the
+    # last group that took part (oracle: 'ab' with r/(a)|(z)/ and '[$1|$2]'
+    # gives '[a|]', $2 being a group that exists)
+    my %result = (
+      matched  => substr( $s, $-[0], $+[0] - $-[0] ),
+      index    => $-[0],
+      captures => [ map { defined( $-[$_] ) ? substr( $s, $-[$_], $+[$_] - $-[$_] ) : undef } 1 .. $#+ ],
+      named    => @{ $self->_group_names }
+        ? $self->_runtime->make_dict( map { $_ => $+{$_} } @{ $self->_group_names } )
+        : undef,
+    );
+    $self->lastIndex( $+[0] ) if $stateful;
+    return \%result;
+  }
 }
 
 #### SafeString -- src/runtime.js function SafeString (a String subclass)
@@ -572,12 +686,15 @@ sub make_regex {
     $qr_anchored = $compiled;
   }
 
+  my $groups = $self->Regex->_capture_groups($source);
+  my %seen;
   return $self->Regex->new(
     source          => $source,
     flags           => $flags,
     _qr             => $qr,
     _qr_anchored    => $qr_anchored,
-    _captures_count => $self->Regex->_count_capture_groups($source),
+    _captures_count => scalar @$groups,
+    _group_names    => [ grep { defined($_) && !$seen{$_}++ } @$groups ],
   );
 }
 
@@ -687,9 +804,10 @@ sub ensure_defined {
 # (compile_lookup_val vs compile_fun_call -> the latter on a LookupVal name).
 
 my %STRING_METHODS = (
-  # a lone surrogate (ADR 0012) maps to itself, as in JS; Perl would warn
-  toUpperCase => sub { my ( $self, $s ) = @_; no warnings 'surrogate'; uc $s },
-  toLowerCase => sub { my ( $self, $s ) = @_; no warnings 'surrogate'; lc $s },
+  # JS case mapping (Final_Sigma, ß -> SS, lone surrogates unchanged) is the
+  # one Lib seam the lower / upper / capitalize filters use as well
+  toUpperCase => sub { my ( $self, $s ) = @_; Text::Nunjucks::Lib->js_to_upper_case($s) },
+  toLowerCase => sub { my ( $self, $s ) = @_; Text::Nunjucks::Lib->js_to_lower_case($s) },
   trim => sub {
     my ( $self, $s ) = @_;
     my $ws = Text::Nunjucks::Lib->js_whitespace_class;    # ADR 0005 seam
@@ -764,6 +882,23 @@ my %ARRAY_METHODS = (
   indexOf => sub {
     my ( $self, $arr, $search, $from ) = @_;
     return Text::Nunjucks::Lib->index_of( $arr, $search, $from );
+  },
+  lastIndexOf => sub {
+    # Array.prototype.lastIndexOf(searchElement[, fromIndex]): strict equality,
+    # scanning back from fromIndex -- length - 1 when absent, counted from the
+    # end when negative. Oracle: [1,2,1].lastIndexOf(1) 2, (1, 1) 0, (1, -1) 2,
+    # (1, -2) 0, (1, -9) -1, (1, 9) 2, (1, 'x') 0. The truncate filter reaches
+    # it on an array input (input.lastIndexOf(' ', length)).
+    my ( $self, $arr, $search, @from ) = @_;
+    my $len = scalar @$arr;
+    return -1 if $len == 0;
+    my $n = @from ? Text::Nunjucks::Lib->_js_to_integer_or_infinity( $self->_to_number( $from[0] ) ) : $len - 1;
+    return -1 if $n == $NEG_INF;
+    my $k = $n >= 0 ? ( $n < $len - 1 ? $n : $len - 1 ) : $len + $n;
+    for ( my $i = $k; $i >= 0; $i-- ) {
+      return $i if Text::Nunjucks::Lib->_strict_eq( $arr->[$i], $search );
+    }
+    return -1;
   },
   slice => sub {
     my ( $self, $arr, $start, $end ) = @_;
@@ -962,8 +1097,10 @@ sub member_lookup_method {
   # -- we mirror that by returning undef and letting call_wrap produce the
   # exact upstream text.
   if ( ref($obj) eq 'HASH' || $self->_is_ordered_hash($obj) ) {
-    my $fn = exists( $obj->{$key} ) ? $obj->{$key} : undef;       # plain hash
-    $fn    = $obj->get($key) if !defined($fn) && $self->_is_ordered_hash($obj);
+    # a Hash::Ordered is a blessed array, never dereferenced as a hash
+    my $fn = $self->_is_ordered_hash($obj)
+      ? ( $obj->exists($key) ? $obj->get($key) : undef )
+      : ( exists( $obj->{$key} ) ? $obj->{$key} : undef );
     return Text::Nunjucks::Lib->is_function($fn) ? $fn : undef;
   }
 
@@ -974,6 +1111,42 @@ sub member_lookup_method {
   }
 
   return undef;
+}
+
+# Port addition, ADR 0016 / ADR 0010: a native method call the engine's own
+# JavaScript makes on a value it never checked -- filters.js runs
+# str.toLowerCase(), str.split('\n'), input.lastIndexOf(' ', length) on whatever
+# the template piped in. JS reads the member and calls it: on undefined / null
+# the read throws, on a value without that method the call does, both as a
+# TypeError whose text V8 builds from the source expression, so the caller
+# names the upstream variable ($src). Oracle: 5|lower -> "TypeError:
+# str.toLowerCase is not a function", undefined|trim -> "TypeError: Cannot read
+# properties of undefined (reading 'replace')".
+sub js_method_call {
+  my ( $self, $obj, $src, $name, @args ) = @_;
+  my $method = $self->member_lookup_method( $obj, $name );
+  die $self->_js_method_error( $obj, $src, $name ) unless Text::Nunjucks::Lib->is_function($method);
+  return $method->(@args);
+}
+
+# Port addition, same seam: the string a String.prototype method the engine
+# calls with one of its own regexes (str.replace(/\r\n|\n/g, ...),
+# str.match(/\w+/g)) works on -- the value itself, a SafeString's value (a
+# String object), else the TypeError js_method_call throws for the member
+# ($name) upstream calls.
+sub js_string_this {
+  my ( $self, $obj, $src, $name ) = @_;
+  return $obj->val if $self->_is_safe_string($obj);
+  return $obj      if Text::Nunjucks::Lib->is_string($obj);
+  die $self->_js_method_error( $obj, $src, $name );
+}
+
+sub _js_method_error {
+  my ( $self, $obj, $src, $name ) = @_;
+  my $message = ( !defined($obj) || $self->_is_none($obj) )
+    ? 'Cannot read properties of ' . $self->_js_type($obj) . " (reading '" . $name . "')"
+    : $src . '.' . $name . ' is not a function';
+  return $self->_error_class->new( $message, name => 'TypeError' );
 }
 
 #### callWrap

@@ -21,5 +21,17 @@ Revision history for Text-Nunjucks
       concatenation does.
     - The test suite ports the upstream compiler, lexer, parser and runtime
       suites and runs a corpus of cases generated from the real Nunjucks.
-    - Not yet ported: the built-in filters; their upstream tests are
-      carried as TODO.
+    - The built-in filters start with the string family
+      (Text::Nunjucks::Filters, loaded by Environment, ADR 0015):
+      capitalize, center, indent, lower, nl2br, replace, striptags, title,
+      trim, truncate, upper and wordcount. The remaining built-in filters
+      are not ported yet; their upstream tests are carried as TODO.
+    - Case mapping follows JS toLowerCase and toUpperCase, Final_Sigma and
+      SpecialCasing included.
+    - The replace filter with a regex follows RegExp Symbol.replace: empty
+      matches, lastIndex, the g and y flags, and a function replacer that
+      gets the named groups in group order. It takes the JS replacement
+      patterns ($&, $1, $<name>, $`, $', $$).
+    - A filter given a value of the wrong kind throws V8's TypeError text
+      ("str.toLowerCase is not a function").
+    - Array lastIndexOf is native.

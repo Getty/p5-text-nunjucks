@@ -448,4 +448,102 @@ subtest 'repeat joins in code units' => sub {
     'the halves that meet between two repeats form the pair' );
 };
 
+#### JS case mapping -- js_to_lower_case / js_to_upper_case
+
+subtest 'js_to_lower_case: Final_Sigma as ICU applies it' => sub {
+  # oracle: {{ s | lower }} for each input; Case_Ignorable letters (U+00AD,
+  # U+0301, U+0027, U+02B0) are skipped on both sides, a cased letter before
+  # and none after makes the sigma final
+  my @cases = (
+    [ "\x{391}\x{3A3}",                         "\x{3B1}\x{3C2}",                         'ΑΣ -> ας' ],
+    [ "\x{391}\x{3A3}.",                        "\x{3B1}\x{3C2}.",                        'before punctuation' ],
+    [ "\x{391}\x{3A3}1",                        "\x{3B1}\x{3C2}1",                        'before a digit' ],
+    [ "\x{3A3}",                                "\x{3C3}",                                'alone: not final' ],
+    [ "\x{391}\x{3A3} \x{392}",                 "\x{3B1}\x{3C2} \x{3B2}",                 'before a space and a word' ],
+    [ "\x{391}\x{3A3}\x{391}",                  "\x{3B1}\x{3C3}\x{3B1}",                  'inside a word' ],
+    [ "\x{391}.\x{3A3}",                        "\x{3B1}.\x{3C2}",                        'after punctuation (Case_Ignorable)' ],
+    [ "\x{391}\x{3A3}\x{AD}\x{391}",            "\x{3B1}\x{3C3}\x{AD}\x{3B1}",            'soft hyphen skipped after' ],
+    [ "\x{391}\x{AD}\x{3A3}",                   "\x{3B1}\x{AD}\x{3C2}",                   'soft hyphen skipped before' ],
+    [ "\x{391}\x{301}\x{3A3}\x{301}\x{391}",    "\x{3B1}\x{301}\x{3C3}\x{301}\x{3B1}",    'combining marks skipped' ],
+    [ "1\x{3A3}",                               "1\x{3C3}",                               'after a digit: not final' ],
+    [ "\x{391}'\x{3A3}'",                       "\x{3B1}'\x{3C2}'",                       'apostrophes skipped' ],
+    [ "\x{1C5}\x{3A3}",                         "\x{1C6}\x{3C2}",                         'after a titlecase letter' ],
+    [ "\x{2B0}\x{3A3}",                         "\x{2B0}\x{3C3}",                         'U+02B0 is cased and ignorable: not a cased letter before' ],
+    [ "\x{391}\x{3A3}\x{3A3}",                  "\x{3B1}\x{3C3}\x{3C2}",                  'only the last of two' ],
+    [ "\x{10400}\x{3A3}",                       "\x{10428}\x{3C2}",                       'after an astral cased letter' ],
+    [ "\x{3A3}\x{10400}",                       "\x{3C3}\x{10428}",                       'before an astral cased letter' ],
+    [ "\x{391}\x{3A3}\x{1F600}",                "\x{3B1}\x{3C2}\x{1F600}",                'before an emoji' ],
+  );
+  for my $case (@cases) {
+    my ( $in, $want, $label ) = @$case;
+    is( $L->js_to_lower_case($in), $want, $label );
+  }
+};
+
+subtest 'js_to_upper_case / js_to_lower_case: special casing and encodings' => sub {
+  # oracle: {{ s | upper }}, {{ s | lower }}, {{ ('İ' | lower) | length }} -> 2
+  is( $L->js_to_upper_case("\x{DF}"), 'SS', 'ß -> SS' );
+  is( $L->js_to_upper_case("\x{FB01}\x{149}\x{1F0}"), "FI\x{2BC}NJ\x{30C}", 'ﬁ ŉ ǰ expand' );
+  is( $L->js_to_upper_case("\x{390}"), "\x{399}\x{308}\x{301}", 'ΐ expands to three' );
+  is( $L->js_to_lower_case("\x{130}"), "i\x{307}", 'İ -> i + combining dot' );
+  is( $L->js_to_upper_case("\x{1C5}"), "\x{1C4}", 'titlecase ǅ -> Ǆ' );
+  is( $L->js_to_upper_case("\x{10428}\x{10400}"), "\x{10400}\x{10400}", 'astral Deseret upper' );
+  is( $L->js_to_lower_case("\x{10428}\x{10400}"), "\x{10428}\x{10428}", 'astral Deseret lower' );
+
+  # a native 8-bit string still maps by Unicode rules (unicode_strings)
+  my $latin1 = "\xDF\xE9\xFF\xB5";
+  ok( !utf8::is_utf8($latin1), 'the input is a native 8-bit string' );
+  is( $L->js_to_upper_case($latin1), "SS\x{C9}\x{178}\x{39C}", 'ßéÿµ -> SSÉŸΜ' );
+  is( $L->js_to_lower_case("\xC9\xDE"), "\x{E9}\x{FE}", 'ÉÞ -> éþ' );
+
+  # ADR 0012: a lone surrogate maps to itself, two halves spelled as two
+  # characters are the pair
+  my @warnings;
+  local $SIG{__WARN__} = sub { push @warnings, @_ };
+  is( $L->js_to_upper_case("\x{D83D}"), "\x{D83D}", 'a lone high surrogate stays' );
+  is( $L->js_to_lower_case("x\x{DE00}"), "x\x{DE00}", 'a lone low surrogate stays' );
+  is( $L->js_to_upper_case("\x{D801}\x{DC28}"), "\x{10400}", 'a pair spelled as two halves maps as its character' );
+  is_deeply( \@warnings, [], 'no surrogate warning' );
+};
+
+#### GetSubstitution -- js_get_substitution
+
+subtest 'js_get_substitution: the JS replacement patterns' => sub {
+  # oracle: 'abc'|replace(r/b/, ...) and the other templates cited per line;
+  # the result here is what replaces the match, so 'a' . $result . 'c' is the
+  # rendered output
+  is( $L->js_get_substitution( 'b', 'abc', 1, [], undef, 'plain' ), 'plain', 'no $: as is' );
+  is( $L->js_get_substitution( 'b', 'abc', 1, [], undef, q{[$&][$`][$'][$$][$][$x][$<n>][$1]} ),
+    q{[b][a][c][$][$][$x][$<n>][$1]},
+    q{$& $` $' $$; a lone $, $x, $<n> without groups and $1 without captures stay} );
+  is( $L->js_get_substitution( 'b', 'abc', 1, ['b'], undef, q{[$1$2$0$01$10]} ), q{[b$2$0bb0]},
+    'r/(b)/: $2 and $0 stay, $01 is $1, $10 is $1 then 0' );
+
+  # 'abcdefghijkl'|replace(r/(a)(b)...(k)/, '[$11|$10|$1|$12|$011|$00|$100]')
+  my @caps = map { chr( ord('a') + $_ ) } 0 .. 10;
+  is( $L->js_get_substitution( 'abcdefghijk', 'abcdefghijkl', 0, \@caps, undef, q{[$11|$10|$1|$12|$011|$00|$100]} ),
+    q{[k|j|a|a2|a1|$00|j0]}, 'two digits when the group exists, else one digit and a literal' );
+
+  # 'ab'|replace(r/(a)|(z)/, '[$1|$2]') -> '[a|]b'
+  is( $L->js_get_substitution( 'a', 'ab', 0, [ 'a', undef ], undef, q{[$1|$2]} ), q{[a|]},
+    'a group that did not take part is empty' );
+
+  # 'abc'|replace(r/(?<n>b)/, '[$<n>$<m>]') -> 'a[b]c'; '$<n' without '>' stays
+  is( $L->js_get_substitution( 'b', 'abc', 1, ['b'], Hash::Ordered->new( n => 'b' ), q{[$<n>$<m>][$<n]} ),
+    q{[b][$<n]}, 'named groups; an unknown name is empty, an unclosed one literal' );
+
+  # '😀ab😀b'|replace(r/b/g, '[$`]') -> '😀a[😀a]😀[😀ab😀]': positions in code units
+  is( $L->js_get_substitution( 'b', "\x{1F600}ab\x{1F600}b", 3, [], undef, q{[$`|$']} ),
+    "[\x{1F600}a|\x{1F600}b]", '$` and $\' cut at a code-unit position' );
+};
+
+subtest 'js_word_class is ASCII' => sub {
+  # oracle: 'héllo wörld'|wordcount -> 4, '١٢٣ abc'|wordcount -> 1
+  my $w = $L->js_word_class;
+  is( scalar( () = "h\x{E9}llo w\x{F6}rld" =~ /(?:$w)+/g ), 4, 'é and ö split words' );
+  is( scalar( () = "\x{661}\x{662}\x{663} abc" =~ /(?:$w)+/g ), 1, 'Arabic-Indic digits are not word characters' );
+  ok( '_' =~ /\A$w\z/, 'the underscore is' );
+  ok( "\x{17F}" !~ /\A$w\z/, 'ſ is not' );
+};
+
 done_testing;

@@ -85,5 +85,51 @@
       "ok": true,
       "output": "hello world"
     }
+  },
+  {
+    "name": "native String toLowerCase / toUpperCase map as JS does (final sigma, special casing)",
+    "template": "{{ s.toLowerCase() }}|{{ s.toUpperCase() }}|{{ 'İ'.toLowerCase().length }}",
+    "context": {
+      "s": "ΑΣ. ΑΣ1 Α.Σ ΑΣΑ ß ﬁ İ ǅ"
+    },
+    "expected": {
+      "ok": true,
+      "output": "ας. ας1 α.ς ασα ß ﬁ i̇ ǆ|ΑΣ. ΑΣ1 Α.Σ ΑΣΑ SS FI İ Ǆ|2"
+    }
+  },
+  {
+    "name": "native Array lastIndexOf",
+    "template": "{{ [1,2,1].lastIndexOf(1) }}|{{ [1,2,1].lastIndexOf(1, 1) }}|{{ [1,2,1].lastIndexOf(1, -1) }}|{{ [1,2,1].lastIndexOf(1, -2) }}|{{ [1,2,1].lastIndexOf(1, -9) }}|{{ [1,2,1].lastIndexOf(1, 9) }}|{{ [1,2,1].lastIndexOf(1, 'x') }}|{{ [].lastIndexOf(undefined) }}|{{ [1,'1'].lastIndexOf('1') }}|{{ [1,2,1].lastIndexOf(1, -1/0) }}|{{ [1,2,1].lastIndexOf(1, 1/0) }}|{{ [1,2,1].lastIndexOf(1, 1.9) }}",
+    "expected": {
+      "ok": true,
+      "output": "2|0|2|0|-1|2|0|-1|1|-1|2|0"
+    }
+  },
+  {
+    "name": "regex replacer: the named groups object iterates in group order (engine-built, ADR 0011)",
+    "template": "{% macro f(m,a,b,p,s,g) %}{% for k, v in g %}{{k}}={{v}};{% endfor %}{% endmacro %}{{ 'ab'|replace(r/(?<z>a)(?<b>b)/, f) }}",
+    "expected": {
+      "ok": true,
+      "output": "z=a;b=b;"
+    }
+  },
+  {
+    "name": "regex replacer: named groups that did not take part, a duplicate name, a class; $<name> substitution",
+    "template": "{% macro f(m,a,b,p,s,g) %}{% for k, v in g %}{{k}}={{v}};{% endfor %}{% endmacro %}{% macro h(m,a,b,c,p,s,g) %}{% for k, v in g %}{{k}}={{v}};{% endfor %}{% endmacro %}{{ 'a'|replace(r/(?<y>x)?(?<c>a)/, f) }}|{{ 'b'|replace(r/(?<n>a)|(?<m>c)|(?<n>b)/, h) }}|{{ 'a(b'|replace(r/(?<z>a)[(?<q>](?<b>b)/, f) }}|{{ 'ab'|replace(r/(?<z>a)(?<b>b)/, '[$<b>$<z>$<q>]') }}",
+    "expected": {
+      "ok": true,
+      "output": "y=;c=a;|n=b;m=;|z=a;b=b;|[ba]"
+    }
+  },
+  {
+    "name": "calling a missing method on a dict literal",
+    "template": "{{ {a:1}.foo() }}",
+    "expected": {
+      "ok": false,
+      "error": {
+        "name": "Template render error",
+        "message": "(unknown path)\n  Error: Unable to call `--expression--[\"foo\"]`, which is undefined or falsey"
+      }
+    }
   }
 ]

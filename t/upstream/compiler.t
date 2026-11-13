@@ -634,13 +634,10 @@ subtest 'compiler' => sub {
   };
 
   subtest 'should compile macros with args that can be passed to filters' => sub {
-  TODO: {
-      local $TODO = 'title filter is k17 (Filters not ported yet)';
-      my ( $err, $res ) = render(
-        '{% macro foo(x) %}{{ x|title }}{% endmacro %}' .
-        '{{ foo("foo") }}', undef, { noThrow => 1 } );
-      is( $res, 'Foo' );
-    }
+    equal(
+      '{% macro foo(x) %}{{ x|title }}{% endmacro %}' .
+      '{{ foo("foo") }}',
+      'Foo' );
   };
 
   subtest 'should compile macros with positional args' => sub {
@@ -1775,26 +1772,22 @@ subtest 'compiler' => sub {
 subtest 'the filter tag' => sub {
 
   subtest 'should apply the title filter to the body' => sub {
-    todo_equal( 'title filter is k17 (Filters not ported yet)',
-      '{% filter title %}may the force be with you{% endfilter %}',
+    equal( '{% filter title %}may the force be with you{% endfilter %}',
       'May The Force Be With You' );
   };
 
   subtest 'should apply the replace filter to the body' => sub {
-    todo_equal( 'replace filter is k17 (Filters not ported yet)',
-      '{% filter replace("force", "forth") %}may the force be with you{% endfilter %}',
+    equal( '{% filter replace("force", "forth") %}may the force be with you{% endfilter %}',
       'may the forth be with you' );
   };
 
   subtest 'should work with variables in the body' => sub {
-    todo_equal( 'replace filter is k17 (Filters not ported yet)',
-      '{% set foo = "force" %}{% filter replace("force", "forth") %}may the {{ foo }} be with you{% endfilter %}',
+    equal( '{% set foo = "force" %}{% filter replace("force", "forth") %}may the {{ foo }} be with you{% endfilter %}',
       'may the forth be with you' );
   };
 
   subtest 'should work with blocks in the body' => sub {
-    todo_equal( 'replace filter is k17 (Filters not ported yet)',
-      '{% extends "filter-block.html" %}' .
+    equal( '{% extends "filter-block.html" %}' .
       '{% block block1 %}force{% endblock %}',
       "may the forth be with you\n" );
   };

@@ -486,5 +486,16 @@
       "ok": true,
       "output": "😀ab|😀ab|😀"
     }
+  },
+  {
+    "name": "utf16: case mapping of astral letters",
+    "template": "{{ d.toUpperCase() }}|{{ d.toLowerCase() }}|{{ d.toUpperCase().length }}",
+    "context": {
+      "d": "𐐨𐐀"
+    },
+    "expected": {
+      "ok": true,
+      "output": "𐐀𐐀|𐐨𐐨|4"
+    }
   }
 ]

@@ -12,6 +12,7 @@ use Text::Nunjucks::Lib::Error;
 use Text::Nunjucks::Runtime;
 use Text::Nunjucks::Compiler;
 use Text::Nunjucks::Loader;
+use Text::Nunjucks::Filters;
 
 no warnings 'experimental::builtin';
 
@@ -30,12 +31,10 @@ no warnings 'experimental::builtin';
 #
 # PORTING-ORDER NOTES (flagged for the maintainer / k17 / k19):
 #   * environment.js require()s ./filters, ./tests, ./globals and registers them
-#     all in init. Those are later tickets (filters=k17). To keep init faithful
-#     AND loadable before they exist, they are loaded through a guarded require
-#     (empty set if the module is absent). Text::Nunjucks::Tests is ported now
-#     because the render corpus's `x is none` compiles to get_test('null');
-#     Filters/Globals stay empty until k17 (no corpus case needs one). When they
-#     land this stays unchanged -- it picks them up automatically.
+#     all in init. Filters are a plain load (`use` above, ADR 0015): exports($env)
+#     builds the bag per Environment. Tests and globals still go through the
+#     transitional guarded require of ADR 0015 (empty set if the module is
+#     absent); Text::Nunjucks::Tests exists, Globals is k18.
 #   * the no-loaders default (FileSystemLoader) and window.nunjucksPrecompiled
 #     are k19 / browser and intentionally inert here.
 
@@ -164,7 +163,8 @@ package Text::Nunjucks::Environment {
     return {};
   }
 
-  sub _load_filters { $_[0]->_load_builtin( $_[0]->filters_module, 'exports' ) }
+  # filters.js's exports, built for this Environment (ADR 0015: no guard)
+  sub _load_filters { $_[0]->filters_module->exports( $_[0] ) }
   sub _load_tests   { $_[0]->_load_builtin( $_[0]->tests_module,   'exports' ) }
   sub _load_globals { $_[0]->_load_builtin( $_[0]->globals_module, 'globals' ) }
 

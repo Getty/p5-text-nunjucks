@@ -811,22 +811,161 @@ subtest 'Regex::exec drops the boolean for no-capture-group patterns (k48)' => s
     is( $r->lastIndex, 0, 'sticky: lastIndex reset to 0 on no-match' );
   }
 
-  # --- the _captures_count classifier on edge bodies ------------------
+  # --- the _captures_count / _group_names classifier on edge bodies ---
   {
-    # 0 = no groups, N = N groups
-    is( $R->Regex->_count_capture_groups('x'),               0, 'plain body -> 0' );
-    is( $R->Regex->_count_capture_groups('(.)(.)'),          2, '(.)(.) -> 2' );
-    is( $R->Regex->_count_capture_groups('(?:x)'),           0, '(?:x) -> 0 (non-capturing)' );
-    is( $R->Regex->_count_capture_groups('(?=x)x'),          0, '(?=x)x -> 0 (lookahead)' );
-    is( $R->Regex->_count_capture_groups('(?!x)x'),          0, '(?!x)x -> 0 (neg lookahead)' );
-    is( $R->Regex->_count_capture_groups('(?<=x)x'),         0, '(?<=x)x -> 0 (lookbehind)' );
-    is( $R->Regex->_count_capture_groups('(?<!x)x'),         0, '(?<!x)x -> 0 (neg lookbehind)' );
-    is( $R->Regex->_count_capture_groups('(?<name>\d+)'),    1, '(?<name>\\d+) -> 1 (named capture)' );
-    is( $R->Regex->_count_capture_groups('[a](b)'),          1, '[a](b) -> 1 (char class ignored)' );
-    is( $R->Regex->_count_capture_groups('\(x\)'),           0, '\\(x\\) -> 0 (escaped parens)' );
-    is( $R->Regex->_count_capture_groups('(?#c)x'),          0, '(?#c)x -> 0 (comment group)' );
-    is( $R->Regex->_count_capture_groups('(a)(?:b)(c)'),     2, '(a)(?:b)(c) -> 2' );
+    # one entry per capture group in source order: undef numbered, else the name
+    my $g = sub { $R->Regex->_capture_groups(shift) };
+    is_deeply( $g->('x'),                 [],                     'plain body -> no group' );
+    is_deeply( $g->('(.)(.)'),            [ undef, undef ],       '(.)(.) -> 2' );
+    is_deeply( $g->('(?:x)'),             [],                     '(?:x) -> 0 (non-capturing)' );
+    is_deeply( $g->('(?=x)x'),            [],                     '(?=x)x -> 0 (lookahead)' );
+    is_deeply( $g->('(?!x)x'),            [],                     '(?!x)x -> 0 (neg lookahead)' );
+    is_deeply( $g->('(?<=x)x'),           [],                     '(?<=x)x -> 0 (lookbehind)' );
+    is_deeply( $g->('(?<!x)x'),           [],                     '(?<!x)x -> 0 (neg lookbehind)' );
+    is_deeply( $g->('(?<name>\d+)'),      ['name'],               '(?<name>\\d+) -> 1 (named capture)' );
+    is_deeply( $g->('[a](b)'),            [undef],                '[a](b) -> 1 (char class ignored)' );
+    is_deeply( $g->('\(x\)'),             [],                     '\\(x\\) -> 0 (escaped parens)' );
+    is_deeply( $g->('(?#c)x'),            [],                     '(?#c)x -> 0 (comment group)' );
+    is_deeply( $g->('(a)(?:b)(c)'),       [ undef, undef ],       '(a)(?:b)(c) -> 2' );
+    is_deeply( $g->('(?<z>a)(b)(?<b>c)'), [ 'z', undef, 'b' ],    'named and numbered, in source order' );
+    is_deeply( $g->('[(?<q>](?<b>b)'),    ['b'],                  'no named group inside a class' );
+
+    # _group_names: the named ones, each once, in source order
+    is_deeply( $R->make_regex( '(?<z>a)(b)(?<b>c)', '' )->_group_names, [ 'z', 'b' ], '_group_names in source order' );
+    is_deeply( $R->make_regex( '(?<n>a)|(?<m>c)|(?<n>b)', '' )->_group_names, [ 'n', 'm' ],
+      '_group_names: a duplicate name keeps its first place' );
+    is( $R->make_regex( '(?<n>a)|(?<m>c)|(?<n>b)', '' )->_captures_count, 3, '... and still counts as a group' );
   }
+};
+
+#### native method calls the built-in filters make (ADR 0016 / ADR 0010)
+
+sub _type_error {
+  my ($code) = @_;
+  my $err = eval { $code->(); undef } // $@;
+  return ref($err) ? $err->name . ': ' . $err->message : "no error: $err";
+}
+
+subtest 'js_method_call / js_string_this: the member call and its V8 TypeError' => sub {
+  # oracle: 5|lower, undefined|trim, null|trim, {a:1}|lower, 'Ab'|lower
+  is( $R->js_method_call( 'Ab', 'str', 'toLowerCase' ), 'ab', 'a string method' );
+  is( $R->js_method_call( $R->SafeString->new('Ab'), 'str', 'toLowerCase' ), 'ab', 'a SafeString works off its value' );
+  is( s_( $R->js_method_call( [ 1, 2 ], 'input', 'lastIndexOf', ' ', 3 ) ), '-1', 'an array method' );
+  is( _type_error( sub { $R->js_method_call( 5, 'str', 'toLowerCase' ) } ),
+    'TypeError: str.toLowerCase is not a function', 'a number has no toLowerCase' );
+  is( _type_error( sub { $R->js_method_call( Hash::Ordered->new( a => 1 ), 'str', 'toLowerCase' ) } ),
+    'TypeError: str.toLowerCase is not a function', 'nor a dict literal' );
+  is( _type_error( sub { $R->js_method_call( undef, 'str', 'split', ' ' ) } ),
+    q{TypeError: Cannot read properties of undefined (reading 'split')}, 'undefined: the read throws' );
+  is( _type_error( sub { $R->js_method_call( $R->None, 'str', 'split', ' ' ) } ),
+    q{TypeError: Cannot read properties of null (reading 'split')}, 'null: the read throws' );
+
+  is( $R->js_string_this( 'a', 'str', 'replace' ), 'a', 'js_string_this: a string is itself' );
+  is( $R->js_string_this( $R->SafeString->new('<a>'), 'str', 'replace' ), '<a>', 'a SafeString is its value' );
+  is( _type_error( sub { $R->js_string_this( builtin::false, 'str', 'replace' ) } ),
+    'TypeError: str.replace is not a function', 'false is no string (nl2br(false))' );
+  is( _type_error( sub { $R->js_string_this( undef, 'str', 'replace' ) } ),
+    q{TypeError: Cannot read properties of undefined (reading 'replace')}, 'undefined (trim(undefined))' );
+};
+
+subtest 'member_lookup_method on a dict literal (Hash::Ordered)' => sub {
+  # oracle: {{ {a:1}.foo() }} -> Unable to call `--expression--["foo"]`, which is undefined or falsey
+  my $fn = sub { 'called' };
+  my $h  = Hash::Ordered->new( a => 1, f => $fn );
+  is( $R->member_lookup_method( $h, 'f' ), $fn, 'a callable member comes back' );
+  my $got = eval { $R->member_lookup_method( $h, 'foo' ) };
+  is( $@, '', 'a missing member does not die' );
+  is( $got, undef, '... and is undefined' );
+};
+
+subtest 'Array lastIndexOf' => sub {
+  # oracle: [1,2,1].lastIndexOf(1) (1, 1) (1, -1) (1, -2) (1, -9) (1, 9) (1, 'x')
+  # (1, -1/0) (1, 1/0) (1, 1.9), [].lastIndexOf(undefined), [1,'1'].lastIndexOf('1')
+  # -> 2|0|2|0|-1|2|0|-1|2|0, -1, 1
+  my @got = map { s_( _call( [ 1, 2, 1 ], 'lastIndexOf', 1, @$_ ) ) }
+    [], [1], [-1], [-2], [-9], [9], ['x'], [ -9**9**9 ], [ 9**9**9 ], [1.9];
+  is( join( '|', @got ), '2|0|2|0|-1|2|0|-1|2|0', 'fromIndex: absent, in range, negative, out of range, NaN, infinite, fractional' );
+  is( s_( _call( [], 'lastIndexOf', undef ) ), '-1', 'an empty array' );
+  is( s_( _call( [ 1, '1' ], 'lastIndexOf', '1' ) ), '1', 'strict equality' );
+};
+
+subtest 'member_lookup: String case mapping goes through the Lib seam' => sub {
+  # oracle: {{ s.toLowerCase() }}|{{ s.toUpperCase() }} with s = 'ΑΣ ß' -> ας ß|ΑΣ SS
+  is( _call( "\x{391}\x{3A3} \x{DF}", 'toLowerCase' ), "\x{3B1}\x{3C2} \x{DF}", 'final sigma' );
+  is( _call( "\x{391}\x{3A3} \x{DF}", 'toUpperCase' ), "\x{391}\x{3A3} SS", 'ß -> SS' );
+};
+
+subtest 'Regex symbol_replace: RegExp.prototype[Symbol.replace] (ADR 0013)' => sub {
+  my $re = sub { $R->make_regex(@_) };
+
+  # oracle: 'aaa'|replace(r/a*/g, '-') ... 'ab'|replace(r/x*|a/g, '-') -> --|-a-b-c-|-a-b-c-|-a-b-
+  is( $re->( 'a*', 'g' )->symbol_replace( 'aaa', '-' ), '--', 'g: an empty match after the run' );
+  is( $re->( '', 'g' )->symbol_replace( 'abc', '-' ), '-a-b-c-', 'g: every empty match' );
+  is( $re->( 'x*', 'g' )->symbol_replace( 'abc', '-' ), '-a-b-c-', 'g: x* is empty everywhere' );
+  is( $re->( 'x*|a', 'g' )->symbol_replace( 'ab', '-' ), '-a-b-', 'g: an empty match steps one on (not Perl s///g)' );
+
+  # oracle: 'aab' r/a/y, r/a/gy; 'baa' r/a/gy, r/a/y -> -ab|--b|baa|baa
+  is( $re->( 'a', 'y' )->symbol_replace( 'aab', '-' ), '-ab', 'y: one match at lastIndex' );
+  is( $re->( 'a', 'gy' )->symbol_replace( 'aab', '-' ), '--b', 'gy: adjacent matches only' );
+  is( $re->( 'a', 'gy' )->symbol_replace( 'baa', '-' ), 'baa', 'gy: no match at 0' );
+  is( $re->( 'a', 'y' )->symbol_replace( 'baa', '-' ), 'baa', 'y: no match at 0' );
+
+  # oracle: {% set re = r/a/g %}{{ re.test('xa') }}{{ re.lastIndex }}|{{ 'aXa'|replace(re, '-') }}|{{ re.lastIndex }}
+  # -> true2|-X-|0
+  my $g = $re->( 'a', 'g' );
+  $g->test('xa');
+  is( $g->symbol_replace( 'aXa', '-' ), '-X-', 'g starts at 0 whatever lastIndex was' );
+  is( $g->lastIndex, 0, '... and leaves it at 0' );
+
+  # oracle: r/a/y: test('a') -> lastIndex 1, 'aaa' -> 'a-a' lastIndex 2, 'aaa' -> 'aa-' lastIndex 3
+  my $y = $re->( 'a', 'y' );
+  $y->test('a');
+  is( $y->symbol_replace( 'aaa', '-' ), 'a-a', 'y starts at lastIndex' );
+  is( $y->lastIndex, 2, '... and moves it past the match' );
+  is( $y->symbol_replace( 'aaa', '-' ), 'aa-', 'again from there' );
+  is( $y->lastIndex, 3, '... lastIndex 3' );
+
+  # oracle: 'abc'|replace(r/b/) / (r/b/, null) / (r/b/, 5) / (r/b/, [1,'$&']) -> aundefinedc|anullc|a5c|a1,bc
+  is( $re->( 'b', '' )->symbol_replace( 'abc', undef ),       'aundefinedc', 'undefined replaceValue' );
+  is( $re->( 'b', '' )->symbol_replace( 'abc', $R->None ),    'anullc',      'null replaceValue' );
+  is( $re->( 'b', '' )->symbol_replace( 'abc', 5 ),           'a5c',         'a number' );
+  is( $re->( 'b', '' )->symbol_replace( 'abc', [ 1, '$&' ] ), 'a1,bc',       'an array: ToString, then the pattern' );
+
+  # oracle: macro replacers -- 'abcb' r/b/g -> a[b@1/abcb]c[b@3/abcb];
+  # 'xaby' r/(a)(z)?b/ -> x[ab|a|true|1]y; 'xab' r/(?<n>a)b/ -> groups.n a at 1
+  my @calls;
+  is( $re->( 'b', 'g' )->symbol_replace( 'abcb', sub { push @calls, [@_]; '[' . $_[0] . ']' } ), 'a[b]c[b]',
+    'a coderef replaces each match' );
+  is_deeply( \@calls, [ [ 'b', 1, 'abcb' ], [ 'b', 3, 'abcb' ] ], '... called with (matched, position, string)' );
+  @calls = ();
+  $re->( '(a)(z)?b', '' )->symbol_replace( 'xaby', sub { push @calls, [@_]; '' } );
+  is_deeply( \@calls, [ [ 'ab', 'a', undef, 1, 'xaby' ] ], 'captures, undefined for one that did not take part' );
+  @calls = ();
+  $re->( '(?<n>a)b', '' )->symbol_replace( 'xab', sub { push @calls, [@_]; '' } );
+  is_deeply( [ @{ $calls[0] }[ 0 .. 3 ] ], [ 'ab', 'a', 1, 'xab' ], 'named groups: matched, captures, position, string' );
+  isa_ok( $calls[0][4], 'Hash::Ordered', '... then the groups object, an engine-built ordered dict' );
+  is_deeply( [ $calls[0][4]->as_list ], [ n => 'a' ], '... holding the group' );
+
+  # oracle: macro f(m,a,b,p,s,g) iterating g: 'ab' r/(?<z>a)(?<b>b)/ -> z=a;b=b;
+  # 'a' r/(?<y>x)?(?<c>a)/ -> y=;c=a; 'b' r/(?<n>a)|(?<m>c)|(?<n>b)/ -> n=b;m=;
+  my $groups = sub {
+    my ( $source, $string ) = @_;
+    my $g;
+    $re->( $source, '' )->symbol_replace( $string, sub { $g = $_[-1]; '' } );
+    return [ $g->as_list ];
+  };
+  is_deeply( $groups->( '(?<z>a)(?<b>b)', 'ab' ), [ z => 'a', b => 'b' ], 'groups iterate in group order, not sorted' );
+  is_deeply( $groups->( '(?<y>x)?(?<c>a)', 'a' ), [ y => undef, c => 'a' ], 'a group that did not take part is undefined' );
+  is_deeply( $groups->( '(?<n>a)|(?<m>c)|(?<n>b)', 'b' ), [ n => 'b', m => undef ],
+    'a duplicate name keeps its first place and the value of the group that took part' );
+  is_deeply( $groups->( '(?<z>a)[(?<q>](?<b>b)', 'a(b' ), [ z => 'a', b => 'b' ], 'no group inside a class' );
+
+  # oracle: '😀ab😀b'|replace(r/b/g, '[$`]') -> 😀a[😀a]😀[😀ab😀]
+  @calls = ();
+  is( $re->( 'b', 'g' )->symbol_replace( "\x{1F600}ab\x{1F600}b", '[$`]' ),
+    "\x{1F600}a[\x{1F600}a]\x{1F600}[\x{1F600}ab\x{1F600}]", '$` cuts at the match' );
+  $re->( 'b', 'g' )->symbol_replace( "\x{1F600}ab\x{1F600}b", sub { push @calls, $_[1]; '' } );
+  is_deeply( \@calls, [ 3, 6 ], 'positions count code units (ADR 0012)' );
 };
 
 done_testing;

@@ -444,8 +444,8 @@ sub in_operator {
 #   WhiteSpace     U+0009 U+000B U+000C U+0020 U+00A0 U+FEFF
 #                  + Unicode Zs: U+1680, U+2000-U+200A, U+202F, U+205F, U+3000
 #   LineTerminator U+000A U+000D U+2028 U+2029
-# \d and \w get the same treatment when the parser/filters first need them; only
-# \s is needed so far (ADR 0005: added on demand, one seam per class, like
+# \d gets the same treatment when the parser/filters first need it; \w is
+# js_word_class below (ADR 0005: added on demand, one seam per class, like
 # _strict_eq / _falsy below).
 my $JS_WHITESPACE_CLASS =
   qr/[\x09\x0A\x0B\x0C\x0D\x20\x{A0}\x{1680}\x{2000}-\x{200A}\x{2028}\x{2029}\x{202F}\x{205F}\x{3000}\x{FEFF}]/u;
@@ -453,6 +453,18 @@ my $JS_WHITESPACE_CLASS =
 sub js_whitespace_class {
   my ($self) = @_;
   return $JS_WHITESPACE_CLASS;
+}
+
+# JavaScript's \w is [A-Za-z0-9_] -- ASCII only, without the u flag and with it
+# (only u together with i widens it). Perl's \w is Unicode word characters. The
+# filters' own regexes (wordcount's /\w+/g, striptags' \b) use this set; oracle:
+# 'héllo wörld'|wordcount is 4, '١٢٣ abc'|wordcount is 1, and striptags keeps
+# '<ab_c>' (no \b between b and _) but strips '<aſb>' (ſ is not a word char).
+my $JS_WORD_CLASS = qr/[A-Za-z0-9_]/;
+
+sub js_word_class {
+  my ($self) = @_;
+  return $JS_WORD_CLASS;
 }
 
 #### JS !x (falsiness) for _prepare_attribute_parts and future !x sites
@@ -818,6 +830,122 @@ sub js_split {
 sub js_string_compare {
   my ( $self, $x, $y ) = @_;
   return $self->_js_to_units($x) cmp $self->_js_to_units($y);
+}
+
+#### js_to_lower_case / js_to_upper_case -- String.prototype.toLowerCase / toUpperCase
+
+# Not src/lib.js functions: the one home of JS case mapping, for the lower /
+# upper / capitalize / title filters and the String methods a template calls.
+# JS maps by code point with the full Unicode default case conversion -- the
+# unconditional SpecialCasing mappings included (oracle: 'ß' upper is 'SS', 'İ'
+# lower is 'i' + U+0307, two code units) -- which Perl's lc / uc also do, with
+# two differences handled here:
+#
+#   * Final_Sigma, the one language-independent conditional mapping: a capital
+#     sigma lowercases to final 'ς' where it ends a word, else to 'σ'. Perl's lc
+#     always gives 'σ'. Oracle: 'ΑΣ' -> 'ας', 'ΑΣΑ' -> 'ασα', 'ΑΣ.' -> 'ας.',
+#     'Α.Σ' -> 'α.ς', 'ΑΣ1' -> 'ας1', '1Σ' -> '1σ', 'ΑΣ\x{AD}' -> 'ας\x{AD}'.
+#     The context test is ICU's, which V8 calls: skip case-ignorable characters
+#     outward from the sigma, and the first other character must be cased
+#     before it and must not be cased after it. A character that is both cased
+#     and case-ignorable counts as ignorable (oracle: 'ʰΣ' -> 'ʰσ', U+02B0 is
+#     both, where the Unicode wording alone would give 'ʰς').
+#   * Perl maps Latin-1 characters by Unicode rules only under the
+#     unicode_strings feature (else uc("\xDF") stays "\xDF" on a string without
+#     the UTF-8 flag); both seams enable it.
+#
+# A lone surrogate maps to itself, as in JS (Perl would warn). A caller string
+# that spells a pair as two surrogate characters is re-paired first, so both
+# spellings map alike.
+my $JS_FINAL_SIGMA = qr/
+  ( (?!\p{Case_Ignorable})\p{Cased} \p{Case_Ignorable}* )    # the cased letter before
+  \x{3A3}
+  (?! \p{Case_Ignorable}* (?!\p{Case_Ignorable})\p{Cased} )  # no cased letter after
+/x;
+
+sub js_to_lower_case {
+  my ( $self, $s ) = @_;
+  use feature 'unicode_strings';
+  no warnings 'surrogate';
+  $s = $self->_js_from_units($s);
+  $s =~ s/$JS_FINAL_SIGMA/$1\x{3C2}/g if index( $s, "\x{3A3}" ) >= 0;
+  return lc $s;
+}
+
+sub js_to_upper_case {
+  my ( $self, $s ) = @_;
+  use feature 'unicode_strings';
+  no warnings 'surrogate';
+  return uc $self->_js_from_units($s);
+}
+
+#### js_get_substitution -- GetSubstitution, the replacement patterns of replace
+
+# Not a src/lib.js function: ECMAScript GetSubstitution(matched, str, position,
+# captures, namedCaptures, replacement), which String.prototype.replace and
+# RegExp.prototype[Symbol.replace] apply to a string replacement:
+#
+#   $$ -> '$'   $& -> matched   $` -> str before the match   $' -> str after it
+#   $n / $nn    -> capture n (1..99), '' for a group that did not take part; a
+#                  two-digit index past the last group is read as one digit and a
+#                  literal digit ($10 with one group -> capture 1 then '0'), and an
+#                  index of 0 or past the groups stays literal ($0, $00, $1 with none)
+#   $<name>     -> the named group ('' if absent); literal '$<' when the regex has
+#                  no named groups ($named undef) or no '>' follows; $named is
+#                  the match's groups object, an engine-built Hash::Ordered
+#
+# Oracle: 'abc'.replace(/(b)/, '[$1$2$0$01$10]') -> 'a[b$2$0bb0]c'; with eleven
+# groups '[$11|$10|$1|$12|$011|$00|$100]' -> '[k|j|a|a2|a1|$00|j0]'. $position
+# counts code units (ADR 0012); $captures is an arrayref (undef for a group that
+# did not participate); every piece is joined through js_string_append.
+sub js_get_substitution {
+  my ( $self, $matched, $str, $position, $captures, $named, $replacement ) = @_;
+  return $replacement if index( $replacement, '$' ) < 0;
+
+  my $m      = scalar @$captures;
+  my $result = '';
+  pos($replacement) = 0;
+  while ( pos($replacement) < CORE::length($replacement) ) {
+    my $ref_replacement;
+    if ( $replacement =~ /\G([^\$]+)/gc ) {
+      $ref_replacement = $1;
+    } elsif ( $replacement =~ /\G\$\$/gc ) {
+      $ref_replacement = '$';
+    } elsif ( $replacement =~ /\G\$`/gc ) {
+      $ref_replacement = $self->js_substring( $str, 0, $position );
+    } elsif ( $replacement =~ /\G\$&/gc ) {
+      $ref_replacement = $matched;
+    } elsif ( $replacement =~ /\G\$'/gc ) {
+      my $tail_pos = $position + $self->js_string_length($matched);
+      $ref_replacement = $self->js_substring( $str, $tail_pos );    # substring clamps to the length
+    } elsif ( $replacement =~ /\G\$([0-9])([0-9]?)/gc ) {
+      my ( $d1, $d2 ) = ( $1, $2 );
+      my $index = $d1 . $d2;
+      if ( $d2 ne '' && $index > $m ) {
+        # a two-digit index past the groups: one digit, the second is literal
+        ( $index, $d2 ) = ( $d1, '' );
+        pos($replacement) = pos($replacement) - 1;
+      }
+      $ref_replacement = ( $index >= 1 && $index <= $m )
+        ? ( defined( $captures->[ $index - 1 ] ) ? $captures->[ $index - 1 ] : '' )
+        : '$' . $d1 . $d2;
+    } elsif ( $replacement =~ /\G\$</gc ) {
+      my $gt_pos = index( $replacement, '>', pos($replacement) );
+      if ( $gt_pos < 0 || !defined($named) ) {
+        $ref_replacement = '$<';
+      } else {
+        my $group_name = substr( $replacement, pos($replacement), $gt_pos - pos($replacement) );
+        pos($replacement) = $gt_pos + 1;
+        my $capture = $named->get($group_name);
+        $ref_replacement = defined($capture) ? $capture : '';
+      }
+    } else {
+      $replacement =~ /\G\$/gc;
+      $ref_replacement = '$';
+    }
+    $self->js_string_append( $result, $ref_replacement );
+  }
+  return $result;
 }
 
 1;

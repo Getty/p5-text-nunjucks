@@ -77,15 +77,15 @@ sub equal {
 }
 
 # TODO table: upstream it() title => reason. Remove an entry when it passes.
-my $F = 'k17 (Filters.pm not ported; ADR 0015)';
+my $F = 'k17: filter not ported yet (ADR 0015)';
 my %TODO = map { $_ => $F } (
-  'abs', 'batch', 'capitalize', 'center', 'default', 'dump', 'escape',
+  'abs', 'batch', 'default', 'dump', 'escape',
   'escape skip safe', 'should not double escape strings',
   'should not double escape with autoescape on', 'should work with non-string values',
   'should not escape safe strings with autoescape on',
   'should keep strings escaped after they have been escaped', 'dictsort',
   'first', 'float', 'forceescape', 'int', 'int (default value)',
-  'float (default value)', 'groupby', 'indent', 'join', 'last',
+  'float (default value)', 'groupby', 'join', 'last',
   'should return length of a list literal',
   'should output 0 for a missing context variable',
   'should output string length for string variables',
@@ -98,10 +98,10 @@ my %TODO = map { $_ => $F } (
   'should output the length of an array',
   'should output the full length of a sparse array',
   'should output the length of an array created with "new Array"',
-  'list', 'lower', 'nl2br', 'random', 'reject', 'rejectattr', 'select',
-  'selectattr', 'replace', 'reverse', 'round', 'slice', 'sum', 'sort',
-  'string', 'striptags', 'title', 'trim', 'truncate', 'upper', 'urlencode',
-  'urlencode - object without prototype', 'urlize', 'wordcount',
+  'list', 'random', 'reject', 'rejectattr', 'select',
+  'selectattr', 'reverse', 'round', 'slice', 'sum', 'sort',
+  'string', 'urlencode',
+  'urlencode - object without prototype', 'urlize',
 );
 
 # it(title, sub) -- one subtest, TODO'd from %TODO.
@@ -596,12 +596,15 @@ describe 'filter' => sub {
     equal( '{{ false | replace("rue", "afafasf", 4) }}',      'false' );
 
     # Will result in an infinite loop if unbounded otherwise test will pass
-    equal( '{{ "<img src=" | replace("<img", "<img alt=val") | safe }}',
-      '<img alt=val src=' );
-    equal(
-      '{{ "<img src=\\"http://www.example.com\\" />" | replace("<img", "replacement text") | safe }}',
-      'replacement text src="http://www.example.com" />'
-    );
+    TODO: {
+      local $TODO = 'k17 job 4: safe filter not ported yet';
+      equal( '{{ "<img src=" | replace("<img", "<img alt=val") | safe }}',
+        '<img alt=val src=' );
+      equal(
+        '{{ "<img src=\\"http://www.example.com\\" />" | replace("<img", "replacement text") | safe }}',
+        'replacement text src="http://www.example.com" />'
+      );
+    }
 
     # Regex
     equal( '{{ "aabbbb" | replace(r/ab{2}/, "z") }}', 'azbb' );
