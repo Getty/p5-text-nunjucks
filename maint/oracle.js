@@ -16,16 +16,52 @@
 //     "opts": { "autoescape": true, ... }, // Environment / lexer opts
 //     "jinjaCompat": false }
 //
+// File-system render cases (k19) load through upstream's real loaders over
+// fixture directories in the repository instead of the in-memory loader:
+//     "fileSystemLoader": { "searchPaths": "t/data/loader/views",  // or [...]
+//                           "opts": { "noCache": true } },       // any JSON
+//                                  // -> new FileSystemLoader(searchPaths, opts)
+//     "defaultLoader": true,      // -> new Environment(undefined, opts), whose
+//                                 //    init adds FileSystemLoader('views')
+//     "cwd": "t/data/loader",     // the case runs in this directory, relative
+//                                 //    to the repository root (default: root)
+// Relative search paths resolve against that cwd, as in node. A file-system
+// case reports the absolute repository root as "<root>" in output, error
+// message and stdout, so the committed expectation does not depend on where
+// the checkout lives; t/corpus.t applies the same substitution.
+//
 // Output: an array, one result per case, in order.
 //   { "name", "ok": true,  "output": <string | tokens | ast> }
 //   { "name", "ok": false, "error": { "name", "message" } }
+// plus "stdout": "<text>" when the case wrote to console.log (FileSystemLoader's
+// boolean-opts warning).
 'use strict';
 
 const fs = require('fs');
 const path = require('path');
+const util = require('util');
+const Module = require('module');
+
+// The port is upstream installed without its optional peer dependency chokidar
+// (ADR 0018), so the oracle hides it: FileSystemLoader's `watch` takes
+// upstream's own no-chokidar branch ('watch requires chokidar to be
+// installed') instead of starting a watcher, which would also keep node
+// running after the last case.
+const resolveFilename = Module._resolveFilename;
+Module._resolveFilename = function(request, ...rest) {
+  if (request === 'chokidar') {
+    const e = new Error(`Cannot find module '${request}'`);
+    e.code = 'MODULE_NOT_FOUND';
+    throw e;
+  }
+  return resolveFilename.call(this, request, ...rest);
+};
 
 const nunjucks = require(path.join(__dirname, '..', 'upstream', 'nunjucks', 'nunjucks', 'index.js'));
 const {lexer, parser, nodes} = nunjucks;
+
+// The repository root as process.cwd() reports it (physical, no symlinks).
+const root = fs.realpathSync(path.join(__dirname, '..'));
 
 class MemoryLoader extends nunjucks.Loader {
   constructor(templates) {
@@ -68,10 +104,30 @@ function ast(n) {
   return n === undefined ? null : n;
 }
 
+function isFileSystemCase(c) {
+  return c.fileSystemLoader !== undefined || c.defaultLoader !== undefined;
+}
+
+function environment(c) {
+  if (c.defaultLoader) {
+    return new nunjucks.Environment(undefined, c.opts);
+  }
+  if (c.fileSystemLoader !== undefined) {
+    const l = c.fileSystemLoader;
+    return new nunjucks.Environment(new nunjucks.FileSystemLoader(l.searchPaths, l.opts), c.opts);
+  }
+  return new nunjucks.Environment(new MemoryLoader(c.templates), c.opts);
+}
+
+// "<root>" for the absolute repository root (file-system cases only).
+function rootless(s) {
+  return typeof s === 'string' ? s.split(root).join('<root>') : s;
+}
+
 // Always the callback form: it is the only one that covers async tags and
 // filters, and upstream defers the callback (asap) even for sync templates.
 function render(c) {
-  const env = new nunjucks.Environment(new MemoryLoader(c.templates), c.opts);
+  const env = environment(c);
   const ctx = c.context || {};
   return new Promise((resolve, reject) => {
     const cb = (err, res) => (err ? reject(err) : resolve(res));
@@ -85,19 +141,37 @@ function render(c) {
 
 async function run(c) {
   const uninstall = c.jinjaCompat ? nunjucks.installJinjaCompat() : null;
+  const fsCase = isFileSystemCase(c);
+  const strip = fsCase ? rootless : (s) => s;
+  const consoleLog = console.log;
+  let stdout = '';
+  console.log = (...args) => {
+    stdout += util.format(...args) + '\n';
+  };
+  const result = {name: c.name};
+  const cwd = process.cwd();
   try {
+    if (fsCase) {
+      process.chdir(path.join(root, c.cwd || '.'));
+    }
     const mode = c.mode || 'render';
     const output = mode === 'lex' ? lex(c)
       : mode === 'parse' ? ast(parser.parse(c.template, [], c.opts))
         : await render(c);
-    return {name: c.name, ok: true, output: output};
+    Object.assign(result, {ok: true, output: strip(output)});
   } catch (e) {
-    return {name: c.name, ok: false, error: {name: e.name, message: e.message}};
+    Object.assign(result, {ok: false, error: {name: e.name, message: strip(e.message)}});
   } finally {
+    console.log = consoleLog;
+    process.chdir(cwd);
     if (uninstall) {
       uninstall();
     }
   }
+  if (stdout !== '') {
+    result.stdout = strip(stdout);
+  }
+  return result;
 }
 
 async function main() {

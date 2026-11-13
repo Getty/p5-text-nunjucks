@@ -57,8 +57,9 @@ that way. Upstream comments worth keeping come along.
 | `jinja-compat.js` | `::JinjaCompat` |
 
 Out of scope, by decision: `express-app.js`, `web-loaders.js`,
-`precompile-global.js`, the browser bundles, `NodeResolveLoader`. Do not port
-them and do not leave stubs.
+`precompile-global.js`, the browser bundles, `NodeResolveLoader`, and
+`FileSystemLoader`'s chokidar `watch`, which throws upstream's no-chokidar
+error (ADR 0018). Do not port them and do not leave stubs.
 
 Names a *template author* sees stay exactly upstream's — filter, test and global
 names, tag names, `loop.index0`, option keys (`throwOnUndefined`, `trimBlocks`),

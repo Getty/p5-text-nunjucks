@@ -5,12 +5,14 @@ our $VERSION = '0.001';
 
 use Moo;
 with 'Text::Nunjucks::EmitterObj';
+use Text::Nunjucks::Lib;
 use namespace::autoclean;
-use Path::Tiny qw( path );
 
 # src/loader.js: `module.exports = class Loader extends EmitterObj { resolve;
 # isRelative }`. EmitterObj -> the on/emit role (ADR 0002). The concrete
-# FileSystemLoader / PrecompiledLoader are k19; only this base belongs here.
+# loaders extend it in their own modules: src/node-loaders.js's FileSystemLoader
+# is Text::Nunjucks::Loader::FileSystem, src/precompiled-loader.js's
+# PrecompiledLoader is Text::Nunjucks::Loader::Precompiled (ADR 0018).
 #
 # `cache` is not declared by loader.js -- Environment attaches `loader.cache = {}`
 # in _initLoaders. Declaring it here (with the same empty-hash default) gives the
@@ -21,13 +23,17 @@ has cache => ( is => 'rw', default => sub { {} } );
 # Environment reads `loader.async`, so the base answers it (falsey).
 sub async { return }
 
-# resolve(from, to) -- JS: path.resolve(path.dirname(from), to). Used only when a
-# loader reports isRelative(); no corpus case exercises it (concrete loaders and
-# their oracle-checked path behaviour are k19). Ported with Path::Tiny; k19
-# validates the exact path.resolve semantics ('..' collapsing, cwd-anchoring).
+sub _lib { 'Text::Nunjucks::Lib' }
+
+# resolve(from, to) -- path.resolve(path.dirname(from), to), through node's own
+# path functions in Lib (ADR 0018): lexical, so '..' collapses on the string
+# and the file system is never asked (from 'views/sub/page.njk', '../d.njk' is
+# '<cwd>/views/d.njk'), anchored at the working directory only when `from` is
+# relative. Environment.resolveTemplate calls it for a relative name, and the
+# result is both the loader's cache key and the name getSource receives.
 sub resolve {
   my ( $self, $from, $to ) = @_;
-  return path( path($from)->parent, $to )->absolute->stringify;
+  return $self->_lib->node_path_resolve( $self->_lib->node_path_dirname($from), $to );
 }
 
 # isRelative(filename) -- a name starting './' or '../'.

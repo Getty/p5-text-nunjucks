@@ -7,6 +7,8 @@ use strict;
 use warnings;
 use builtin qw( is_bool created_as_number true false );
 use Carp qw( croak );
+use Cwd ();
+use Errno ();
 use POSIX ();
 use Scalar::Util qw( blessed refaddr );
 use Text::Nunjucks::Lib::TemplateError;
@@ -2526,6 +2528,449 @@ sub _js_json_circular_key {
 sub _js_json_constructor_name {
   my ( $self, $object ) = @_;
   return ref($object) eq 'ARRAY' ? "'Array'" : "'Object'";
+}
+
+#### node built-ins -- path, fs, console (ADR 0018)
+
+# Not src/lib.js functions: the one home of the node built-ins the loaders call
+# -- src/loader.js's path.resolve / path.dirname, src/node-loaders.js's
+# path.normalize, path.resolve, fs.existsSync, fs.readFileSync(p, 'utf-8') and
+# console.log -- next to the JS built-ins above. As the oracle's node
+# (v24.19.0) has them, posix flavour: the separator is '/' and only '/', a
+# backslash is an ordinary character (ADR 0018). Source: node's lib/path.js as
+# that node reports it (posix.resolve / normalize / dirname and
+# normalizeString), pinned by t/data/node-builtins.json
+# (maint/node-builtins-fixtures). The path functions are lexical -- '..' and
+# '.' collapse on the string, the file system is never asked, symlinks stay as
+# they are -- and only resolve reads the process's working directory. Each
+# checks its arguments first, as node's do (_node_validate_string): anything
+# but a string throws node's ERR_INVALID_ARG_TYPE, a TypeError -- a search path
+# is whatever the caller passed FileSystemLoader.
+
+# process.cwd() -- the working directory as the system reports it (getcwd(3),
+# as libuv's uv_cwd), physical, no trailing '/'.
+sub node_process_cwd { return Cwd::getcwd() }
+
+# path.resolve(...args) -- the shortcut compares strictly (===), so only a
+# string is the cwd there; the loop validates each argument it reaches, from
+# the last one back to the first absolute one (node: resolve(5, '/a') is '/a').
+sub node_path_resolve {
+  my ( $self, @args ) = @_;
+  if ( @args == 0 || ( @args == 1 && ( $self->_strict_eq( $args[0], '' ) || $self->_strict_eq( $args[0], '.' ) ) ) ) {
+    my $cwd = $self->node_process_cwd;
+    if ( substr( $cwd, 0, 1 ) eq '/' ) {
+      return $cwd;
+    }
+  }
+  my $resolved_path     = '';
+  my $resolved_absolute = 0;
+
+  for ( my $i = $#args; $i >= 0 && !$resolved_absolute; $i-- ) {
+    my $path = $args[$i];
+    $self->_node_validate_string( $path, 'paths[' . $i . ']' );
+
+    # Skip empty entries
+    if ( length($path) == 0 ) {
+      next;
+    }
+
+    $resolved_path     = $path . '/' . $resolved_path;
+    $resolved_absolute = substr( $path, 0, 1 ) eq '/' ? 1 : 0;
+  }
+
+  if ( !$resolved_absolute ) {
+    my $cwd = $self->node_process_cwd;
+    $resolved_path     = $cwd . '/' . $resolved_path;
+    $resolved_absolute = substr( $cwd, 0, 1 ) eq '/' ? 1 : 0;
+  }
+
+  # At this point the path should be resolved to a full absolute path, but
+  # handle relative paths to be safe (might happen when process.cwd() fails)
+
+  # Normalize the path
+  $resolved_path = $self->_node_normalize_string( $resolved_path, !$resolved_absolute );
+
+  if ($resolved_absolute) {
+    return '/' . $resolved_path;
+  }
+  return length($resolved_path) > 0 ? $resolved_path : '.';
+}
+
+# path.normalize(path)
+sub node_path_normalize {
+  my ( $self, $path ) = @_;
+  $self->_node_validate_string( $path, 'path' );
+
+  return '.' if length($path) == 0;
+
+  my $is_absolute        = substr( $path, 0, 1 ) eq '/';
+  my $trailing_separator = substr( $path, -1 ) eq '/';
+
+  # Normalize the path
+  $path = $self->_node_normalize_string( $path, !$is_absolute );
+
+  if ( length($path) == 0 ) {
+    return '/' if $is_absolute;
+    return $trailing_separator ? './' : '.';
+  }
+  $path .= '/' if $trailing_separator;
+
+  return $is_absolute ? '/' . $path : $path;
+}
+
+# path.dirname(path)
+sub node_path_dirname {
+  my ( $self, $path ) = @_;
+  $self->_node_validate_string( $path, 'path' );
+  return '.' if length($path) == 0;
+  my $has_root      = substr( $path, 0, 1 ) eq '/';
+  my $end           = -1;
+  my $matched_slash = 1;
+  for ( my $i = length($path) - 1; $i >= 1; --$i ) {
+    if ( substr( $path, $i, 1 ) eq '/' ) {
+      if ( !$matched_slash ) {
+        $end = $i;
+        last;
+      }
+    }
+    else {
+      # We saw the first non-path separator
+      $matched_slash = 0;
+    }
+  }
+
+  return $has_root ? '/' : '.' if $end == -1;
+  return '//' if $has_root && $end == 1;
+  return substr( $path, 0, $end );
+}
+
+# normalizeString(path, allowAboveRoot, separator, isPathSeparator) -- the
+# posix call, separator '/' and isPosixPathSeparator, fixed. Resolves . and ..
+# elements in a path with directory names. Counts characters where node counts
+# UTF-16 code units: the counts only ever measure the segments between two
+# separators, and a surrogate is never a '/' or a '.', so both cut the same.
+sub _node_normalize_string {
+  my ( $self, $path, $allow_above_root ) = @_;
+  my $res                 = '';
+  my $last_segment_length = 0;
+  my $last_slash          = -1;
+  my $dots                = 0;
+  my $code                = '';
+  for ( my $i = 0; $i <= length($path); ++$i ) {
+    if ( $i < length($path) ) {
+      $code = substr( $path, $i, 1 );
+    }
+    elsif ( $code eq '/' ) {
+      last;
+    }
+    else {
+      $code = '/';
+    }
+
+    if ( $code eq '/' ) {
+      if ( $last_slash == $i - 1 || $dots == 1 ) {
+        # NOOP
+      }
+      elsif ( $dots == 2 ) {
+        if ( length($res) < 2
+          || $last_segment_length != 2
+          || substr( $res, -1, 1 ) ne '.'
+          || substr( $res, -2, 1 ) ne '.' )
+        {
+          if ( length($res) > 2 ) {
+            my $last_slash_index = length($res) - $last_segment_length - 1;
+            if ( $last_slash_index == -1 ) {
+              $res                 = '';
+              $last_segment_length = 0;
+            }
+            else {
+              $res                 = substr( $res, 0, $last_slash_index );
+              $last_segment_length = length($res) - 1 - rindex( $res, '/' );
+            }
+            $last_slash = $i;
+            $dots       = 0;
+            next;
+          }
+          elsif ( length($res) != 0 ) {
+            $res                 = '';
+            $last_segment_length = 0;
+            $last_slash          = $i;
+            $dots                = 0;
+            next;
+          }
+        }
+        if ($allow_above_root) {
+          $res .= length($res) > 0 ? '/..' : '..';
+          $last_segment_length = 2;
+        }
+      }
+      else {
+        if ( length($res) > 0 ) {
+          $res .= '/' . substr( $path, $last_slash + 1, $i - $last_slash - 1 );
+        }
+        else {
+          $res = substr( $path, $last_slash + 1, $i - $last_slash - 1 );
+        }
+        $last_segment_length = $i - $last_slash - 1;
+      }
+      $last_slash = $i;
+      $dots       = 0;
+    }
+    elsif ( $code eq '.' && $dots != -1 ) {
+      ++$dots;
+    }
+    else {
+      $dots = -1;
+    }
+  }
+  return $res;
+}
+
+# validateString(value, name) -- node's lib/internal/validators.js: anything
+# but a string throws ERR_INVALID_ARG_TYPE(name, 'string', value), a TypeError
+# (Lib::Error, ADR 0010) whose message lib/internal/errors.js builds. Only the
+# shape the path functions' names take is ported: 'path' and 'paths[i]' end
+# in no ' argument' and hold no '.', so node writes `The "<name>" argument`.
+# Measured in node: `The "path" argument must be of type string. Received
+# null`, `The "paths[1]" argument ... Received type number (5)`.
+sub _node_validate_string {
+  my ( $self, $value, $name ) = @_;
+  return if $self->is_string($value);
+  die Text::Nunjucks::Lib::Error->new(
+    'The "' . $name . '" argument must be of type string. Received ' . $self->_node_determine_specific_type($value),
+    name => 'TypeError',
+  );
+}
+
+# determineSpecificType(value) -- how node's ERR_INVALID_ARG_TYPE shows the
+# value it got, over the kinds the port models (none is a string here, and
+# bigint and symbol have no Perl image). Measured in node: null, undefined,
+# 'type number (5)', '(-0)', '(NaN)', '(Infinity)', '(1e+21)', 'type boolean
+# (true)', 'function <name>' -- a Perl coderef has no name (k88), so
+# 'function ', as an anonymous JS function. An object shows its constructor's
+# name: an array 'an instance of Array', a regex 'RegExp', a SafeString
+# 'String' (SafeString.prototype has no constructor of its own, String's is
+# inherited), a dict, caller hash or keyword arguments 'Object'. A plain
+# object with an own 'constructor' member is shown through that member, as
+# node reads value.constructor: a function by its name (a coderef's is '',
+# where JS names a function written as a member after it: 'an instance of
+# constructor'), an object by its own 'name' ({'constructor': {'name':
+# 'Foo'}} -> 'an instance of Foo'); anything
+# else falsy or nameless is util.inspect(value, { depth: -1 }), '[Object]';
+# a truthy primitive cannot be searched with `in` and V8 throws ("Cannot use
+# 'in' operator to search for 'name' in 1"). Any other blessed object is a
+# plain object to the port (ADR 0016): 'an instance of Object', the port's
+# choice -- it has no JS counterpart to measure.
+sub _node_determine_specific_type {
+  my ( $self, $value ) = @_;
+  my $rt = $self->_runtime;
+  if ( $rt->_is_none($value) ) {
+    return 'null';
+  }
+  elsif ( !defined($value) ) {
+    return 'undefined';
+  }
+
+  my $type = $self->is_function($value) ? 'function' : $rt->_js_type($value);
+
+  if ( $type eq 'number' ) {
+    if ( $value == 0 ) {
+      return $rt->op_div( 1, $value ) == $NUM_NEG_INF ? 'type number (-0)' : 'type number (0)';
+    }
+    elsif ( $value != $value ) {
+      return 'type number (NaN)';
+    }
+    elsif ( $value == $NUM_POS_INF ) {
+      return 'type number (Infinity)';
+    }
+    elsif ( $value == $NUM_NEG_INF ) {
+      return 'type number (-Infinity)';
+    }
+    return 'type number (' . $self->number_to_string($value) . ')';
+  }
+  if ( $type eq 'boolean' ) {
+    return $value ? 'type boolean (true)' : 'type boolean (false)';
+  }
+  if ( $type eq 'function' ) {
+    return 'function ' . $rt->_js_function_name($value);
+  }
+
+  # 'object': value.constructor && 'name' in value.constructor
+  return 'an instance of Array'  if $self->is_array($value);
+  return 'an instance of RegExp' if $rt->_is_regex($value);
+  return 'an instance of String' if $rt->_is_safe_string($value);
+  return 'an instance of Object' unless $self->has_own_prop( $value, 'constructor' );
+  my $ctor = $self->_own_value( $value, 'constructor' );
+  if ( $rt->_truthy($ctor) ) {
+    die Text::Nunjucks::Lib::Error->new(
+      "Cannot use 'in' operator to search for 'name' in " . $rt->_js_to_string($ctor),
+      name => 'TypeError',
+    ) unless ref($ctor);
+    return 'an instance of ' . $rt->_js_function_name($ctor) if $self->is_function($ctor);
+    return 'an instance of ' . $rt->_js_to_string( $rt->member_lookup( $ctor, 'name' ) )
+      if $self->has_own_prop( $ctor, 'name' );
+  }
+  return '[Object]';
+}
+
+# fs.existsSync(path) -- true if the path exists, a directory as well; false,
+# never an exception, for anything node cannot look up (a name with a NUL is
+# an invalid argument to node, and so false). node hands the system the
+# path's UTF-8 bytes, whatever its characters; so does this.
+sub node_fs_exists_sync {
+  my ( $self, $path ) = @_;
+  return 0 if index( $path, "\0" ) >= 0;
+  my $bytes = $self->_node_fs_path_bytes($path);
+  return -e $bytes ? 1 : 0;
+}
+
+# fs.readFileSync(path, 'utf-8') -- the file's bytes, decoded as node decodes
+# UTF-8 (_node_utf8_decode: a BOM stays a U+FEFF, malformed bytes become
+# U+FFFD), per ADR 0012's I/O contract. A failure throws node's error, an
+# Error whose message is libuv's '<CODE>: <description>, <syscall>' -- the
+# path, as given, follows an open: "EISDIR: illegal operation on a directory,
+# read" for a directory, "EACCES: permission denied, open '<path>'" for a file
+# that cannot be read, "ENOENT: no such file or directory, open '<path>'" for
+# a dangling symlink (measured in node). A plain open and read, as node's
+# open(2) and read(2), not Path::Tiny: its slurp takes flock(LOCK_SH) first,
+# which blocks while another process holds LOCK_EX (node reads at once) and
+# fails where flock is not supported. Each failure is that syscall's errno.
+sub node_fs_read_file_sync_utf8 {
+  my ( $self, $path ) = @_;
+  open( my $fh, '<:raw', $self->_node_fs_path_bytes($path) )
+    or die $self->_node_uv_exception( $! + 0, 'open', $path );
+  my $bytes = '';
+  while (1) {
+    my $n = read( $fh, $bytes, 65536, length($bytes) );
+    die $self->_node_uv_exception( $! + 0, 'read' ) unless defined $n;
+    last if $n == 0;
+  }
+  close($fh);
+  return $self->_node_utf8_decode($bytes);
+}
+
+sub _node_fs_path_bytes {
+  my ( $self, $path ) = @_;
+  my $bytes = $path;
+  utf8::encode($bytes);
+  return $bytes;
+}
+
+# libuv's error descriptions (uv_strerror) for the errors a read of an existing
+# path can meet, as node's util.getSystemErrorMap() lists them. Any other
+# errno keeps libuv's message shape with the system's own text, lowercased.
+my %NODE_UV_ERROR_MESSAGE = (
+  EACCES => 'permission denied',
+  EIO    => 'i/o error',
+  EISDIR => 'illegal operation on a directory',
+  EMFILE => 'too many open files',
+  ENFILE => 'file table overflow',
+  ENOENT => 'no such file or directory',
+  EPERM  => 'operation not permitted',
+);
+
+# libuv's name for an errno the system knows by two (util.getSystemErrorMap()
+# lists EAGAIN and ENOTSUP, never EWOULDBLOCK or EOPNOTSUPP); any other errno
+# with two names (EDEADLK / EDEADLOCK, not in libuv's map) takes the first in
+# sort order, so the code never depends on hash order.
+my %NODE_UV_ERRNO_ALIAS = (
+  EOPNOTSUPP  => 'ENOTSUP',
+  EWOULDBLOCK => 'EAGAIN',
+);
+
+# node's uvException: `${code}: ${message}, ${syscall}` plus ` '${path}'`.
+sub _node_uv_exception {
+  my ( $self, $errno, $syscall, $path ) = @_;
+  local $! = $errno;
+  my $strerror = "$!";
+  my ($code) = sort { $a cmp $b } CORE::map { $NODE_UV_ERRNO_ALIAS{$_} // $_ } grep { $!{$_} } CORE::keys %!;
+  $code //= 'UNKNOWN';
+  my $message = $code . ': ' . ( $NODE_UV_ERROR_MESSAGE{$code} // lc $strerror ) . ', ' . $syscall;
+  $message .= " '" . $path . "'" if defined $path;
+  return Text::Nunjucks::Lib::Error->new($message);
+}
+
+# node's UTF-8 decoder, the WHATWG Encoding Standard's: a BOM is kept (a
+# U+FEFF character, oracle: a file starting EF BB BF renders U+FEFF first),
+# and every maximal subpart of an ill-formed sequence becomes one U+FFFD --
+# a lead byte with the continuation bytes that can still follow it, else a
+# single byte (oracle: C0 80 -> two, ED A0 80 -> three, F4 90 80 80 -> four,
+# E2 82 'b' -> one and 'b'). Perl's own strict decoder replaces differently
+# (one U+FFFD for each of those) and refuses noncharacters such as U+10FFFF,
+# which node decodes. Well-formed input -- what Perl's lax utf8::decode
+# accepts, minus surrogates and code points past U+10FFFF -- decodes in one
+# step; anything else runs the standard's decoder, byte by byte.
+sub _node_utf8_decode {
+  my ( $self, $bytes ) = @_;
+  my $str = $bytes;
+  return $str if utf8::decode($str) && $str !~ /[\x{D800}-\x{DFFF}]|[^\x{0}-\x{10FFFF}]/;
+
+  # Encoding Standard, 8.1.1 UTF-8 decoder (error mode replacement).
+  my $out             = '';
+  my $code_point      = 0;
+  my $bytes_seen      = 0;
+  my $bytes_needed    = 0;
+  my $lower_boundary  = 0x80;
+  my $upper_boundary  = 0xBF;
+  my $i               = 0;
+  my $n               = length($bytes);
+  while (1) {
+    if ( $i >= $n ) {
+      # end-of-queue
+      $out .= "\x{FFFD}" if $bytes_needed != 0;
+      last;
+    }
+    my $byte = ord( substr( $bytes, $i, 1 ) );
+    if ( $bytes_needed == 0 ) {
+      $i++;
+      if ( $byte <= 0x7F ) {
+        $out .= chr($byte);
+      }
+      elsif ( $byte >= 0xC2 && $byte <= 0xDF ) {
+        $bytes_needed = 1;
+        $code_point   = $byte & 0x1F;
+      }
+      elsif ( $byte >= 0xE0 && $byte <= 0xEF ) {
+        $lower_boundary = 0xA0 if $byte == 0xE0;
+        $upper_boundary = 0x9F if $byte == 0xED;
+        $bytes_needed   = 2;
+        $code_point     = $byte & 0xF;
+      }
+      elsif ( $byte >= 0xF0 && $byte <= 0xF4 ) {
+        $lower_boundary = 0x90 if $byte == 0xF0;
+        $upper_boundary = 0x8F if $byte == 0xF4;
+        $bytes_needed   = 3;
+        $code_point     = $byte & 0x7;
+      }
+      else {
+        $out .= "\x{FFFD}";
+      }
+      next;
+    }
+    if ( $byte < $lower_boundary || $byte > $upper_boundary ) {
+      # the byte is not consumed: it is read again as the start of what follows
+      ( $code_point, $bytes_needed, $bytes_seen ) = ( 0, 0, 0 );
+      ( $lower_boundary, $upper_boundary ) = ( 0x80, 0xBF );
+      $out .= "\x{FFFD}";
+      next;
+    }
+    $i++;
+    ( $lower_boundary, $upper_boundary ) = ( 0x80, 0xBF );
+    $code_point = ( $code_point << 6 ) | ( $byte & 0x3F );
+    $bytes_seen++;
+    next if $bytes_seen != $bytes_needed;
+    $out .= chr($code_point);
+    ( $code_point, $bytes_needed, $bytes_seen ) = ( 0, 0, 0 );
+  }
+  return $out;
+}
+
+# console.log(message) -- one line on standard output. The port's only caller
+# passes one string, whose util.format is the string itself.
+sub node_console_log {
+  my ( $self, $message ) = @_;
+  print {*STDOUT} $message . "\n";
+  return;
 }
 
 1;

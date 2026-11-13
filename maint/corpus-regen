@@ -6,7 +6,8 @@
 //
 // For each file: strip the old "expected" from every case, run the remaining
 // input through `node maint/oracle.js`, and write the oracle result back as
-// "expected" (the {ok, output} / {ok, error} object, minus the echoed name).
+// "expected" (the {ok, output} / {ok, error} object, minus the echoed name,
+// plus "stdout" when the case printed to console.log).
 //
 // This is a node script on purpose: it must preserve the oracle's number text
 // byte for byte (e.g. 0.30000000000000004), and JSON.parse/stringify does that
@@ -92,6 +93,9 @@ function regen(file) {
     const expected = r.ok
       ? {ok: true, output: r.output}
       : {ok: false, error: r.error};
+    if (r.stdout !== undefined) {
+      expected.stdout = r.stdout;
+    }
     // Rebuild each case with its input keys in their existing order and
     // "expected" always last, so the serialization is stable across runs.
     const rebuilt = {};

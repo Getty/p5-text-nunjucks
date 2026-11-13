@@ -562,9 +562,10 @@ subtest 'compiler' => sub {
       '{{ items | join(",") }}' );
 
     # JS builds `new Loader('tests/templates')` for the Environment, but this
-    # template neither includes nor extends anything, so no loader is needed
-    # (k19/FileSystemLoader is not ported yet) -- the same env-without-loader
-    # adaptation as the two isSlim-gated tests around this one.
+    # template neither includes nor extends anything, so no loader is needed:
+    # the Environment keeps its default FileSystemLoader('views'), which it
+    # never asks -- the same env-without-loader adaptation as the two
+    # isSlim-gated tests around this one.
     my $env  = Text::Nunjucks::Environment->new;
     my $tmpl = Text::Nunjucks::Template->new( $tmpl_str, $env, 'parse-error.njk' );
 

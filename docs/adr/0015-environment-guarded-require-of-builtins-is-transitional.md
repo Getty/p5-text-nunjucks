@@ -1,8 +1,8 @@
 # ADR 0015 — Environment loads built-in filters/tests/globals via a transitional guarded require
 
-- Status: accepted (transitional — closes when k18 and k19 land)
+- Status: closed (superseded by ADR 0018, k19, 2026-11-13)
 - Date: 2026-09-22
-- Tags: environment, transitional, decision, k16, k17, k18
+- Tags: environment, transitional, decision, k16, k17, k18, k19
 
 ## Context
 
@@ -70,3 +70,14 @@ What this ADR still covers is k19: `init`'s server-side default,
 `[new FileSystemLoader('views')]` when no loaders are given, waits for the
 concrete loaders, so a fresh `Environment` still starts with no loader. The ADR
 closes when k19 lands.
+
+## Update (2026-11-13, k19)
+
+Closed. The concrete loaders are ported (ADR 0018): `Environment.init` gives
+an Environment without loaders upstream's server-side default,
+`[new FileSystemLoader('views')]` (`Text::Nunjucks::Loader::FileSystem`), so a
+fresh `Environment` starts with the loader upstream's does. Nothing
+transitional is left in `init`: the built-in bags load unconditionally since
+k18 and the default loader is in since k19. What remains of loader scope --
+the out-of-scope `WebLoader` and `NodeResolveLoader`, chokidar `watch` -- is
+decided in ADR 0018, not here.

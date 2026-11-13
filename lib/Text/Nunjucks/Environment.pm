@@ -12,6 +12,7 @@ use Text::Nunjucks::Lib::Error;
 use Text::Nunjucks::Runtime;
 use Text::Nunjucks::Compiler;
 use Text::Nunjucks::Loader;
+use Text::Nunjucks::Loader::FileSystem;
 use Text::Nunjucks::Filters;
 use Text::Nunjucks::Tests;
 use Text::Nunjucks::Globals;
@@ -31,14 +32,16 @@ no warnings 'experimental::builtin';
 # 'Text::Nunjucks::Runtime' (class-method-only module), so $runtime->None,
 # $runtime->Frame->new, $runtime->member_lookup(...) all resolve.
 #
-# PORTING-ORDER NOTES (flagged for the maintainer / k19):
+# PORTING-ORDER NOTES -- how init's dependencies arrived:
 #   * environment.js require()s ./filters, ./tests, ./globals and registers them
 #     all in init. All three are plain loads (`use` above): the transitional
 #     guarded require of ADR 0015 is gone since k18. Filters exports($env)
 #     builds the filter bag per Environment, Tests exports the test bag, and
 #     Globals globals() returns a fresh globals bag per Environment.
-#   * the no-loaders default (FileSystemLoader) and window.nunjucksPrecompiled
-#     are k19 / browser and intentionally inert here.
+#   * init's no-loaders default is upstream's server-side one, a
+#     FileSystemLoader('views') (Text::Nunjucks::Loader::FileSystem, k19).
+#     The WebLoader fallback and window.nunjucksPrecompiled are browser-only
+#     and out of scope (ADR 0018).
 
 #### callbackAsap -- upstream defers the callback via asap; Perl core has no event
 #### loop, so the callback fires synchronously (ADR 0003). Kept as a named seam so
@@ -66,7 +69,7 @@ package Text::Nunjucks::Environment {
   with 'Text::Nunjucks::EmitterObj';
   use namespace::autoclean;
   use builtin qw( true false );
-  use Scalar::Util qw( blessed );
+  use Scalar::Util qw( blessed weaken );
   use Text::Nunjucks::Lib;
   use Text::Nunjucks::Runtime;
 
@@ -91,6 +94,7 @@ package Text::Nunjucks::Environment {
   sub filters_module   { 'Text::Nunjucks::Filters' }
   sub tests_module     { 'Text::Nunjucks::Tests' }
   sub globals_module   { 'Text::Nunjucks::Globals' }
+  sub file_system_loader_class { 'Text::Nunjucks::Loader::FileSystem' }
 
   # constructor(...args) { this.init(...args) } -- positional (loaders, opts).
   sub BUILDARGS {
@@ -125,9 +129,10 @@ package Text::Nunjucks::Environment {
     $self->loaders( [] );
 
     if ( !$loaders ) {
-      # Server-side default is [new FileSystemLoader('views')]; the concrete
-      # FileSystem/Web loaders are k19, so -- like upstream's `if (FileSystemLoader)`
-      # guard, which is false when the class is unavailable -- no loader is added.
+      # The filesystem loader is only available server-side -- which the port
+      # always is: upstream's `if (FileSystemLoader) ... else if (WebLoader)`
+      # always takes its first branch under node (ADR 0018).
+      $self->loaders( [ $self->file_system_loader_class->new('views') ] );
     }
     else {
       $self->loaders( $self->_lib->is_array($loaders) ? $loaders : [$loaders] );
@@ -165,19 +170,30 @@ package Text::Nunjucks::Environment {
       # Caching and cache busting.
       $loader->cache( {} );
       if ( $loader->can('on') ) {
+        # The listeners hold the Environment and the loader weakly, as the
+        # filters hold their Environment: Environment -> loaders -> loader ->
+        # listeners -> Environment / loader would be reference cycles Perl
+        # never frees (JS collects them). A listener runs while its loader
+        # emits, so the loader is there. An Environment dropped by its caller
+        # is freed even while a shared loader lives on, and its own listeners
+        # with it, where node's loader keeps it and them alive -- a difference
+        # the Perl API can see, the worker's interim choice until k96 settles
+        # the cycles (ADR 0018).
+        weaken( my $env = $self );
+        weaken( my $l   = $loader );
         $loader->on(
           'update',
           sub {
             my ( $name, $fullname ) = @_;
-            $loader->cache->{$name} = undef;
-            $self->emit( 'update', $name, $fullname, $loader );
+            $l->cache->{$name} = undef;
+            $env->emit( 'update', $name, $fullname, $l ) if $env;
           }
         );
         $loader->on(
           'load',
           sub {
             my ( $name, $source ) = @_;
-            $self->emit( 'load', $name, $source, $loader );
+            $env->emit( 'load', $name, $source, $l ) if $env;
           }
         );
       }

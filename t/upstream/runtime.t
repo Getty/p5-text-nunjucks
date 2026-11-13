@@ -9,11 +9,11 @@ use lib "$FindBin::Bin/../lib";
 # Port of upstream/nunjucks/tests/runtime.js ("describe('runtime', ...)").
 # One subtest per upstream it(), same title, same order (k32).
 #
-# util.js's own render() builds a real Environment + FileSystemLoader, which
-# is not ported yet (k16). Test::Nunjucks::Util::render() (t/lib) drives the
-# part of the pipeline that IS ported -- Compiler (k15) + Runtime (k14) --
-# through the same minimal stub Environment/Context t/10-compiler.t already
-# uses; see that module's header comment for why.
+# util.js's own render() builds a real Environment + FileSystemLoader.
+# Test::Nunjucks::Util::render() (t/lib) builds a real Environment as well, but
+# loads through a MemoryLoader seeded from t/upstream/templates rather than
+# the FileSystemLoader (ported since k19); see that module's header comment for
+# why.
 #
 # Every it() in this suite renders a template and inspects the callback's
 # (err, res): expect(err).to.match(regex) or expect(res).to.equal(value).

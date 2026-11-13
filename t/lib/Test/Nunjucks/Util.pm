@@ -5,12 +5,15 @@ package Test::Nunjucks::Util;
 # real Environment + FileSystemLoader(templatesPath) and calls t.render(ctx, cb);
 # now that Environment/Context/Template (k16) are ported, this does the same
 # with a real Text::Nunjucks::Environment / ::Template -- the only difference is
-# the loader: FileSystemLoader is k19 and not ported, so a MemoryLoader below is
-# seeded from committed copies of the actual upstream template files
-# (t/upstream/templates/, byte-identical to upstream/nunjucks/tests/templates/)
-# so include/extends/import tests can run without the gitignored upstream/ tree
-# present -- the same MemoryLoader convention t/corpus.t already uses for the
-# same reason.
+# the loader: a MemoryLoader below, seeded from committed copies of the actual
+# upstream template files (t/upstream/templates/, byte-identical to
+# upstream/nunjucks/tests/templates/), so include/extends/import tests run
+# without the gitignored upstream/ tree present -- the same MemoryLoader
+# convention t/corpus.t uses for its in-memory cases. It was written while
+# FileSystemLoader was not ported; since k19 it is
+# (Text::Nunjucks::Loader::FileSystem), and the MemoryLoader stays: it reports a
+# template's name as its path where FileSystemLoader reports the absolute file
+# path, so moving the suites over is a change of its own (k98).
 #
 # util.js also exports `jinjaEqual` and `normEOL`. Neither is ported here yet --
 # no suite ported so far needs them. Port each alongside the first t/upstream/*.t
@@ -36,10 +39,10 @@ use Text::Nunjucks::Loader;
 
 our @EXPORT_OK = qw( render equal );
 
-#### MemoryLoader -- Perl analogue of maint/oracle.js's MemoryLoader / the
-#### FileSystemLoader(templatesPath) util.js's render() builds; k19 (concrete
-#### loaders) is not ported yet, so this stands in, seeded from committed
-#### copies of the real upstream template files (see header comment).
+#### MemoryLoader -- Perl analogue of maint/oracle.js's MemoryLoader; it stands
+#### in for the FileSystemLoader(templatesPath) util.js's render() builds,
+#### seeded from committed copies of the real upstream template files (see
+#### header comment).
 
 package Test::Nunjucks::Util::_MemoryLoader {
   use Moo;

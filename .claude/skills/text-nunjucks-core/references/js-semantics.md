@@ -494,6 +494,95 @@ test.call is not a function`, and `1|__proto__` → `TypeError:
 env.getFilter(...).call is not a function`. For every one of these the port
 throws `test not found: X` or `filter not found: X` (k87).
 
+## Loaders: node's path, fs and console — decided, ADR 0018, mechanism in Lib
+
+`Loader::resolve` and `FileSystemLoader` call node built-ins, and their Perl
+look-alikes differ. Lib's `node_*` functions are ports of node v24.19.0's own
+posix `lib/path.js` and of its `fs` behaviour. Fixtures from
+`maint/node-builtins-fixtures` (`t/data/node-builtins.json`) pin them, and
+`t/corpus/render-loaders.json` holds the cases measured with the oracle.
+
+**Paths are lexical, POSIX.**
+
+- `..` collapses on the string, and the file system is never asked.
+  - `page.njk` in `views/sub` includes `../d.njk`, which is
+    `<cwd>/views/d.njk`. That is both the cache key and the path an error
+    names. `Path::Tiny->absolute` would leave `views/sub/../d.njk`.
+  - A `..` inside a non-relative name collapses as well:
+    `{% include "sub/../d.njk" %}` → `[d]`.
+- `/` is the only separator.
+- `resolve()`, `resolve('')` and `resolve('.')` are the cwd.
+- Search paths go through `normalize`: `'./views//sub/../'` → `views/`.
+- Each function refuses an argument that is no string, as node's
+  `validateString` does, with a `TypeError`:
+  - `[null]` as search paths → `The "path" argument must be of type string.
+    Received null`.
+  - `5` → `... Received type number (5)`, `true` → `type boolean (true)`,
+    `[[...]]` → `an instance of Array`, `{...}` → `an instance of Object`.
+  - `resolve` names the argument by its index (`The "paths[1]" argument`) and
+    checks only those its loop reaches: `resolve(5, '/a')` is `/a`.
+  - A falsy search-paths value (`null`, `''`, missing) is the default `['.']`,
+    no error.
+  - An object search path with an own `constructor` 1 makes V8 throw
+    `Cannot use 'in' operator to search for 'name' in 1` instead.
+
+  Seam: Lib `_node_validate_string` / `_node_determine_specific_type`; every
+  kind is pinned in `t/data/node-builtins.json` (`pathArgs`).
+- A relative name in `renderString` has no parent, so it is looked up as it
+  stands: `{% include './d.njk' %}` → `d`.
+
+**The search-path guard is a string-prefix test** (upstream bug, ported).
+`p.indexOf(basePath) === 0 && existsSync(p)` lets a sibling directory through
+when its name extends the search path's:
+
+- With search path `views`, `../views2/secret.njk` renders `secret from
+  views2`.
+- `../outside.njk` → `Error: template not found: ../outside.njk`.
+- A relative include that is refused is named by its resolved path:
+  `(<root>/…/views/escape-parent.njk)\n  Error: template not found:
+  <root>/…/outside.njk`.
+
+**`readFileSync(p, 'utf-8')` uses the WHATWG decode.**
+
+- A BOM stays: `EF BB BF` then `bom:{{ 1 + 1 }}` renders U+FEFF `bom:2`. It
+  stays in an extended parent too.
+- Every maximal subpart of an ill-formed sequence becomes one U+FFFD:
+  - `E2 82` before `b` → 1 U+FFFD, then `b`;
+  - `C0 80` → 2;
+  - `ED A0 80` → 3;
+  - `F4 90 80 80` → 4;
+  - `F0 9F 98` → 1;
+  - `FF` → 1.
+- `F4 8F BF BF` decodes to U+10FFFF.
+- Encode's strict decoder gives one U+FFFD per sequence and refuses U+10FFFF.
+  Seam: Lib `_node_utf8_decode`.
+
+**node's errors are libuv's.**
+
+- A directory as a name gives `EISDIR: illegal operation on a directory, read`,
+  with no path. The empty name is the search path itself, so it gives the same.
+- A file that cannot be read gives `EACCES: permission denied, open '<path>'`.
+- A dangling symlink is not there for `existsSync`. `readFileSync` gives
+  `ENOENT: no such file or directory, open '<path>'`.
+- The read takes no lock, so a file another process holds `LOCK_EX` on is read
+  at once.
+- Both are of kind `Error` (ADR 0010).
+
+**`console.log` writes one line to STDOUT.** A boolean as the second argument,
+`true` or `false`, prints `[nunjucks] Warning: you passed a boolean as the
+second argument to FileSystemLoader, but it now takes an options object. See
+http://mozilla.github.io/nunjucks/api.html#filesystemloader`. Seam: Lib
+`node_console_log`.
+
+**Out of scope:** `NodeResolveLoader`, `WebLoader`, and chokidar `watch`. A
+truthy `watch` → `Error: watch requires chokidar to be installed`, which is
+upstream's own branch when chokidar is not installed. The oracle hides
+chokidar to measure it.
+
+**Open:** a loader that is no `Loader` subclass. Upstream's `_initLoaders`
+writes `loader.cache = {}` onto any object, and the port has no write seam for
+it. The decision is pending on k94.
+
 ## Errors — port as is
 
 Message format is asserted by upstream tests, keep it byte-identical:

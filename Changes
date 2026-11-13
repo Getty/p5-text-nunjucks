@@ -9,6 +9,11 @@ Revision history for Text-Nunjucks
       Environment with its Context and Template classes.
     - Lib (foundation utilities, escaping, TemplateError), the base Loader
       with path resolution, and the built-in "is" tests (Tests) are in.
+    - The loaders are in: Text::Nunjucks::Loader::FileSystem (FileSystemLoader)
+      and Text::Nunjucks::Loader::Precompiled (PrecompiledLoader). Paths
+      resolve like node's posix path.resolve (lexical ".."), files are read
+      as node decodes utf-8 (BOM kept, malformed bytes become U+FFFD), and
+      an Environment without loaders defaults to FileSystemLoader('views').
     - Every deliberate difference from Nunjucks is recorded as an ADR in
       docs/adr/.
     - JS string operations count UTF-16 code units as upstream does (ADR

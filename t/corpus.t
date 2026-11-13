@@ -5,6 +5,7 @@ use Test::More;
 use Scalar::Util qw( blessed );
 use JSON::MaybeXS ();
 use Path::Tiny qw( path );
+use Cwd ();
 use builtin ();
 
 no warnings 'experimental::builtin';
@@ -182,25 +183,95 @@ sub normalize {
   return $v;
 }
 
+# File-system cases (k19, maint/oracle.js): "fileSystemLoader" {searchPaths,
+# opts} renders through Text::Nunjucks::Loader::FileSystem, "defaultLoader"
+# through the Environment's own default (FileSystemLoader('views')), over the
+# fixture directories in t/data/loader. The case runs in "cwd", relative to the
+# distribution root (default: the root), as the oracle runs it relative to the
+# repository root, and reports that root as "<root>" in output, error message
+# and stdout, as the oracle does. A key absent from the JSON is JS undefined,
+# so it stays undef here (normalize would make it null).
+my $ROOT = path(__FILE__)->parent->parent->realpath;
+
+sub is_file_system_case { exists $_[0]->{fileSystemLoader} || exists $_[0]->{defaultLoader} }
+
+sub rootless {
+  my ($s) = @_;
+  return $s unless defined $s && !ref $s;
+  my $root = "$ROOT";
+  return $s =~ s/\Q$root\E/<root>/gr;
+}
+
+sub case_environment {
+  my ( $case, $opts ) = @_;
+  return Text::Nunjucks::Environment->new( undef, $opts ) if $case->{defaultLoader};
+  if ( exists $case->{fileSystemLoader} ) {
+    require Text::Nunjucks::Loader::FileSystem;
+    my $l = $case->{fileSystemLoader};
+    my $loader = Text::Nunjucks::Loader::FileSystem->new(
+      exists $l->{searchPaths} ? normalize( $l->{searchPaths} ) : undef,
+      exists $l->{opts}        ? normalize( $l->{opts} )        : undef,
+    );
+    return Text::Nunjucks::Environment->new( $loader, $opts );
+  }
+  my $loader = Corpus::MemoryLoader->new( templates => $case->{templates} // {} );
+  return Text::Nunjucks::Environment->new( [$loader], $opts );
+}
+
 sub run_render {
   my ($case) = @_;
   die "jinjaCompat render cases are not modelled yet\n" if $case->{jinjaCompat};
 
   require Text::Nunjucks::Runtime;
-  my $loader = Corpus::MemoryLoader->new( templates => $case->{templates} // {} );
-  my $opts   = defined $case->{opts}    ? normalize( $case->{opts} )    : undef;
-  my $ctx    = defined $case->{context} ? normalize( $case->{context} ) : {};
-  my $env    = Text::Nunjucks::Environment->new( [$loader], $opts );
+  my $fs_case = is_file_system_case($case);
+  my $cwd     = Cwd::getcwd();
+  chdir $ROOT->child( $case->{cwd} // '.' ) or die "chdir: $!\n" if $fs_case;
+
+  # console.log goes to STDOUT (FileSystemLoader's boolean-opts warning); the
+  # oracle reports what a case printed as "stdout", so the run captures it.
+  my $stdout = '';
+  my $result = do {
+    local *STDOUT;
+    open( STDOUT, '>', \$stdout ) or die "capture STDOUT: $!\n";
+    my $r = eval { render_case($case) };
+    my $died = $@;
+    close STDOUT;
+    chdir $cwd or die "chdir back: $!\n" if $fs_case;
+    die $died unless $r;
+    $r;
+  };
+  utf8::decode($stdout);
+  $result->{stdout} = $stdout if $stdout ne '';
+  if ($fs_case) {
+    $result->{output} = rootless( $result->{output} ) if exists $result->{output};
+    $result->{error}{message} = rootless( $result->{error}{message} ) if exists $result->{error};
+    $result->{stdout} = rootless( $result->{stdout} ) if exists $result->{stdout};
+  }
+  return $result;
+}
+
+sub render_case {
+  my ($case) = @_;
+  my $opts = defined $case->{opts}    ? normalize( $case->{opts} )    : undef;
+  my $ctx  = defined $case->{context} ? normalize( $case->{context} ) : {};
 
   my ( $err, $res, $called );
   my $cb = sub { ( $err, $res ) = @_; $called = 1; };
 
-  if ( defined $case->{render} ) {
-    $env->render( $case->{render}, $ctx, $cb );
-  }
-  else {
-    $env->render_string( $case->{template}, $ctx, $cb );
-  }
+  # A synchronous throw -- from the Environment's or a loader's constructor,
+  # or from get_template before the callback -- is the oracle's rejected
+  # promise: an error result as well.
+  my $ok = eval {
+    my $env = case_environment( $case, $opts );
+    if ( defined $case->{render} ) {
+      $env->render( $case->{render}, $ctx, $cb );
+    }
+    else {
+      $env->render_string( $case->{template}, $ctx, $cb );
+    }
+    1;
+  };
+  return error_result($@) unless $ok;
 
   die "render callback was never invoked (template deferred without resolving)\n"
     unless $called;
