@@ -1,0 +1,16 @@
+---
+class: standard
+created: 2026-11-13T06:19:04Z
+id: 60
+priority: medium
+status: backlog
+tags:
+- bug
+- runtime
+title: for loop over a SafeString iterates nothing (JS iterates its code points)
+updated: 2026-11-13T08:39:59Z
+---
+
+Found by the k17 job 1 worker (2026-11-13). A for loop over a SafeString: oracle iterates code points via its iterator ([a][😀][b]|4 for a three-element probe), the port's from_iterator yields nothing ([][][][]). Verify the exact probe with the oracle when fixing; corpus case once |safe lands (k17).
+
+From the k17 job 3 audit (2026-11-13): add the k,v form -- {% for k, v in m() %}[{{ k }}={{ v }}]{% endfor %} gives [a=][b=][c=] in the oracle; the port gave '' at HEAD and gives [val=][length=3] since k17 job 3 (Lib::keys on a SafeString is right for lib.keys, but moved the symptom). Root cause: from_iterator (Runtime ~1383) does not turn a SafeString into its characters; the empty v for val is k72.
