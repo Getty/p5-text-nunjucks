@@ -1,0 +1,37 @@
+---
+class: standard
+completed: 2026-11-16T16:41:17Z
+created: 2026-11-13T20:22:52Z
+id: 111
+priority: medium
+started: 2026-11-16T16:41:17Z
+status: done
+tags:
+- decision
+- dist
+- release-0.001
+- release-limitation
+title: 'Decision: what the CPAN tarball ships -- .claude/, CLAUDE.md, misc/agent-context
+  (working-tree dependent), maint/, .github/, .worktreeinclude'
+updated: 2026-11-16T16:43:12Z
+---
+
+Pre-release audit 2026-11-13 (release-manager, scout; verified by the main agent).
+
+A tarball from a clean clone (209 entries) ships, beside lib/ t/ docs/adr/:
+- .claude/ (6 agents, rules, skills/text-nunjucks-core, settings.json, skilletor.json, .gitignore), CLAUDE.md, .worktreeinclude, .github/workflows/ci.yml -- Git::GatherDir with the bundle default gather_include_dotfiles=1
+- maint/ (oracle.js, corpus-regen, fetch-upstream, fixtures scripts -- node tooling). Never run at install time: Makefile.PL has no EXE_FILES, no shipped test touches node, upstream/ or maint/
+- xt/oracle-live.t (skips cleanly without upstream/)
+- misc/agent-context/: [@Author::GETTY] adds GatherAgentContext unconditionally (GETTY.pm:570-573, "for build provenance (not installed)"). It reads from disk, not git: a build from the maintainer's working tree also captures the skilletor-installed .claude/rules/.local.*.md, .claude/skilletor.lock.json and the installed skills (getty-*, kanban-*, perl-release-dist-ini, feedback-loop-debugging) -- the 14:48 Text-Nunjucks-0.001.tar.gz in the main tree contains them. GatherAgentContext.pm:77 keeps leading-dot .local.<name>.md on purpose; it excludes login tokens, settings.json and <name>.local.<ext>.
+
+So the tarball differs between a clean clone and the working tree. No secrets found (scout scanned tracked files, the tarball and the public history); all skills come from Getty/skills and Getty/karr.
+
+Options:
+(a) keep as is -- house provenance policy; release from the tree you want captured.
+(b) prune in dist.ini: gather_exclude_match for ^\.claude/, ^CLAUDE\.md$, ^\.worktreeinclude$, ^\.github/ (maint/ optional), plus [PruneFiles] match = ^misc/agent-context/ (scout verified: 0 misc entries; '-remove = GatherAgentContext' does not work, the bundle has no option).
+(c) change the bundle -- a card on the bundle repo's board, not an edit here.
+Optional either way: [MetaNoIndex] directory = maint / misc / docs (PAUSE indexes nothing outside lib/ today, so not required).
+
+2026-11-16 16:41 Decided by the maintainer: (a). The house distribution standard already covers this (skill getty-perl-distribution, "dist.ini header"): the tarball ships the agent and CI files with the code (.claude/, CLAUDE.md, .github/, misc/agent-context/), keep them in. No pruning in dist.ini. Consequence: misc/agent-context/ is read from disk, so release from a tree whose installed skills and rules you want captured, i.e. after a fresh skilletor sync.
+
+2026-11-16 16:43 Also in getty-perl-release-author-getty ("We keep them in"), which text-nunjucks-release-manager carries in briefing.skills, so the audit could have settled this from its own briefing.
