@@ -1,0 +1,28 @@
+---
+class: standard
+created: 2026-11-16T16:24:44Z
+depends_on:
+- 24
+- 114
+id: 115
+priority: high
+status: backlog
+tags:
+- release
+- release-0.001
+- cpan
+- escalated-from:skilletor#241
+title: 'Release 0.001 to CPAN: the Perl dist Skilletor requires it'
+updated: 2026-11-16T16:24:44Z
+---
+
+Escalated from skilletor#k241. The cpanfile of Skilletor, the Perl port in Getty/skilletor (perl/), requires Text::Nunjucks 0.001. Skilletor's next CPAN release (0.002) cannot install until Text::Nunjucks 0.001 is on CPAN.
+
+What Skilletor uses today (perl/lib/Skilletor/Render.pm, Render/Loader.pm):
+- Text::Nunjucks::Environment->new($loader, ...)
+- a subclass of Text::Nunjucks::Loader
+- Text::Nunjucks::Runtime->None
+
+It does not use the top-level index.js API (configure, render, compile). This is input for k114, not a decision: from Skilletor's side, 0.001 could ship without k20, as long as the POD says Environment is the entry point.
+
+Release blockers already on this board: k24 (pre-release audit of 2026-11-13), k114, k111 (what the tarball ships) and k110 (Path::Tiny runtime vs test). The release happens only on the maintainer's explicit go.
