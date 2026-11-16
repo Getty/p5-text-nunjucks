@@ -29,7 +29,7 @@ sub s_ { my $v = shift; $R->_js_to_string($v) }
 subtest 'number_to_string (ECMAScript Number::toString)' => sub {
   # {{ 1/3 }} -> 0.3333333333333333, {{ 0.1 + 0.2 }} -> 0.30000000000000004
   is( $L->number_to_string( 1 / 3 ),     '0.3333333333333333',  '{{ 1/3 }}' );
-  is( $L->number_to_string( 0.1 + 0.2 ), '0.30000000000000004', '{{ 0.1 + 0.2 }}' );
+  is( $L->number_to_string( 0.30000000000000004 ), '0.30000000000000004', '{{ 0.1 + 0.2 }} (the double, as a literal)' );
   is( $L->number_to_string( 10 / 4 ),    '2.5',                 '{{ 10/4 }}' );
   is( $L->number_to_string(100),         '100',                 '{{ 100 }}' );
   is( $L->number_to_string(3),           '3',                   'integer 3' );

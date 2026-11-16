@@ -214,7 +214,7 @@ subtest 'group_by' => sub {
   # result[key] is the key's ToPropertyKey (oracle, groupby by a macro or an
   # attribute giving these keys)
   my $R    = 'Text::Nunjucks::Runtime';
-  my @keys = ( true, $R->None, 0.3, 0.1 + 0.2, -0.0, 0, 1e21, '1e+21', [ 1, [ 2, $R->None ] ],
+  my @keys = ( true, $R->None, 0.3, 0.30000000000000004, -0.0, 0, 1e21, '1e+21', [ 1, [ 2, $R->None ] ],
     $R->SafeString->new('s'), $R->make_regex( 'a', 'g' ), Hash::Ordered->new );
   my $by_key = $L->group_by( [ 0 .. $#keys ], sub { $keys[ $_[0] ] } );
   is_deeply( $L->keys($by_key),
@@ -239,7 +239,7 @@ subtest 'group_by' => sub {
 
   # `${val}` in the throwOnUndefined message is val's ToString (oracle)
   for my $c ( [ 5, '5' ], [ [ 'a', 'b' ], 'a,b' ], [ { a => 1 }, '[object Object]' ], [ true, 'true' ],
-    [ 0.1 + 0.2, '0.30000000000000004' ], [ $R->SafeString->new('a'), 'a' ] )
+    [ 0.30000000000000004, '0.30000000000000004' ], [ $R->SafeString->new('a'), 'a' ] )
   {
     is( thrown( sub { $L->group_by( [ {} ], $c->[0], true ) } ),
       'TypeError: groupby: attribute "' . $c->[1] . '" resolved to undefined', "message names $c->[1]" );
@@ -1049,7 +1049,7 @@ subtest 'js_json_stringify: values' => sub {
   is( $L->js_json_stringify( { "a\x{D83D}\x{DE00}b" => 1 } ), qq({"a\x{1F600}b":1}), '... a key' );
   is( $L->js_json_stringify( { "a\x{1F600}b" => 1 } ),        qq({"a\x{1F600}b":1}), '... the same as the one character' );
   is( $L->js_json_stringify("\x{DE00}\x{D83D}"), '"\\ude00\\ud83d"', 'a low then a high surrogate is no pair: both escaped' );
-  is( $L->js_json_stringify( [ 1.5, -0.0, 0.1 + 0.2, 1e21, -1e-7, $inf, -$inf, $nan ] ),
+  is( $L->js_json_stringify( [ 1.5, -0.0, 0.30000000000000004, 1e21, -1e-7, $inf, -$inf, $nan ] ),
     '[1.5,0,0.30000000000000004,1e+21,-1e-7,null,null,null]', 'numbers: Number::toString, non-finite -> null' );
   is( $L->js_json_stringify( sub { } ), undef, 'a function -> undefined' );
   is( $L->js_json_stringify( [ sub { }, 1 ] ), '[null,1]', '... null in an array' );
@@ -1169,7 +1169,10 @@ subtest 'js_json_stringify: the V8 circular-structure message' => sub {
 # what decides the result.
 my $SORT_FIXTURES = do {
   my $file = Path::Tiny::path(__FILE__)->parent->child( 'data', 'js-array-sort.json' );
-  JSON::MaybeXS->new( utf8 => 1 )->decode( $file->slurp_raw );
+  # allow_bignum: on a perl with a 4-byte IV an integer like 9007199254740992 would
+  # otherwise decode as a string; sort_fixture_value turns a bignum or bigfloat into a double
+  # (ADR 0019).
+  JSON::MaybeXS->new( utf8 => 1, allow_bignum => 1 )->decode( $file->slurp_raw );
 };
 
 sub sort_digest {
@@ -1207,6 +1210,7 @@ sub sort_fixture_value {
   return $JS_NONE unless defined $v;
   return ( $v ? true : false ) if JSON::MaybeXS::is_bool($v);
   return [ map { sort_fixture_value($_) } @$v ] if ref $v eq 'ARRAY';
+  return unpack( 'd', pack( 'd', $v->numify ) ) if Scalar::Util::blessed($v) && ( $v->isa('Math::BigInt') || $v->isa('Math::BigFloat') );
   if ( ref $v eq 'HASH' ) {
     my $t = $v->{'$'};
     return $t eq 'undefined' ? undef

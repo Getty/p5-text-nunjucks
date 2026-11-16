@@ -7,8 +7,10 @@ use strict;
 use warnings;
 use builtin qw( is_bool created_as_number true false );
 use Carp qw( croak );
+use Config ();
 use Cwd ();
 use Errno ();
+use Math::BigInt ();
 use POSIX ();
 use Scalar::Util qw( blessed refaddr );
 use Text::Nunjucks::Lib::TemplateError;
@@ -753,10 +755,15 @@ sub number_to_string {
   # Shortest significant-digit count p (1..17) whose p-digit rounding of $abs
   # parses back to exactly $abs. 17 sig digits always round-trip a double, so
   # the loop terminates; sprintf %e gives the correctly-rounded p-digit form.
+  # On a perl whose NV is wider than a double (ADR 0019) the comparison is made
+  # on the double's bytes: 0 + $sci would be a long double, which a 17-digit
+  # string never equals.
+  my $wide = $Config::Config{nvsize} != 8;
+  my $abs_bytes = $wide ? pack( 'd', $abs ) : undef;
   my ( $digits, $e10 );
   for my $p ( 1 .. 17 ) {
     my $sci = sprintf( '%.*e', $p - 1, $abs );
-    if ( 0 + $sci == $abs ) {
+    if ( $wide ? pack( 'd', 0 + $sci ) eq $abs_bytes : 0 + $sci == $abs ) {
       $sci =~ /\A(\d)(?:\.(\d+))?e([+-]\d+)\z/
         or croak __PACKAGE__ . '->number_to_string cannot parse ' . $sci;
       $digits = $1 . ( defined $2 ? $2 : '' );
@@ -919,7 +926,11 @@ sub _js_parse_int_power_of_two {
   my ( $self, $digits, $radix ) = @_;
   my $radix_log_2 = 0;
   $radix_log_2++ while ( 1 << $radix_log_2 ) < $radix;
-  my $number   = 0;    # an exact integer, below 2^58 (Perl IVs are 64-bit)
+  # an exact integer, below 2^58. Perl IVs of 64 bits hold it; a perl with a
+  # 4-byte IV (ADR 0019) computes it in Math::BigInt, the bit operations alike.
+  my $big      = $Config::Config{ivsize} < 8;
+  my $one      = $big ? Math::BigInt->new(1) : 1;
+  my $number   = $big ? Math::BigInt->new(0) : 0;
   my $exponent = 0;
   for ( my $i = 0; $i < @$digits; $i++ ) {
     $number = $number * $radix + $digits->[$i];
@@ -932,7 +943,7 @@ sub _js_parse_int_power_of_two {
         $overflow >>= 1;
       }
 
-      my $dropped_bits_mask = ( 1 << $overflow_bits_count ) - 1;
+      my $dropped_bits_mask = ( $one << $overflow_bits_count ) - 1;
       my $dropped_bits      = $number & $dropped_bits_mask;
       $number >>= $overflow_bits_count;
       $exponent = $overflow_bits_count;
@@ -943,7 +954,7 @@ sub _js_parse_int_power_of_two {
         $exponent += $radix_log_2;
       }
 
-      my $middle_value = 1 << ( $overflow_bits_count - 1 );
+      my $middle_value = $one << ( $overflow_bits_count - 1 );
       if ( $dropped_bits > $middle_value ) {
         $number++;    # Rounding up.
       } elsif ( $dropped_bits == $middle_value ) {
@@ -953,13 +964,14 @@ sub _js_parse_int_power_of_two {
       }
 
       # Rounding up may cause overflow.
-      if ( ( $number & ( 1 << 53 ) ) != 0 ) {
+      if ( ( $number & ( $one << 53 ) ) != 0 ) {
         $exponent++;
         $number >>= 1;
       }
       last;
     }
   }
+  $number = $number->numify if $big;
   return unpack( 'd', pack( 'd', $number ) ) if $exponent == 0;
   return POSIX::ldexp( $number, $exponent );
 }
