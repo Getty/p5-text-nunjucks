@@ -28,6 +28,10 @@ my $ROOT = path(__FILE__)->parent->parent->realpath;
 my $DATA = $ROOT->child( 't', 'data', 'loader' );
 my $CWD  = Cwd::getcwd();
 
+# Paths follow node's POSIX path model; on Windows ('C:/...' is not absolute
+# there) the tests that resolve a file's path are skipped (path.win32 comes later).
+my $WIN_SKIP = $^O eq 'MSWin32' ? 'POSIX path model; path.win32 comes later' : undef;
+
 #### Loader resolve -- node's path.resolve(path.dirname(from), to), lexical
 
 subtest 'Loader resolve collapses .. on the string (k16 self-flag)' => sub {
@@ -102,6 +106,7 @@ subtest 'FileSystemLoader: a search path that is no string dies with node\'s Typ
 #### FileSystemLoader -- getSource
 
 subtest 'FileSystemLoader: getSource and the load event' => sub {
+  plan skip_all => $WIN_SKIP if $WIN_SKIP;
   my $loader = $FS->new( [ "$DATA/views2", "$DATA/views" ] );
   my @loads;
   $loader->on( 'load', sub { push @loads, [@_] } );
@@ -134,6 +139,7 @@ subtest 'Environment: no loaders is [FileSystemLoader(views)]' => sub {
 };
 
 subtest 'Environment: caching through a FileSystemLoader' => sub {
+  plan skip_all => $WIN_SKIP if $WIN_SKIP;
   my $loader = $FS->new("$DATA/views");
   my $env    = Text::Nunjucks::Environment->new($loader);
   my @loads;

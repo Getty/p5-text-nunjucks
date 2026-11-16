@@ -14,8 +14,9 @@ Revision history for Text-Nunjucks
   - Included: the template pipeline, the built-in filters, the "is" tests, the
     globals (range, cycler, joiner) and the FileSystem and Precompiled
     loaders.
-  - POSIX only: paths follow node's POSIX path module, Windows is not
-    supported and the test suite is expected to fail there.
+  - Paths follow the POSIX model of node's path module; Windows paths
+    (path.win32) come later. The tests that rest on the POSIX model are
+    skipped on Windows, all others run there.
   - Requires Perl 5.40 or newer.
   - See "DIFFERENCES FROM NUNJUCKS" in the Text::Nunjucks documentation for
     every deliberate and every known open difference, and "SECURITY" before

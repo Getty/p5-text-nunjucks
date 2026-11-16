@@ -27,8 +27,9 @@ print $env->render_string( "Hello {{ name | title }}", { name => 'world' } );
 Not in 0.001: jinja-compat, `precompile` and its CLI, `NodeResolveLoader`,
 `WebLoader`, chokidar `watch`, the browser bundles.
 
-**Platform: POSIX only.** Paths follow node's POSIX `path`; Windows is not
-supported and the test suite is expected to fail there.
+**Paths.** Paths follow node's POSIX `path` model, where `/` is the only
+separator. Windows paths (node's `path.win32`) come later; the tests that rest on
+the POSIX model are skipped on Windows and everything else runs there.
 
 **Differences from Nunjucks.** What differs on purpose, and every known open
 difference, is listed in the `DIFFERENCES FROM NUNJUCKS`, `LIMITATIONS` and

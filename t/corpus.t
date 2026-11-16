@@ -285,6 +285,27 @@ my %MODE = (
   render => { supported => \&render_supported, run => \&run_render, ticket => 'k16/k20 (environment/API)' },
 );
 
+# Cases of render-loaders.json that hang on node's POSIX path model and fail on
+# Windows: 'C:/...' is no absolute path there, so a relative include resolves
+# to <cwd>/C:/..., open() on a directory is EACCES, not EISDIR. Skipped there
+# (path.win32 comes later); every other case, FileSystemLoader or not, runs.
+my %WIN_SKIP = map { $_ => 1 } (
+  q{FileSystemLoader: extends and includes relative to the parent, './' and '../' (Loader resolve)},
+  'FileSystemLoader: relative import and from-import',
+  q{FileSystemLoader: a relative include into the sibling 'views2' passes the guard},
+  'FileSystemLoader: a relative include above the search path is refused, named by its resolved path',
+  'FileSystemLoader: a missing relative include, named by its resolved path',
+  q{FileSystemLoader: a directory name throws node's EISDIR},
+  'FileSystemLoader: the empty name is the search path itself, a directory',
+  'FileSystemLoader: an include of a directory',
+  q{FileSystemLoader: search paths are path.normalize'd},
+  q{FileSystemLoader: no search paths is ['.'], the working directory},
+  q{FileSystemLoader: a null searchPaths is falsy, the default ['.']},
+  'FileSystemLoader: relative search paths resolve against the working directory',
+  'FileSystemLoader: opts noCache',
+  q{Environment default loader: FileSystemLoader('views') under the working directory},
+);
+
 my $corpus = path(__FILE__)->parent->child('corpus');
 my @files  = sort $corpus->children(qr/\.json$/);
 
@@ -298,6 +319,11 @@ for my $file (@files) {
     my $mode = $case->{mode} // 'render';
     my $m    = $MODE{$mode} or do { fail("$rel: $case->{name} [unknown mode $mode]"); next };
     my $title = "$rel: " . ( $case->{name} // '(unnamed)' ) . " [$mode]";
+
+    if ( $^O eq 'MSWin32' && $WIN_SKIP{ $case->{name} // '' } && $rel eq 'render-loaders.json' ) {
+      SKIP: { skip( "$title: POSIX path model; path.win32 comes later", 1 ) }
+      next;
+    }
 
     unless ( $m->{supported}->() ) {
       TODO: {

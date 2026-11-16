@@ -1411,7 +1411,10 @@ subtest 'node path: resolve, normalize, dirname as node v24.19.0' => sub {
   }
   chdir $cwd or die "chdir $cwd: $!";
   ok( $n > 1000, "$n fixture cases" );
-  is( scalar(@bad), 0, 'every case as node' ) or diag( join "\n", @bad[ 0 .. ( $#bad < 9 ? $#bad : 9 ) ] );
+  SKIP: {
+    skip 'POSIX path model; path.win32 comes later', 1 if $^O eq 'MSWin32';
+    is( scalar(@bad), 0, 'every case as node' ) or diag( join "\n", @bad[ 0 .. ( $#bad < 9 ? $#bad : 9 ) ] );
+  }
 
   # resolve reads the working directory only where node does
   is( $L->node_path_resolve('views'), $cwd . '/views', "resolve('views') is anchored at the cwd" );
@@ -1506,7 +1509,10 @@ subtest 'node fs: existsSync and the readFileSync errors' => sub {
   my $e = do { local $@; eval { $L->node_fs_read_file_sync_utf8("$dir"); 1 } ? undef : $@ };
   ok( $e && $e->isa('Text::Nunjucks::Lib::Error'), 'a directory throws an Error' );
   is( $e && $e->name,    'Error',                                         '... named Error' );
-  is( $e && $e->message, 'EISDIR: illegal operation on a directory, read', "... with node's message" );
+  SKIP: {
+    skip 'POSIX path model; path.win32 comes later (open on a directory is EACCES there)', 1 if $^O eq 'MSWin32';
+    is( $e && $e->message, 'EISDIR: illegal operation on a directory, read', "... with node's message" );
+  }
 
   # node: existsSync is false for a dangling symlink, and readFileSync fails
   # in its open, naming the path
@@ -1522,6 +1528,7 @@ subtest 'node fs: existsSync and the readFileSync errors' => sub {
   # node takes no lock to read: a file another open file description holds
   # LOCK_EX on is read at once (Path::Tiny's slurp waits for LOCK_SH)
   SKIP: {
+    skip 'POSIX path model; path.win32 comes later (Windows locks are mandatory)', 1 if $^O eq 'MSWin32';
     open( my $holder, '+<', "$file" ) or die "open: $!";
     skip 'no flock here', 1 unless flock( $holder, Fcntl::LOCK_EX() | Fcntl::LOCK_NB() );
     my $got = eval {
@@ -1537,6 +1544,7 @@ subtest 'node fs: existsSync and the readFileSync errors' => sub {
   }
 
   SKIP: {
+    skip 'POSIX path model; path.win32 comes later (no chmod 0000 on Windows)', 2 if $^O eq 'MSWin32';
     skip 'running as root: every file is readable', 2 if $> == 0;
     chmod 0000, "$file" or die "chmod: $!";
     $e = do { local $@; eval { $L->node_fs_read_file_sync_utf8("$file"); 1 } ? undef : $@ };
