@@ -1,6 +1,8 @@
 Revision history for Text-Nunjucks
 
 {{$NEXT}}
+  - Numbers print as JavaScript prints them on perls with long double or
+    quadmath NVs and on 32-bit perls (before, {{ 1/3 }} rendered 0 there).
   - First release: a Perl port of Nunjucks 3.2.4. The same template,
     context and options are meant to give the same output and the same
     error messages as the JavaScript original.

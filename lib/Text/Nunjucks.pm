@@ -196,6 +196,12 @@ reads and the C<groupby> result is open (k87, k81, k89).
 C<sort>, C<dictsort> and C<Array.sort> are a port of V8's TimSort, so the order
 of equal and inconsistent comparisons matches node's.
 
+=item Numbers are doubles on every perl (ADR 0019)
+
+A number is an IEEE double even on a perl built with C<long double> or
+C<quadmath> NVs or with 4-byte IVs, so C<{{ 0.1 + 0.2 }}> prints
+C<0.30000000000000004> everywhere. Nothing changes on a double, 64-bit perl.
+
 =item Scope and platform (ADR 0018)
 
 C<FileSystemLoader> and C<PrecompiledLoader> are ported
