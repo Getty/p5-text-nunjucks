@@ -1,0 +1,29 @@
+---
+class: standard
+completed: 2026-11-16T16:41:00Z
+created: 2026-11-13T20:23:10Z
+id: 114
+priority: high
+started: 2026-11-16T16:41:00Z
+status: done
+tags:
+- decision
+- release-0.001
+- release-blocker
+title: 'Decision: does 0.001 ship without the top-level API (k20/k101)? The release
+  docs card k24 depends on k20'
+updated: 2026-11-16T16:41:00Z
+---
+
+Pre-release audit 2026-11-13 (doc-writer, release-manager).
+
+Text::Nunjucks loads no code: Text::Nunjucks->can($_) is false for render, render_string, configure, compile, reset. The only entry point is Text::Nunjucks::Environment. The POD says the module "loads no code of its own" but nowhere that upstream's index.js API (configure/reset/compile/render/renderString, installJinjaCompat, precompile) is not ported; Changes does not say it either. A Nunjucks user will try Text::Nunjucks->render.
+
+k20 (port index.js) is todo, blocked on decision k101 (calling convention). k24 (docs pass before first release, a release blocker) has depends_on k20, so it cannot start while k20 waits.
+
+Options:
+(a) ship 0.001 Environment-only: say it in a POD STATUS section and in Changes; remove k20 from k24's depends_on.
+(b) decide k101 and port k20 first; release after.
+Main-agent recommendation: (a) -- the API is additive later, a rushed k101 is not.
+
+2026-11-16 16:40 Decided by the maintainer: (a). 0.001 ships Environment-only, without the index.js top-level API (k20/k101). A POD STATUS section and Changes say so, and k24 no longer depends on k20.
