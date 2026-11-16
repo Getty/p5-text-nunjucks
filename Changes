@@ -1,83 +1,20 @@
 Revision history for Text-Nunjucks
 
 {{$NEXT}}
-    - First release: Text::Nunjucks, a 1:1 Perl port of Nunjucks 3.2.4.
-      The same template, context and options are meant to give the same
-      output and the same error messages as the JavaScript original.
-    - The template pipeline is ported module by module: Lexer, Parser,
-      Nodes, Transformer, Compiler (emits Perl source), Runtime and
-      Environment with its Context and Template classes.
-    - Lib (foundation utilities, escaping, TemplateError), the base Loader
-      with path resolution, and the built-in "is" tests (Tests) are in.
-    - The loaders are in: Text::Nunjucks::Loader::FileSystem (FileSystemLoader)
-      and Text::Nunjucks::Loader::Precompiled (PrecompiledLoader). Paths
-      resolve like node's posix path.resolve (lexical ".."), files are read
-      as node decodes utf-8 (BOM kept, malformed bytes become U+FFFD), and
-      an Environment without loaders defaults to FileSystemLoader('views').
-    - Every deliberate difference from Nunjucks is recorded as an ADR in
-      docs/adr/.
-    - JS string operations count UTF-16 code units as upstream does (ADR
-      0012): string index and .length, the String methods (with new substr
-      and lastIndexOf), Array sort, SafeString length, "<" and ">", "in",
-      and for loops over strings.
-    - Every string join (template "~" and "+", concat, replace, Array join,
-      repeat, the output buffer, blocks, includes, extensions, asyncAll)
-      re-pairs a lone high and low surrogate where two strings meet, as JS
-      concatenation does.
-    - The test suite ports the upstream compiler, lexer, parser and runtime
-      suites and runs a corpus of cases generated from the real Nunjucks.
-    - The built-in filters start with the string family
-      (Text::Nunjucks::Filters, loaded by Environment, ADR 0015):
-      capitalize, center, indent, lower, nl2br, replace, striptags, title,
-      trim, truncate, upper and wordcount, and the sequence family: batch,
-      first, join, last, length, list, random, reverse, slice and sum, and the
-      number, escaping and URL family: abs, default (d), escape (e), float,
-      forceescape, int, round, safe, string, urlencode and urlize.
-      The ordering and predicate family completes the set: dictsort, dump,
-      groupby, reject, rejectattr, select, selectattr and sort. Every
-      built-in filter is ported.
-    - dump follows V8's JSON.stringify: the indent rules (a number gap below
-      1 still breaks lines), toJSON and the circular-structure message with
-      its path. It quotes a split surrogate pair like the astral character.
-    - dictsort enumerates inherited keys as for-in does; groupby keys go
-      through JS ToString; the Array filter is native.
-    - Array sort and the sort and dictsort filters run a port of V8's
-      TimSort (ADR 0017): the same comparator calls in the same order,
-      undefined last.
-    - The comparison-function TypeError and the "Cannot read properties" key
-      text follow V8's NoSideEffectsToString.
-    - Case mapping follows JS toLowerCase and toUpperCase, Final_Sigma and
-      SpecialCasing included.
-    - The replace filter with a regex follows RegExp Symbol.replace: empty
-      matches, lastIndex, the g and y flags, and a function replacer that
-      gets the named groups in group order. It takes the JS replacement
-      patterns ($&, $1, $<name>, $`, $', $$).
-    - A filter given a value of the wrong kind throws V8's TypeError text
-      ("str.toLowerCase is not a function").
-    - Array lastIndexOf is native.
-    - Array slice() treats a NaN bound as 0, as JS does.
-    - Array reduce is native. A filter that reads a property of undefined or
-      null throws V8's TypeError text ("Cannot read properties of undefined
-      (reading '0')").
-    - The random filter picks with Perl's rand, not V8's Math.random: the
-      same set of elements, never the same sequence.
-    - The native String replace() takes the JS replacement patterns, a regex
-      pattern and a function replacer.
-    - Math.ceil, Math.round (V8 Float64Round), Math.abs and Math.pow,
-      parseInt, parseFloat, ToInt32 and encodeURIComponent follow JS; "**"
-      gives NaN for 1 ** Infinity.
-    - Array destructuring follows JS; copy_safeness on undefined or null
-      throws V8's TypeError text.
-    - Object keys iterate in JS order: array-index keys first, numerically
-      ascending, for template dict literals, engine-built objects (the
-      groupby result included) and plain caller hashes, whose other keys stay
-      key-sorted (ADR 0011). A Hash::Ordered render context no longer dies.
-    - The globals are ported: range, cycler, joiner and the globals
-      function; the built-in "is" tests are re-ported, so lower and upper
-      throw V8's TypeError on non-strings, mapping is typeof object minus
-      arrays and iterable checks Symbol.iterator with V8's not-iterable
-      TypeError. Environment loads Tests and Globals directly.
-    - Documentation: the public POD for Text::Nunjucks, Environment (with
-      Template), Loader, Loader::FileSystem, Loader::Precompiled, EmitterObj,
-      Lib::Error and Lib::TemplateError, with a SYNOPSIS that the test suite
-      runs. The engine-internal modules carry a short DESCRIPTION.
+  - First release: a Perl port of Nunjucks 3.2.4. The same template,
+    context and options are meant to give the same output and the same
+    error messages as the JavaScript original.
+  - Use Text::Nunjucks::Environment as the entry point. The top-level API of
+    Nunjucks' index.js (configure, render, compile, render_string over a
+    default environment) is not in this release, so Text::Nunjucks itself
+    loads no code. Also missing: jinja-compat, precompile and its CLI,
+    NodeResolveLoader, WebLoader, watch.
+  - Included: the template pipeline, the built-in filters, the "is" tests, the
+    globals (range, cycler, joiner) and the FileSystem and Precompiled
+    loaders.
+  - POSIX only: paths follow node's POSIX path module, Windows is not
+    supported and the test suite is expected to fail there.
+  - Requires Perl 5.40 or newer.
+  - See "DIFFERENCES FROM NUNJUCKS" in the Text::Nunjucks documentation for
+    every deliberate and every known open difference, and "SECURITY" before
+    passing template names you do not control to the FileSystem loader.
