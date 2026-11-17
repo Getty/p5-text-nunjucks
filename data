@@ -1,0 +1,25 @@
+---
+class: standard
+created: 2026-11-17T11:58:34Z
+id: 122
+priority: low
+status: backlog
+tags:
+- bug
+- fidelity
+title: 'Include of a template that fails to compile inside a plain for: upstream calls
+  the render callback twice (output, then error), the port once (error)'
+updated: 2026-11-17T11:58:58Z
+---
+
+Found by the fidelity-auditor during the third k108 review; not caused by k108, HEAD 04e3a23 behaves the same.
+
+Case (callback form of render, memory loader): main.njk = A{% for n in ['i.njk', 'bad.njk'] %}{% include n %}{% endfor %}B ; i.njk = i ; bad.njk = {% if %} ; env.render('main.njk', {}, cb).
+Upstream v3.2.4: cb(null, 'AiB'), then cb(error '(main.njk) Template render error: (bad.njk) [Line 1, Column 7] unexpected token: %}').
+Port: cb(error) only, same text.
+
+Cause: upstream's Template render hands a compile error to callbackAsap (src/environment.js line 466), so the error arrives after the current turn; the plain for does not wait for its includes, the root finishes and delivers the output first. The port's _callback_asap is synchronous (ADR 0003), the error comes first and Template render then drops the output (did_error guard). The same should hold for the other callbackAsap site that takes an error (Environment render when get_template fails, line 310) wherever synchronous code still runs after it -- not measured.
+
+ADR 0003 records that callbacks fire synchronously, not this consequence; DIFFERENCES in lib/Text/Nunjucks.pm does not list it and no test pins it. Options: record it under ADR 0003 and DIFFERENCES with a pin generated from real upstream (the oracle cannot take a callback; maint/include-failure-fixtures can), or defer the error until the current synchronous run has unwound. The second is a design question for the maintainer. Related: k104, k119.
+
+2026-11-17 11:58 fidelity-auditor: the case in the body is measured as written (upstream two calls, tree and HEAD one). Control measured too: the same loop with a template that does not exist in place of bad.njk equals upstream (one call, 'template not found') -- only the compile-error path differs.
