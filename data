@@ -1,0 +1,49 @@
+---
+claimed_at: 2026-11-17T06:47:54Z
+claimed_by: text-nunjucks-worker
+class: standard
+completed: 2026-11-17T06:47:54Z
+created: 2026-11-13T20:22:40Z
+id: 109
+priority: medium
+started: 2026-11-17T06:02:53Z
+status: done
+tags:
+- bug
+- memory
+- release-0.001
+- release-should
+title: 'Leak: super() -- the compiled block sub passes itself to get_super, so a Template
+  using super() is never freed'
+updated: 2026-11-17T06:47:54Z
+---
+
+Found by the pre-release audit 2026-11-13 (fidelity-auditor, leak7.pl).
+
+Compiled code: $context->get_super($env,'c',$b_c,...) -- the block sub $b_<block> passes itself, so the Template that defines a block using super() forms a cycle and is never freed: ~52 kB per render_string, and per render with a noCache loader. Bounded with a caching loader (one Template per name).
+
+Done when: a Template using super() is freed after render_string (regression test), suite green.
+
+2026-11-17 main agent, re-diagnosed at HEAD 621ad19: cause confirmed, but the title and the done-criterion are wrong. The compiled source declares 'my ($root, $b_c)' and the block sub calls get_super(..., $b_c, ...), so it captures the variable that holds it. What leaks is NOT the Template object -- the count probe shows 0 Template, 0 Context, 0 Frame left per render -- it is the compiled code of the template (the block coderef and everything compiled with it), ~52 kB per render_string. CORRECTION to 'Done when': a test that weakens the Template passes today without any fix; the regression test must weaken the block coderef (the entry in the Template's blocks) and check that it is freed. Fix direction checked by runtime patch of the emitted source (repo untouched): first line of each block sub 'my $b_<name> = __SUB__;' so compile_super keeps emitting $b_<name> and now reads a per-call lexical; RSS growth reads 0. __SUB__ directly at the super() site is wrong: that site is often inside a nested callback sub. CORE::__SUB__ works without the feature in the eval'd source. No design decision needed; ready for the worker.
+
+2026-11-17 06:18 worker: fix in the tree (uncommitted). compile_root (Compiler/Compiler.pm) emits 'my $b_<name> = CORE::__SUB__;' as the first statement of the body of every block sub (right after _emit_func_begin, before the frame push); compile_super is unchanged and its $b_<name> now reads that per-call lexical. The file-level $b_<name> is no longer captured by any sub. Decisions (worker's): (1) every block sub, not only blocks with super() -- upstream's 'function b_<name>' binds its own name in every block, no pre-scan that has to stay in sync with compile_super, cost measured at about 75 ns per block call; (2) CORE::__SUB__ in the emitted source rather than enabling the feature at the eval -- the source stays self-contained whoever evals it. Measured: get_super is today always emitted as the first statement of the block sub that owns the name (lift_super unshifts the Super node onto the block body; 15 hand-made shapes + 4 corpus sites, none in a nested callback), so __SUB__ at the site would also have been correct today; the per-call lexical was kept as directed because it does not rest on that transformer invariant. Both k109 cases in t/10-leaks.t pass; t/10-compiler.t and t/upstream/compiler.t stay green unchanged (neither asserts the emitted text of a block sub).
+
+2026-11-17 06:21 Done (uncommitted, tree commit-ready). Changed: lib/Text/Nunjucks/Compiler/Compiler.pm compile_root emits 'my $b_<name> = CORE::__SUB__;' as the first statement of the body of every block sub; compile_super and _emit_func_begin are unchanged; two comments that described the forward-declared $b_<name> as what super() reads are corrected. t/10-leaks.t: TODO removed from the 2 k109 cases (block coderef weakened, freed once the Template is gone); red against HEAD's compiler, green with the fix. No test asserts the emitted text of a block sub, so no claim had to change. Verified: prove -lr t/ green, 22 files, 4635 tests, 0 skipped, 0 TODO passing, TODO left 103 counting subtests (14 in t/10-leaks.t, all k108); corpus unchanged, so template output is unchanged. prove -l xt/ green, 2 files, 192 tests. RSS probe (warm 200, then 3000 renders): render_string extends + super() 52.4 -> 0.001 kB/render; noCache loader rendering a child with super() 98.1 -> 0.000. For the reviewer: the card title and the original 'Done when' are superseded by the 2026-11-17 note (the Template object was always freed; the compiled code was not).
+
+2026-11-17 06:38 fidelity-auditor verdict: code READY TO COMMIT (same commit as k107; the doc fix named on k107 covers super() too). Nothing changed by me.
+
+Checks run by me: prove -lr t/ -> PASS, 22 files, 4635 tests, 0 skipped, 103 TODO (14 in t/10-leaks.t, all k108), 0 TODO passing; prove -l xt/ -> PASS, 2 files, 192 tests.
+
+1. Identity. CORE::__SUB__ in the block sub is the coderef _get_blocks stored: 37 shapes rendered through the oracle and the port, all equal, and a wrapper on Context::get_super found the passed block in blocks->{name} on every call (0 misses). Probed: plain / twice / in for / in if / in a false if; include before and after super(); super() inside asyncEach, asyncAll, an if made async by an include, nested for + if; with a filter and in an expression; in a macro and in a call block inside the block; two blocks; nested blocks (super in inner, in both, in outer after inner); three and four levels of extends, a middle level without super() and one that does not define the block; super() in loops on two levels; a parent block rendered twice in a loop; a block the parent lacks; no parent at all (error text equal); an included template with its own inheritance, the same child included twice; extends inside if and by a variable; a block inside a for loop; a block name with digits. Plus 13 shapes with an async filter (sync and deferred) before / after / on super() and in the parent block, against node: equal.
+
+2. lift_super. Confirmed by reading (transformer.js:134-156 and Transformer.pm lift_super: unshift onto blockNode.body.children with blockNode.name) and on the emitted source: in all 50 shapes every get_super site is the first statement after the frame push of the block sub of the same name. A super() in a nested block is lifted into the OUTER block (pre-order walk), so there is no $b_X read inside block Y. The per-call lexical is right independently of that: with the site moved by hand into two nested callbacks, eval'd as _eval_source does (no strict, no feature), sync and deferred after the block sub returned, the site reads the stored coderef and the coderef is freed afterwards; a recursive call sees itself at every depth. __SUB__ inside eval {} is the enclosing sub.
+
+3. Leak-free. No emitted closure reads $b_<name>: its only reader is the get_super call, which sits in the block sub itself. The macro and caller closures created inside a block read the hole through context_or_frame_lookup, not $b_<name>. Block coderefs alive after the render: 0 in 35 of 37 shapes (HEAD compiler: 36 of 37 keep them); the two left are a macro reading the hole and a call block, alive at HEAD as well -- that is k108 (macro captures $context / $frame), not this card.
+
+4. Test. Both k109 cases are red against HEAD's Compiler/Compiler.pm and green with the fix; they weaken the block coderef, which is the object that leaked. The four typed render outputs in that subtest equal the oracle (<base!>, <basebase>, <child>, x). Also red with HEAD's Lib.pm alone (first case only): the test depends on k107 too, which is fine for one commit.
+
+5. Rules. No ADR needed: output and errors unchanged, ADR 0003 does not pin the block shape, the compiler header comment describes the new line correctly. Suggestion, not a blocker: the super() shapes above are pinned by only 3 corpus cases today; a corpus file with the nested-callback shapes (include / asyncEach / for around super(), three levels, nested blocks) would guard the identity that this fix now rests on (test-writer).
+
+Card title and the original "Done when" are superseded by the 2026-11-17 diagnosis, as the worker says: the Template object was always freed, the compiled code was not.
+
+Committed in 04e3a23.
