@@ -1,0 +1,26 @@
+---
+class: standard
+completed: 2026-11-17T20:09:48Z
+created: 2026-11-13T16:31:27Z
+id: 101
+priority: medium
+started: 2026-11-17T20:09:48Z
+status: done
+tags:
+- decision
+- api
+title: 'Decision: Perl calling convention of the top-level API (configure, reset,
+  compile, render, render_string) and the default environment'
+updated: 2026-11-17T20:09:53Z
+---
+
+Blocks the index.js part of k20 (found by the k20 scout, 2026-11-13). Upstream index.js is a module object: nunjucks.configure(path, opts) builds a module-level default env (let e), reset() drops it, compile/render/renderString call configure() first when e is unset; components are exported as properties (nunjucks.Environment, .FileSystemLoader, .lib, ...). Nothing in docs/adr, SKILL.md, README or POD fixes the Perl shape: ADR 0009 covers Environment methods only (render($name, \%ctx, $cb?), render_string($src, \%ctx, $opts?, $cb?)); getty-perl-core says no package-level state (a per-process cache is an attribute on a singleton), bare subs only in function modules, never default exports. The port is OO throughout, no Exporter anywhere.
+Options: (A) plain functions Text::Nunjucks::render(...) over a package-level default env (needs an ADR exception to the house rule); (B) class methods Text::Nunjucks->configure/->reset/->compile/->render/->render_string over a class-level singleton attribute holding the default Environment; (C) object style only: Text::Nunjucks->configure returns an Environment and the simple global API (which upstream api.md calls discouraged) is not offered -- a recorded divergence; (D) B plus an optional import list (use Text::Nunjucks qw( render render_string )).
+Sub-questions: Exporter or fully qualified only; components by module name only (SKILL.md table) or class-name accessors (Text::Nunjucks->Environment); top-level render_string 3-arg as upstream (src, ctx, cb) or with ADR 0009 opts.
+Recommendation (main agent): (B), no Exporter, components by module name, render_string 3-arg as upstream -- closest image of the module object within the house rules, no global functions in the caller namespace. Also open in the same API: configure({express => $app}) -- express-app.js is out of scope (SKILL.md:59, no ADR yet, noted on k24); install_jinja_compat waits on k22, precompile/precompile_string on k23.
+
+From the k20 doc-writer (2026-11-13): today lib/Text/Nunjucks.pm loads nothing, so 'use Text::Nunjucks;' alone gives no working engine; the SYNOPSIS loads Text::Nunjucks::Environment explicitly. Whatever k101 decides should also settle what 'use Text::Nunjucks' loads (upstream's index.js requires every component).
+
+2026-11-17 decided by the maintainer: (D) class methods Text::Nunjucks->configure / reset / compile / render / render_string over a singleton attribute holding the default Environment, plus an optional import list (Exporter, EXPORT_OK only, no default export); top-level render_string takes options like the Environment method (src, ctx, opts?, cb?) -- a recorded difference from index.js's 3-argument renderString, which stays callable since a coderef in the opts slot is the callback; use Text::Nunjucks loads every component index.js requires, reached by module name, no class-name accessors. To be recorded as ADR 0023; then k20 can port configure/reset/compile/render/render_string.
+
+Recorded as ADR 0023, committed in c3fb519.
