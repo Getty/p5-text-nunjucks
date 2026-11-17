@@ -1,0 +1,73 @@
+---
+claimed_at: 2026-11-17T15:39:32Z
+claimed_by: text-nunjucks-doc-writer
+class: standard
+completed: 2026-11-17T15:39:24Z
+created: 2026-09-21T22:47:09Z
+depends_on:
+- 21
+id: 24
+priority: medium
+started: 2026-11-17T14:47:50Z
+status: done
+tags:
+- docs
+- release
+- release-blocker
+- release-0.001
+title: Divergence ledger + README / docs pass before first release
+updated: 2026-11-17T15:40:03Z
+---
+
+Before 0.001: one user-facing document (POD section 'DIFFERENCES FROM NUNJUCKS' in Text::Nunjucks, generated from / consistent with docs/adr/) listing every recorded divergence and every out-of-scope upstream feature; README per house layout; Changes {{$NEXT}} written as ONE document describing what the dist is (skill getty-perl-core, Changelog). Then run text-nunjucks-release-checker. Release itself only on the maintainer's explicit go.
+
+Ledger entry from k17 job 3 (2026-11-13): the random filter uses Perl's rand where upstream uses V8's Math.random -- different PRNG, output never byte-comparable either way; upstream's own test asserts membership only. List it in the divergence ledger (no behaviour to match).
+
+From the k20 scout (2026-11-13): the out-of-scope list in SKILL.md:59-61 (express-app.js, precompile-global.js, browser bundles) has no ADR; ADR 0018 records only NodeResolveLoader, WebLoader and chokidar watch. The divergence ledger needs them (precompile-global.js: see the conflict noted on k23).
+
+2026-11-13 20:23 Pre-release audit (doc-writer, release-manager, fidelity-auditor, scout): release blocker. A CPAN user is misled today. Needs, in the Text::Nunjucks POD unless noted:
+- STATUS: the top-level API is absent (k20/k101 -- see decision k114, which also decides whether this card keeps depends_on k20); extensions' Perl shape undecided (k102); jinja-compat (k22); precompile (k23); express; NodeResolveLoader / WebLoader; watch (dies 'watch requires chokidar'); POSIX-only paths, no Windows (k97/k112). Say that Text::Nunjucks::Environment is the entry point.
+- DIFFERENCES FROM NUNJUCKS: none exists (grep DIFFERENCES/STATUS/LIMITATION in lib: 0 hits). List ADR 0004 (upstream bugs ported), 0006, 0007, 0008, 0011, 0012, 0013, 0014, 0017, 0018, the random filter, and the out-of-scope list that has no ADR; one GitHub URL for docs/adr (https://github.com/Getty/p5-text-nunjucks/tree/main/docs/adr) -- POD cites 'ADR NNNN' without a link and metacpan does not render docs/. Open decisions (k87, k93, k94, k104) as one line.
+- LIMITATIONS: memory -- keep one long-lived Environment (k96; per-render leaks k107/k108/k109 until fixed); performance (~35x slower than node for a 1000-row table, 8 kB template compiles in ~470 ms vs 41 ms; k63); Unicode case mapping (k64); Tie::IxHash input iterates sorted, use Hash::Ordered (k78); render takes and returns character strings.
+- SECURITY in Loader::FileSystem get_source and at the Environment default loader: the prefix guard (k95) serves ../views2/x.njk and the sibling file ../views.env for search path 'views'; search path '.' serves the cwd and its siblings; symlinks are followed; never pass untrusted template names. Today it is one parenthetical (Loader/FileSystem.pm:177-182).
+- README.md line 7 'Status: work in progress. Nothing is usable yet.' is the public GitHub front page now.
+- Changes {{$NEXT}}: shorter, consumer-facing; add a 'Not in this release' bullet; the ADR 0015 reference is stale (superseded by 0018, Environment.pm:36-38); the test-suite bullet understates (also api, filters, globals, loader, tests); bullets indented 4 spaces vs the house 2.
+- ADR 0001 calls is_bool stable in 5.40 -- it is experimental in 5.40 (the code suppresses experimental::builtin, so behaviour is fine).
+- copyright_holder 'L<https://raudssus.de/>' lands literally in LICENSE and the generated README -- check against the house convention.
+
+2026-11-16 16:41 k114 decided (a): 0.001 ships without the top-level API. k20 was removed from depends_on. STATUS names Text::Nunjucks::Environment as the entry point. The release check is run by text-nunjucks-release-manager (the read-only release-checker no longer exists). k111 is decided: the tarball stays as it is.
+
+2026-11-17 release audit: done and verified in tree: STATUS, DIFFERENCES (ADR 0001,0004-0014,0016-0019,0021 plus random filter), LIMITATIONS, SECURITY, README status, Changes, ADR link. LEFT: (1) docs/adr/0001 says builtin::is_bool is stable in 5.40; it is experimental there (doc-writer, ADR prose). (2) STATUS omits express-app and precompile-global.js from the out-of-scope list (only browser bundles named). (3) copyright_holder 'L<https://raudssus.de/>' lands literally in LICENSE and README; confirm it is the house convention. (4) The Deep recursion on Lib::async_iter warning (k83) is visible in every tester log and is not mentioned in the POD. Kept in backlog until 1-3 are settled.
+
+2026-11-17 main agent: item (3) settled -- copyright_holder 'Torsten Raudssus <...> L<https://raudssus.de/>' is the house convention, identical in 20 sibling Getty distributions; no change. Item (4) goes away if k83 is fixed, which the worker takes now. Items (1) and (2) go to the doc-writer.
+
+Doc-writer: ADR 0001 now says is_bool is experimental in 5.40 (created_as_number/true/false stable). STATUS and DIFFERENCES 'Scope and platform' in lib/Text/Nunjucks.pm name express-app.js and precompile-global.js. prove -lr t/ 24 files 4738 tests PASS; prove -l xt/ 197 PASS. Open: precompile-global scope vs k23 format decision.
+
+ADR 0001 is_bool fix; STATUS + DIFFERENCES out-of-scope lists now consistent (express-app.js, precompile-global.js). Prose only.
+
+Doc-writer: new docs/adr/0022 (out-of-scope upstream files, accepted, source: core skill scope list since 762c0c9; precompile-global.js vs k23 noted as open, not decided); cited from STATUS and DIFFERENCES Scope and platform in Text/Nunjucks.pm. xt 197 PASS, podchecker unchanged (known 3).
+
+ADR 0022 added (git added) and cited; ADR 0001 is_bool fix; STATUS/DIFFERENCES consistent.
+
+2026-11-17 15:31 fidelity-auditor review of the uncommitted k24 docs on c768a05. VERDICT: not ready -- three factual fixes, each one sentence, back to the doc-writer; then ready.
+
+MUST FIX
+1. docs/adr/0001 (options paragraph): created_as_number is NOT stable in 5.40. perl 5.40.1 here, perldoc builtin: is_bool, inf, nan, created_as_string, created_as_number, export_lexically and load_module are 'currently experimental', and calling created_as_number warns 'Built-in function builtin::created_as_number is experimental' like is_bool. Stable among those the ADR names: true and false. Write: true and false are stable; is_bool and created_as_number are still experimental (the modules that use them switch off experimental::builtin -- true: Lib, Runtime, Filters, Compiler::Compiler, Loader::FileSystem do).
+2. docs/adr/0003 (last consequence) and lib/Text/Nunjucks.pm (the stack clause under 'Decisions waiting for the maintainer'): 'about 10,000 asyncEach items' is wrong. Upstream v3.2.4 on node v24.19.0, default stack: direct env.render (with and without a callback): 2,000 items renders, 2,500 throws RangeError; through maint/oracle.js 3,000 renders, 4,000 throws. Sequential includes: direct 300 renders, 350 throws; oracle 400 renders, 500 throws -- 'about 300' is fair, '300 to 500' is exact. A macro that calls itself: direct 2,500 renders, 3,000 throws; oracle 2,000 / 2,500. The figure 10,000 comes from my own 2026-11-13 note on k83, which named a probe point that threw, not the threshold -- my error, carried into the docs. Suggested: 'from a few thousand asyncEach items (2,000-4,000 measured), a few hundred sequential includes (300-500) and about 2,500 levels of a macro that calls itself; the exact point depends on node's stack size'. The port renders all of these (checked: macro 3,000 and asyncEach 5,000 render, no warning).
+3. docs/adr/0022, Decision, the precompile-global.js item: 'It is out of scope for 0.001' adds a qualifier that neither the core skill ('Out of scope, by decision', unchanged since 762c0c9) nor the maintainer stated, and it pre-empts k23. Drop 'for 0.001'; the Consequences paragraph on k23 already says what may change it.
+
+SUGGESTIONS
+- ADR 0003 'The Deep recursion warning is noise': not for an endless recursion. {% macro f(n) %}{{ f(n+1) }}{% endmacro %}{{ f(0) }} -> upstream: a catchable render error, RangeError; the port before k83 warned twice and then died 'Out of memory', and now dies 'Out of memory' without a warning. One sentence in ADR 0003 and in the POD clause ('where upstream stops with a RangeError the port renders' does not hold for an endless one; it runs until memory is exhausted); belongs to k69.
+- ADR 0022 and STATUS describe express-app.js as 'the configure({ express => $app }) branch of index.js'. It is the module behind upstream's Environment#express(app) (environment.js:14, 292-293), which configure calls for opts.express (index.js:40-41). Name Environment->express as not ported, and write the configure call in JavaScript form (configure({ express: app })) -- Text::Nunjucks has no configure.
+
+CONFIRMED: ADR 0022 records the scope list as the skill states it 'by decision' since the bootstrap commit 762c0c9 (2026-09-22), gives no invented reasons and decides nothing for k23; precompile.js:8, 21, 46 are the require and the two default-wrapper lines; 'leave no stubs' holds (Environment has a comment for express, no method; watch dies with upstream's own message, ADR 0018). STATUS and 'Scope and platform' list express-app.js and precompile-global.js. The stack clause sits under the open decisions and names k69 as undecided; nothing in the diff is written as a maintainer decision except that k69 entry, correctly as open. Runs as on k83: prove -lr t/ 25 files, 4776 tests, 0 skipped, 117 TODO lines, none passing; prove -l xt/ 2 files, 198 tests; dzil test PASS.
+
+Doc-writer audit fixes: ADR 0001 (only true/false stable in 5.40; is_bool and created_as_number experimental, warnings switched off in Lib/Runtime/Tests), ADR 0003 (thresholds as a few thousand / few hundred, endless recursion gets no early warning, silencing was main agent's choice pending maintainer with k69), ADR 0022 (express = Environment#express, 'for 0.001' dropped), POD STATUS/DIFFERENCES wording. xt 198 PASS, podchecker unchanged.
+
+Audit fixes 1-5 applied; prose only.
+
+Committed as the k24 docs commit (see git log): ADR 0022, ADR 0001 is_bool wording, STATUS/Scope text. Only remainder is k23's own decision (precompile / bin CLI), which ADR 0022 records as open. copyright_holder literal L<> kept as house convention (no change).
+
+Correction: the copyright_holder L<...> literal was not changed by the commit and its house convention is unverified; maintainer to confirm.
+
+2026-11-17 main agent, on the copyright_holder correction above: the line is verified as the house convention -- every one of the 74 sibling p5-* distributions in the maintainer's dev directory has exactly 'copyright_holder = Torsten Raudssus <...> L<https://raudssus.de/>' in its dist.ini (grep, 74 of 74 identical). No change, no maintainer question needed.
