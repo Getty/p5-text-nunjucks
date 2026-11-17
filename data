@@ -1,0 +1,36 @@
+---
+class: standard
+created: 2026-11-17T06:37:49Z
+id: 118
+priority: medium
+status: backlog
+tags:
+- bug
+title: 'asyncEach / asyncAll with four or more loop names: the callback pushed onto
+  the caller''s row leaks the render, and a second loop over the same rows recurses
+  until out of memory (upstream: RangeError)'
+updated: 2026-11-17T06:37:49Z
+---
+
+Found by the fidelity audit of k107 / k109 (2026-11-17). Not caused by that change: same behaviour at HEAD 621ad19.
+
+Upstream runtime.js:283 (asyncEach) and :329 (asyncAll), default branch for 4+ names: item.push(i, len, next); iter.apply(this, item). The row of the caller is mutated and keeps the callback. Port: Runtime async_each / async_all, "push @$item, $i, $len, $next".
+
+Measured (context quads = [[1,2,3,4],[5,6,7,8]]):
+
+1. One loop -- port and oracle agree:
+   {% asyncEach a, b, c, d in quads %}{{ a }}{{ d }};{% endeach %}{{ quads[0] | length }}|{{ quads[0][4] }},{{ quads[0][5] }}|{{ quads[0] | dump }}
+   -> 14;58;7|0,2|[1,2,3,4,0,2,null]
+
+2. Leak (port-only, Perl refcounting): the row now holds the step closure, the closure holds the array -> cycle. Weak-ref probe after one render_string: 1 Context + 1 Frame + 1 Template stay, and the caller's quads array is still alive after the caller dropped it. Same for asyncAll. With three names: 0. This is what is left of the asyncEach leak after k107.
+
+3. Two loops over the same rows in one template -- wrong behaviour:
+   {% asyncEach a, b, c, d in quads %}{{ d }};{% endeach %}{% asyncEach a, b, c, d in quads %}{{ d }};{% endeach %}{{ quads[1] | length }}
+   oracle: Template render error: (unknown path)\n  RangeError: Maximum call stack size exceeded
+   port: recurses without bound ("Deep recursion" warnings), memory grows until the process dies -- under a 1.5 GB limit: "Out of memory in perl:util:safesysmalloc", exit 139. Do not run this case without a memory limit.
+   (The second loop reads the first loop's stale i / len / next from positions 4..6 of the row; upstream bug, ported.)
+   A second render over the same caller data returns null / undef on both sides, no difference there.
+
+Not pinned by any corpus case. Related: k69 (resource exhaustion is not emulated), k83 (Deep recursion warning).
+
+Note for the fix: the three pushed elements are observable upstream (length 7, dump shows null for the function), so "do not push" changes output. Needs: break the cycle without changing what a template sees, and a bounded failure for case 3.
