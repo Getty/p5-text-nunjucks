@@ -1,6 +1,6 @@
 # ADR 0021 — A Context lives as long as what is still going to run in it
 
-- Status: accepted (two limitations, D2 and D3, rest on a recommendation the maintainer has not confirmed yet; see "Who decided what")
+- Status: accepted
 - Date: 2026-11-17
 - Tags: memory, compiler, runtime, environment, gc, decision, k108
 
@@ -203,10 +203,9 @@ library's, that call would find its Context gone where upstream renders.
   not only for macros, the continuation wrapper, `Context::Gone` and its error
   text, resetting frame variables when a Context dies, `undef $callback;` on the
   include's error path in place of "no take-over on error".
-- **Recommended by the main agent and the fidelity-auditor, not yet confirmed by
-  the maintainer:** accepting D2 and D3 below. They are written as limitations
-  on that recommendation. If the maintainer rules otherwise, the ADR changes
-  with it.
+- **Maintainer (2026-11-17), accepting the recommendation of the main agent and
+  the fidelity-auditor:** limitations D2 and D3 below, and the sub-shape under
+  "Still leaking" that this ADR introduces, to be fixed under k121.
 
 ## Consequences
 
@@ -224,7 +223,7 @@ otherwise.
   macros in it works, and an import in its body works while the body runs
   synchronously. Upstream's macro keeps its Context for as long as the macro
   lives.
-- **D2 (recommended, unconfirmed).** An async filter or extension that calls its
+- **D2 (accepted by the maintainer, 2026-11-17).** An async filter or extension that calls its
   callback a second time dies in the application's event loop in three cases,
   each with its own consequence:
   - The result was already delivered, and what follows reads a variable: it
@@ -238,7 +237,7 @@ otherwise.
 
   HEAD and the tree both already differ from upstream on a second callback
   through the include waterfall (k119).
-- **D3 (recommended, unconfirmed).** Every executed import keeps the library's
+- **D3 (accepted by the maintainer, 2026-11-17).** Every executed import keeps the library's
   Context until the importing render ends. A from-import in a loop of 20,000
   peaks at +122 MB, about 6 kB each (HEAD: +2.4 MB); the memory is freed when
   the render ends. No cheaper way was found: tying the library's Context to the
@@ -262,7 +261,7 @@ otherwise.
     removed from the macro bodies, 42 include-site shapes leak more than before
     (28 of them from nothing), no import-site shape does, and 3282 shapes leak
     less. It is the price of the include rule plus the take-over on error, on
-    the error path only. k121 tracks it; the maintainer has not ruled on it.
+    the error path only. The maintainer accepted this on 2026-11-17; k121 tracks the fix.
   - An included template that hands a macro containing an async construct to
     the includer and then never completes does the same.
   - A failing import inside `asyncEach`, `asyncAll` or a plain `for` with an
