@@ -1,6 +1,6 @@
 Revision history for Text-Nunjucks
 
-{{$NEXT}}
+0.001     2026-11-17 20:12:32Z
   - First release: a Perl port of Nunjucks 3.2.4. The same template,
     context and options are meant to give the same output and the same
     error messages as the JavaScript original. Requires Perl 5.40 or newer.
