@@ -1,0 +1,29 @@
+---
+class: standard
+completed: 2026-11-17T00:02:39Z
+created: 2026-11-13T20:22:58Z
+id: 112
+priority: medium
+started: 2026-11-17T00:02:39Z
+status: done
+tags:
+- decision
+- windows
+- release-0.001
+- release-should
+title: 'Windows: the dist does not say it is POSIX-only and has no OS gate; MSWin32
+  test runs are predicted to FAIL (k97)'
+updated: 2026-11-17T00:02:39Z
+---
+
+Pre-release audit 2026-11-13 (scout, static analysis only -- no Windows box; nothing here was run on Windows).
+
+- Lib.pm:2578 / 2606 decide absoluteness with substr(...) eq '/', so C:/x is relative and gets joined to the cwd; Cwd::getcwd() on Windows returns C:/... (Lib.pm:2584). Backslash is an ordinary character (ADR 0018).
+- Nothing says so outside ADR 0018: no POD, README, META, Makefile.PL OS check.
+- Predicted FAILs: t/10-lib.t node-path subtests (chdir '/' at 1400, 1447), EISDIR message 1505, non-ASCII file names 1494-1499, flock LOCK_EX read 1520-1531, chmod 0000 1536-1541; corpus render-loaders (53 cases, POSIX-absolute expectations). Likely PASS: t/10-loader.t string-only cases, api.t with normEOL.
+- With no os_unsupported gate CPAN Testers on MSWin32 report FAIL, not NA.
+- No .gitattributes: a Windows dev checkout with core.autocrlf=true changes t/upstream/templates/*.njk and t/data/loader/*.njk. Tarballs keep LF, CPAN users unaffected.
+
+Options: (a) for 0.001: state POSIX-only in POD (k24) and gate MSWin32 in Makefile.PL (os_unsupported -> NA); (b) port path.win32 first (k97). Maintainer decides.
+
+2026-11-17 00:02 Decided (Getty): skip the POSIX-path-model tests on MSWin32, document it, no os_unsupported gate. d44b1cc, dc11b98. machoke 5.40.2.2 PASS, 5.42.3.1 PASS (.smoke/logs/20261117-005359). Windows paths stay k97.
