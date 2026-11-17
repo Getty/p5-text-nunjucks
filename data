@@ -1,0 +1,36 @@
+---
+class: standard
+created: 2026-11-17T04:35:21Z
+id: 117
+priority: medium
+status: backlog
+tags:
+- bug
+- compiler
+title: 'Three-name for loop over an object reads an undeclared $t_N: JS var hoisting
+  not mapped'
+updated: 2026-11-17T09:53:49Z
+---
+
+Found by the fidelity auditor during the k116 audit (2026-11-17). Older than k116: HEAD dc11b98 gives the same output.
+
+Upstream compiler.js:682-686 (compileFor, array branch) emits `var tid = arr[i][u]` for each destructured name and calls frame.set(name, tid) at compile time. The object branch (compiler.js:695-712) binds only the first two names, so a third name, still mapped to that tid, is compiled into the object-branch body too. In JS, `var` is function-scoped, so the object branch reads the same variable, which holds whatever value the array branch left in the same render function.
+
+Port: Compiler/Compiler.pm:883 emits `my $t_N` inside the array-branch for-block. The object branch (Compiler/Compiler.pm:895-912) reads `$t_N` with no declaration in scope. Template::_eval_source runs with `no strict`, so this reads the package global $Text::Nunjucks::Template::t_N, which is always undef.
+
+Oracle:
+  echo '{"template":"{% for x in xs %}{% for a, b, c in x %}{{ c }}.{% endfor %}|{% endfor %}","context":{"xs":[[[1,2,3]],{"k":"v"}]}}' | node maint/oracle.js
+  upstream: "3.|3.|"   port: "3.|.|"
+A single loop over an object matches ("k,v," on both sides), because the hoisted var is still undefined there.
+
+How it was found: every emitted template source in t/ was compiled under `use strict` with no outer lexicals. 3 of 5086 sources fail, all with this pattern ($t_6/$t_7 in corpus.t and t/upstream/compiler.t). No other source refers to an undeclared variable.
+
+Not pinned: t/corpus/compiler.json "for loop destructured over 2D array" covers only the array branch. Needed: a mapping for JS var hoisting of compiler temporaries (declare them where upstream's var hoists to, or record an ADR), plus a corpus case for the probe above.
+
+2026-11-17 08:31 Fidelity auditor, k108 review 2026-11-17: three more shapes of the same cause (JS var is function-scoped, the port emits my in the block). All three give the same result at HEAD 04e3a23 and with the k108 change, so they are not part of k108. Measured with the oracle (callback API), lib.njk = {% macro a(x) %}[{{ x }}]{% endmacro %}:
+(1) a macro defined inside an if body and called after it: {% if x %}{% macro m() %}M{{ x }}{% endmacro %}{% endif %}{{ m() }} with x = "X" -> upstream "MX"; port: Error "Unable to call `m`, which is undefined or falsey" (my $macro_t_N is scoped to the if block, the later read is an undeclared global).
+(2) a caller block made in a for loop, kept and called after the loop: {% set bag = [] %}{% macro stash() %}{% set _ = bag.push(caller) %}{% endmacro %}{% for i in [1,2] %}{% call stash() %}c{{ i }}{{ x }}{% endcall %}{% endfor %}{% for f in bag %}{{ f() }}{% endfor %} -> upstream "c2Xc2X" (both closures read the one hoisted loop temporary); port "c1Xc2X" (each iteration has its own my $t_N).
+(3) the reverse direction, where upstream throws and the port does not: {% if x %}{% from "lib.njk" import a %}{% endif %}{{ a(1) }} -> upstream: Template render error "(main.njk)\n  ReferenceError: t_4 is not defined" (the var lives in the getExported callback function, the read is outside it); port: Error "Unable to call `a`, which is undefined or falsey".
+None of the three is pinned in t/corpus.
+
+2026-11-17 test-writer, k108 review: the three shapes above (import inside an if with the name used after it; a caller made in a for loop and called after it; a macro defined in an if and called after it) are now corpus cases in t/corpus/render-known-differences-k108.json, oracle-generated, each carrying a todo naming this card. Measured port output: import-in-if gives 'Unable to call a, which is undefined or falsey' (not a render, as the k108 worker's list said); caller in a for loop gives c1Xc2X (oracle c2Xc2X); macro in an if gives the 'Unable to call' error (oracle MX). Same output at HEAD 04e3a23 and with the k108 change. Drop each todo when it passes.
