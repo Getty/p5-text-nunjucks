@@ -1,0 +1,23 @@
+---
+class: standard
+completed: 2026-11-17T14:46:34Z
+created: 2026-11-13T20:22:46Z
+id: 110
+priority: low
+started: 2026-11-17T14:46:34Z
+status: done
+tags:
+- release-0.001
+- release-should
+- dist
+title: 'cpanfile: Path::Tiny is a runtime requirement but only tests use it'
+updated: 2026-11-17T14:46:34Z
+---
+
+Pre-release audit 2026-11-13 (release-manager, scout; verified by the main agent).
+
+cpanfile:6 requires 'Path::Tiny' outside 'on test', so META runtime prereqs and Makefile.PL make every installer pull it. lib/ has no use of it -- the only hit is a comment (lib/Text/Nunjucks/Lib.pm:2835). t/ and xt/ use it (8 files).
+
+Fix: move it into on test => sub { ... }. Everything else in cpanfile is complete and minimal (Hash::Ordered, JSON::MaybeXS, Moo, namespace::autoclean; the rest is core for 5.40).
+
+Fixed in ebd0acb: Path::Tiny sits under on test in cpanfile; built META runtime prereqs lack it (release audit 2026-11-17).
