@@ -90,7 +90,7 @@ Catch it with C<eval>, or receive it as the first argument of a render callback.
 The text. For an error raised while a template renders it is prefixed with the
 template path and, for the first prefix, the line and column:
 C<(page.njk) [Line 3, Column 5]> followed by a newline and the reason. An error
-from compiling a template (C<compile> of L<Text::Nunjucks::Environment/Text::Nunjucks::Template>,
+from compiling a template (C<compile> of L<Text::Nunjucks::Template>,
 or the one C<get_exported> hands to its callback) carries the bare reason.
 
 =cut

@@ -62,12 +62,11 @@ C<undefined> and the object C<< Text::Nunjucks::Runtime->None >> is its C<null>.
 =item L<Text::Nunjucks::Environment>
 
 The engine's entry point: loaders, options, filters, tests, globals,
-extensions, C<render>, C<render_string> and C<get_template>. The same file also
-defines L<Text::Nunjucks::Template> (a compiled template, the object
+extensions, C<render>, C<render_string> and C<get_template>. Loading it also
+loads L<Text::Nunjucks::Template> (a compiled template, the object
 C<get_template> returns and the one that does the rendering) and
-C<Text::Nunjucks::Context> (the per-render bookkeeping, used by the engine and
-not meant for callers). C<Text::Nunjucks::Template> has no file of its own:
-load it by loading C<Text::Nunjucks::Environment>.
+L<Text::Nunjucks::Context> (the per-render bookkeeping, used by the engine and
+not meant for callers).
 
 =item L<Text::Nunjucks::Loader>
 

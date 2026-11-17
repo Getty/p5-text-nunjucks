@@ -16,7 +16,9 @@ Moo, the house standard, for every class. `object.js` has no Perl counterpart:
 `extend` becomes `extends`/subclassing, `EmitterObj` becomes a small role with
 `on`/`emit`. The ~60 AST node types are **generated** from their field lists in
 `Text::Nunjucks::Nodes`, mirroring `Node.extend(name, { fields })` — not sixty
-hand-written class files, and not a second object system.
+hand-written class files, and not a second object system. *Superseded by
+ADR 0020 (k116, 2026-11-17) in this one point: every node type is now a
+hand-written class in its own file. Moo for every class stands.*
 
 ## Consequences
 

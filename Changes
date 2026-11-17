@@ -17,6 +17,12 @@ Revision history for Text-Nunjucks
   - Paths follow the POSIX model of node's path module; Windows paths
     (path.win32) come later. The tests that rest on the POSIX model are
     skipped on Windows, all others run there.
+  - Every class lives in its own .pm file, so each module can be loaded
+    on its own (use Text::Nunjucks::Template, ::Context, ::Runtime::SafeString
+    and so on) and the distribution's provides metadata maps every package
+    to a file that loads. The AST node classes are ordinary modules, not
+    generated at load time. Loading a parent module (Environment, Nodes,
+    Runtime, ...) still loads the classes it used to define.
   - Requires Perl 5.40 or newer.
   - See "DIFFERENCES FROM NUNJUCKS" in the Text::Nunjucks documentation for
     every deliberate and every known open difference, and "SECURITY" before

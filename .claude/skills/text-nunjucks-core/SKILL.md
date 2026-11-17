@@ -44,13 +44,13 @@ that way. Upstream comments worth keeping come along.
 | `index.js` | `Text::Nunjucks` (`configure`, `render`, `render_string`, `compile`, …) |
 | `lib.js` | `Text::Nunjucks::Lib` (incl. `TemplateError`, `escape`) |
 | `object.js` | no module — Moo replaces `Obj`/`EmitterObj` (ADR 0002) |
-| `lexer.js` | `Text::Nunjucks::Lexer` |
-| `nodes.js` | `Text::Nunjucks::Nodes` |
-| `parser.js` | `Text::Nunjucks::Parser` |
+| `lexer.js` | `Text::Nunjucks::Lexer`, `::Lexer::Token`, `::Lexer::Tokenizer` |
+| `nodes.js` | `Text::Nunjucks::Nodes` (loads the classes), one file per node type under `::Nodes::` |
+| `parser.js` | `Text::Nunjucks::Parser`, `::Parser::Parser` |
 | `transformer.js` | `Text::Nunjucks::Transformer` |
-| `compiler.js` | `Text::Nunjucks::Compiler` — emits **Perl** source |
-| `runtime.js` | `Text::Nunjucks::Runtime` (`Frame`, `SafeString`, `member_lookup`, …) |
-| `environment.js` | `Text::Nunjucks::Environment`, `::Context`, `::Template` |
+| `compiler.js` | `Text::Nunjucks::Compiler`, `::Compiler::Compiler` — emits **Perl** source |
+| `runtime.js` | `Text::Nunjucks::Runtime` (`member_lookup`, …), `::Runtime::Frame`, `::Runtime::SafeString`, `::Runtime::None`, `::Runtime::KwArgs`, `::Runtime::Regex` |
+| `environment.js` | `Text::Nunjucks::Environment`, `::Context`, `::Template` (one file each) |
 | `filters.js` / `tests.js` / `globals.js` | `::Filters` / `::Tests` / `::Globals` |
 | `loader.js`, `node-loaders.js`, `precompiled-loader.js` | `::Loader`, `::Loader::FileSystem`, `::Loader::Precompiled` |
 | `precompile.js` | `::Precompile` |
@@ -73,8 +73,13 @@ error message text. Only the Perl-facing API is snake_cased.
   `true`, `"1" + 1` is `"11"`, `1 + 1` is `2`. Never decide a value's kind with a
   regex (`looks_like_number`) — a numeric *string* is a string. Values decoded
   from JSON may arrive as `JSON::PP::Boolean`; normalise at the boundary.
-- **Moo (ADR 0002).** Classes and roles per skill `getty-perl-moo`. AST node
-  classes are generated from field lists the way `nodes.js` does it.
+- **Moo (ADR 0002).** Classes and roles per skill `getty-perl-moo`.
+- **One class per file (ADR 0020).** Every class is its own `.pm` at the path
+  its name implies (`Lexer::Token` is `Lexer/Token.pm`); no inner `package`
+  blocks, no classes generated at run time. AST node types are one hand-written
+  file per `extend()` call in `nodes.js`. Class names stay upstream-shaped
+  (`Parser::Parser`, `Compiler::Compiler`). Every class loads alone via
+  `require`; `xt/one-class-per-file.t` guards it.
 - **CPS kept (ADR 0003).** The compiler emits callback-style code exactly like
   upstream: `sub root ( $env, $context, $frame, $runtime, $cb )`, errors through
   `$cb->($err)`, async tags and async filters as nested callbacks. Callbacks run
