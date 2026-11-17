@@ -1,0 +1,27 @@
+---
+class: standard
+created: 2026-11-17T19:51:13Z
+id: 123
+priority: high
+started: 2026-11-17T19:51:27Z
+status: todo
+tags:
+- bug
+- runtime
+title: 'Call-stack depth limit: endless template recursion throws upstream''s RangeError
+  instead of running until out of memory'
+updated: 2026-11-17T20:10:03Z
+---
+
+Decided by the maintainer 2026-11-17: the port gets a recursion limit; warning only (or nothing, since k83) is not enough. Splits the call-stack part off decision k69; heap cap and max string length stay on k69.
+
+Today: {% macro f(n) %}{{ f(n+1) }}{% endmacro %}{{ f(0) }} runs until the OS kills the process; upstream gives a catchable render error "RangeError: Maximum call stack size exceeded" (about 2,500 levels on node v24). Same for a template that includes itself without end, recursive imports, and long asyncEach nesting.
+
+Constraints for the worker (main agent):
+- the error reaches the caller through the normal render error path (callback or die), with upstream's message text and wrapping, checked against the oracle;
+- one depth limit, above the highest depth that renders upstream on every measured path, so no template that renders upstream fails in the port;
+- small per-call cost, measured;
+- the k83 pragmas stay.
+Needs an ADR (the threshold cannot match V8, which counts stack bytes, not calls).
+
+2026-11-17: the worker session on this card ended without leaving code. 0.001 is released without the limit (its docs already say an endless recursion runs until memory is exhausted); this card moves to the next release, together with k20.
