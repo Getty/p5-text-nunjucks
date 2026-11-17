@@ -5,6 +5,7 @@ our $VERSION = '0.001';
 
 use Moo;
 use builtin qw( true false );
+use feature qw( current_sub );
 use Scalar::Util qw( blessed weaken );
 use Text::Nunjucks::Lib;
 use Text::Nunjucks::Lib::Error;
@@ -455,8 +456,13 @@ sub waterfall {
   # the real a-sync-waterfall is deferred.
   my @tasks = @$tasks;
   my $i     = 0;
-  my $next;
-  $next = sub {
+
+  # Port-only (k107): the step hands itself on as __SUB__, never as a captured
+  # $next -- a closure that closes over the variable holding it is a reference
+  # cycle, and Perl frees by reference count: tasks and callback, and through
+  # them the render's Context, Frame and Template, would live forever. $next
+  # only starts the chain.
+  my $next = sub {
     my ( $err, @args ) = @_;
     if ($err) {
       $callback->($err) if $callback;
@@ -467,7 +473,7 @@ sub waterfall {
       return;
     }
     my $task = $tasks[ $i++ ];
-    $task->( @args, $next );
+    $task->( @args, __SUB__ );
   };
   $next->(undef);
   return;

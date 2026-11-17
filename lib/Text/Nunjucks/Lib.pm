@@ -6,6 +6,7 @@ our $VERSION = '0.001';
 use strict;
 use warnings;
 use builtin qw( is_bool created_as_number true false );
+use feature qw( current_sub );
 use Carp qw( croak );
 use Config ();
 use Cwd ();
@@ -390,11 +391,14 @@ sub async_iter {
   my ( $self, $arr, $iter, $cb ) = @_;
   my $i = -1;
 
-  my $next;
-  $next = sub {
+  # Port-only (k107): JS's `function next()` names itself; here the closure
+  # hands itself on as __SUB__. Closing over the variable that holds it would
+  # be a reference cycle that keeps $iter, $cb and everything they reach (the
+  # render's Context, Frame and Template) alive for the life of the process.
+  my $next = sub {
     $i++;
     if ( $i < scalar @$arr ) {
-      $iter->( $arr->[$i], $i, $next, $cb );
+      $iter->( $arr->[$i], $i, __SUB__, $cb );
     } else {
       $cb->();
     }
@@ -426,12 +430,12 @@ sub async_for {
     ? sub { my $k = shift; $obj->exists($k) ? $obj->get($k) : undef }
     : sub { my $k = shift; $obj->{$k} };
 
-  my $next;
-  $next = sub {
+  # __SUB__, not a captured $next: see async_iter (k107).
+  my $next = sub {
     $i++;
     my $k = $keys->[$i];
     if ( $i < $len ) {
-      $iter->( $k, $lookup->($k), $i, $len, $next );
+      $iter->( $k, $lookup->($k), $i, $len, __SUB__ );
     } else {
       $cb->();
     }

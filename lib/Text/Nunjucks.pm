@@ -281,8 +281,9 @@ beyond 64 bits arrive as strings in the corpus harness.
 
 Keep one long-lived L<Text::Nunjucks::Environment>. A cached template holds its
 Environment, so an Environment with a caching loader is never freed; a
-render that uses C<include>, C<asyncEach> or C<super()>, or macros and C<caller>
-that read outer names, keeps its context alive.
+render keeps its context alive when its template defines a macro or C<caller>
+block that reads a name from outside itself, stores a macro with C<set>, or
+uses C<asyncEach> or C<asyncAll> with four or more loop names.
 
 =item Speed
 

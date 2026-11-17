@@ -22,9 +22,12 @@ no warnings 'experimental::builtin';
 # it emits are Perl. The systematic JS->Perl translations are:
 #   * every emitted local is `$name` (JS bare `name`); the root shape is
 #     `$root = sub { my ($env,$context,$frame,$runtime,$cb) = @_; ... }`
-#     and blocks are `$b_<name> = sub {...}`, forward-declared lexicals so
-#     super()/getBlock can reference them; getCode()'s string eval()s to the
-#     { root => \&, b_<name> => \& } hashref (upstream: new Function()).
+#     and blocks are `$b_<name> = sub {...}`, assigned to forward-declared
+#     lexicals; inside its own body a block sub names itself with a per-call
+#     `my $b_<name> = CORE::__SUB__;` (what JS's `function b_<name>` gives for
+#     free), which is what super() passes on -- see compile_root. getCode()'s
+#     string eval()s to the { root => \&, b_<name> => \& } hashref (upstream:
+#     new Function()).
 #   * try/catch -> eval {} + `if (my $e = $@)`; `cb(...)` -> `$cb->(...)`.
 #   * EVERY operator goes through a Runtime op_* call, never a native Perl
 #     operator (Perl's +,==,... lack JS semantics) -- compileAdd -> op_add,
@@ -1346,10 +1349,11 @@ sub compile_root {
 
   $frame = $self->frame_class->new;
 
-  # Collect block names up front: they double as the forward-declared lexical
-  # subs ($b_<name>) that super()/getBlock reference. The dedup check is
-  # upstream's ("defined more than once"), moved ahead of emission so the
-  # forward declaration is well-formed (it throws either way, same message).
+  # Collect block names up front: they double as the forward-declared lexicals
+  # ($b_<name>) the block subs are assigned to and the returned hashref reads.
+  # The dedup check is upstream's ("defined more than once"), moved ahead of
+  # emission so the forward declaration is well-formed (it throws either way,
+  # same message).
   my $blocks = $node->find_all( $self->node('Block') );
   my @block_names;
   my %seen;
@@ -1382,6 +1386,18 @@ sub compile_root {
     my $name = $block->name->value;
 
     $self->_emit_func_begin( $block, 'b_' . $name );
+
+    # Port-only (k109). Upstream's `function b_<name>(...)` is a named
+    # function: inside its body the name is the function itself, and
+    # compile_super passes it to get_super, which finds the block by identity.
+    # A Perl anonymous sub has no name, and reading the file-level $b_<name>
+    # from inside the sub would make the sub capture the variable that holds
+    # it -- a reference cycle that keeps the compiled code of the template
+    # alive for the life of the process. So every block sub binds its own name
+    # per call; whatever the body emits as $b_<name>, at any closure depth,
+    # reads this lexical. CORE:: because the source is eval'd with no feature
+    # bundle in scope, and must not depend on who evals it.
+    $self->_emit_line( 'my $b_' . $name . ' = CORE::__SUB__;' );
 
     my $tmp_frame = $self->frame_class->new;
     $self->_emit_line('$frame = $frame->push(1);');
