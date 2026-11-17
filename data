@@ -1,0 +1,67 @@
+---
+claimed_at: 2026-11-17T06:47:41Z
+claimed_by: text-nunjucks-worker
+class: standard
+completed: 2026-11-17T06:47:41Z
+created: 2026-11-13T20:22:28Z
+id: 107
+priority: high
+started: 2026-11-17T05:48:48Z
+status: done
+tags:
+- bug
+- memory
+- release-0.001
+- release-blocker
+title: 'Leak: waterfall and Lib async_iter/async_for capture their own $next -- every
+  include, asyncEach and cache-miss get_template leaks closures, Context and caller
+  data'
+updated: 2026-11-17T06:47:41Z
+---
+
+Found by the pre-release audit 2026-11-13 (fidelity-auditor; reproduced by the main agent).
+
+One long-lived Environment with a cached FileSystemLoader -- what the Environment POD recommends -- still grows per render:
+- plain template (for/if/set/filters): 0 kB/render
+- A{% include "part.njk" %}B: 7.87 kB/render (3000 renders: RSS 23148 -> 46752 kB, main-agent probe at HEAD 1a9a608)
+- 300 includes in a for loop: 1.4 MB/render; with a 2000-row context the whole context is kept (~730 kB per request)
+- asyncEach over 20 items ~50 kB; each 'template not found' ~4.5 kB; include ignore missing of a missing template ~12 kB; noCache loader 4 kB/render (51 kB with one include)
+
+Cause (auditor, each confirmed by a scratch patch that removes the leak): Environment.pm:464-478 waterfall and Lib.pm:391-401 / 427-438 async_iter / async_for close over the coderef held in $next -- a self-reference cycle per call. Port-only (JS has a tracing GC). Fix direction validated in scratch: __SUB__ (feature current_sub) instead of the captured $next; leak probes then measure 0 kB and the suite stays green.
+
+Probe: one Environment, Loader::FileSystem(['views']), warm 200 renders, then render N times and compare VmRSS from /proc/self/status.
+
+Done when: a regression test proves include / asyncEach / cache-miss renders free their Context (weaken + is-freed check, no new prereq), and the probes read 0 kB/render.
+
+Release blocker: a long-running process (web app) grows without bound. skilletor (short-lived CLI, own loader) is not affected. See also the macro/Context cycle card and k96.
+
+2026-11-17 main agent, re-diagnosed at HEAD 621ad19: cause confirmed. waterfall (Environment.pm:458) and Lib async_iter / async_for (Lib.pm:393, :429) do 'my $next; $next = sub { ... $next ... }' -- the closure holds itself and, through tasks and callback, the render's Context, Frame and Template. Count probe (weak refs on every Context / Frame / Template created, render_string x300): include, include ignore missing and asyncEach each leave 1 Context + 1 Frame + 1 Template per render; asyncAll leaves none. With __SUB__ in place of the captured $next (runtime monkeypatch, repo untouched) all three read 0. No design decision needed; ready for the worker.
+
+2026-11-17 main agent: order of work -- test-writer writes one port-only regression test file for k107, k108 and k109 (failing cases as TODO), then worker k107 + k109, fidelity-auditor, release-manager; k108 after that (same compiler file as k109).
+
+test-writer: t/10-leaks.t + t/corpus/render-macro-lifetime.json written (uncommitted); k107 cases are TODO until the fix
+
+2026-11-17 main agent: regression tests are in the tree (uncommitted): t/10-leaks.t (port-only, weaken + freed check, leaking cases TODO per card) and t/corpus/render-macro-lifetime.json (7 oracle-generated guard cases). Handing k107 to the worker.
+
+2026-11-17 06:07 worker: fix in the tree (uncommitted). waterfall (Environment.pm) and async_iter / async_for (Lib.pm) now build the step as 'my $next = sub { ... __SUB__ ... }' -- the closure hands itself on as __SUB__, $next only starts the chain. Feature enabled with 'use feature qw( current_sub );' at the top of both modules. All 10 k107 TODO cases in t/10-leaks.t pass with the fix (TODO marking still to be removed, full suite still to be run).
+
+2026-11-17 06:21 Done (uncommitted, tree commit-ready). Changed: lib/Text/Nunjucks/Environment.pm waterfall and lib/Text/Nunjucks/Lib.pm async_iter / async_for -- the step closure passes itself on as __SUB__ ('use feature qw( current_sub );' at the top of both modules), $next only starts the chain. No other closure of that shape in lib/ (searched every sub assigned to an already declared variable: only these three plus Filters' $rounder, which does not read itself). t/10-leaks.t: TODO removed from the 10 k107 cases; they are red against HEAD's modules and green with the fix. Verified: prove -lr t/ green, 22 files, 4635 tests, 0 skipped, 0 TODO passing; TODO left 103 counting subtests (59 top-level in t/corpus.t), 14 of them in t/10-leaks.t, all k108. prove -l xt/ green, 2 files, 192 tests. RSS probe (warm 200, then 3000 renders, VmRSS): include with cached loader 7.96 -> 0.000 kB/render; 300 includes in a for loop 1490 -> 0.000; asyncEach over 20 items 85 -> 0.001; missing template 4.7 -> 0.000; include ignore missing 47.6 -> 0.000; noCache loader with an include 51.9 -> 0.000. The 'Deep recursion on subroutine async_iter' warning in t/upstream/compiler.t is unchanged (still once; its line number moved from 399 to 400 because of the added use line).
+
+2026-11-17 06:38 fidelity-auditor verdict: code READY TO COMMIT; one doc fix has to ride along (doc-writer), three test-comment nits are optional. Nothing changed by me.
+
+Checks run by me on the uncommitted tree: prove -lr t/ -> PASS, 22 files, 4635 tests, 0 skipped, 103 TODO (59 corpus.t, 14 10-leaks.t all k108, 10 upstream/compiler.t, 9 upstream/loader.t, 5 upstream/filters.t, 4 upstream/tests.t, 1 upstream/runtime.t, 1 upstream/globals.t), 0 TODO passing. prove -l xt/ -> PASS, 2 files, 192 tests (oracle-live regenerated all 18 corpus files incl. render-macro-lifetime.json, none stale).
+
+1. Behaviour vs upstream. async_iter / async_for against lib.js asyncIter / asyncFor called directly in node: identical call order and arguments in 16 scenarios (sync, empty, deferred next, next called twice, next after the end, early done, array growing during the loop, iterator throwing, next identity). HEAD modules vs this tree: identical traces in all 27 scenarios incl. waterfall. __SUB__ is used directly in the step sub at all three sites (never inside a nested sub), so it is the same coderef $next held. Deferred use: a task / iterator that keeps the callback and calls it after the function returned completes correctly, and nothing is freed early -- 13 template shapes rendered through the callback API with an async filter that defers (include, asyncEach, asyncAll, extends + super, three levels), Environment and context dropped before the queue is drained: output, error and filter call order equal upstream (node) and HEAD. Callbacks are released afterwards (DESTROY markers: 2/2 freed in 10 sync / deferred / abandoned / error / die cases; 0/2 at HEAD).
+
+2. Tests prove it. Revert check with HEAD copies of the modules first in @INC: HEAD Environment.pm -> 7 red (include x4, asyncEach containing an include, both render-by-name include cases); HEAD Lib.pm -> 8 red (asyncEach, asyncEach over a dict, include of a missing template, ignore missing, noCache include, get_template ignore_missing, ...); all three HEAD modules -> 12 red = 10 k107 + 2 k109. So waterfall, async_iter and async_for are each caught on their own. Warm-up does not hide a per-render leak (3 renders counted, compared with 0).
+
+Findings, by severity:
+a) POD now wrong -- lib/Text/Nunjucks.pm LIMITATIONS / Memory (line 281-285) still says a render that uses include, asyncEach or super() keeps its context alive. After this change only macros / caller reading outer names do (k108), plus the k118 corner. Fix in the same commit (doc-writer).
+b) t/10-leaks.t case 19 "extends (get_template through waterfall)" is mislabelled: extends does not go through waterfall, and after the warm-up the parent is cached, so the case is green at HEAD too. It is a control, not a k107 regression case.
+c) t/10-leaks.t comments still speak in the present tense of the leak ("hold their own closure", line 102; "what leaks is the compiled block sub", line 206-209).
+d) The two closure-only controls (get_template of a missing name in callback form, render of a name no loader has) cannot see a closure cycle, they count Context / Frame / Template only; fine as controls, the marker probe above covers the gap.
+e) Note for the commit: t/10-leaks.t is "AM" -- the staged copy still has the TODO markers, the working copy is the one to commit.
+
+No ADR needed: no observable difference from upstream. Outside this card, filed: k118 (asyncEach / asyncAll with 4+ loop names: residual leak through the callback pushed onto the caller's row, and unbounded recursion where upstream raises RangeError -- same at HEAD), k119 (waterfall is not a port of a-sync-waterfall: repeated / late callbacks and error arguments differ -- same at HEAD, not reachable from templates).
+
+Committed in 04e3a23.
