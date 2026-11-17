@@ -1,0 +1,15 @@
+---
+class: standard
+created: 2026-11-13T07:27:57Z
+id: 69
+priority: low
+status: backlog
+tags:
+- decision
+title: 'Decision: resource exhaustion (V8 heap cap, max string length) is not emulated'
+updated: 2026-11-17T19:51:22Z
+---
+
+From the k17 job 2 audit (2026-11-13). center(1/0) / indent(1/0) make upstream's lib.repeat loop forever: measured on node v24.19.0 the process aborts after ~61 s at ~4 GB with 'FATAL ERROR: ... JavaScript heap out of memory' (no output, no catchable error). The port runs the same loop; Perl has no V8 heap cap, so it grows until the OS OOM killer. Widths around 3e8 OOM upstream while the port renders a 300 MB string; V8's max string length (2^29-24) has no Perl counterpart. Options: (1) one ADR line: resource limits of the JS engine (heap cap, max string length, call-stack depth) are not emulated; non-terminating/exhausting inputs are out of the fidelity contract and never go into the corpus (they would hang corpus-regen); (2) emulate V8's max string length as a RangeError in the repeat/append seams. Recommendation: (1) -- a guard would itself diverge (upstream gives no catchable error), and (2) only moves the cliff. Maintainer call.
+
+2026-11-17: the call-stack part is decided by the maintainer (emulate a limit) and moved to k123. Heap cap and max string length stay open here.
