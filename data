@@ -1,0 +1,41 @@
+---
+claimed_at: 2026-11-17T14:46:54Z
+claimed_by: p5-text-nunjucks
+class: standard
+completed: 2026-11-17T14:46:54Z
+created: 2026-09-22T05:00:31Z
+depends_on:
+- 17
+id: 34
+priority: high
+started: 2026-11-13T03:49:35Z
+status: done
+tags:
+- port
+- tests
+- upstream-suite
+title: Port tests/filters.js → t/upstream/filters.t (64 it)
+updated: 2026-11-17T14:46:54Z
+---
+
+Port upstream/nunjucks/tests/filters.js to t/upstream/filters.t, one it() at a time, oracle-grounded. Largest non-compiler suite; pairs with the k17 filters port.
+
+Promoted from backlog on the maintainer's instruction (2026-11-13): worked together with k17. Order: test-writer ports the suite first (TODO where Filters.pm is missing).
+
+Note (test-writer): t/upstream/filters.t ported, 64/64 it() (48 + 16 in the length describe), uncommitted. 344 assertions run as TODO (all fail with filter not found, 0 pass), 4 plain skips (length: new String, array with props, Map, Set; no ADR). No corpus yet: corpus.t has only mode-level TODO. TODO scheme: %TODO table at top of the file, title => reason, delete an entry when its filter lands. Nested TODOs outside the table: escape with custom-toString object; groupby integer-key ordering (2 assertions); both open mappings needing an ADR. Upstream filters.js is green (64/64) against real nunjucks via an expect.js shim. prove -lr t/: 15 files, 621 tests, PASS.
+
+Fidelity audit (2026-11-13): 64/64 titles in order, 242/242 equal() inputs aligned and replayed green against upstream; TODO removal turns assertions into real failures. Fixes sent to the test-writer: F1 dictsort contexts as Hash::Ordered (plain hash made a broken dictsort pass), F2 groupby integer-key TODO cites ADR 0011 + k51 (bug, not an open mapping), F3/F4 Map/Set/new String/array-with-props/toString cite k44 and use TODO like compiler.t, F5 true instead of 1, F6 header comments. Side note, harmless here: Test::Nunjucks::Util render() does not set opts.dev like util.js.
+
+test-writer: audit findings F1-F6 fixed in t/upstream/filters.t. dictsort contexts now Hash::Ordered; groupby integer-key TODO cites ADR 0011 + k51; Map/Set/new String/array-props/toString cite k44 as TODO+fail (no skips left); throwOnUndefined is builtin::true. File alone: 348 assertions, all TODO (0 pass, 0 skip, 0 unexpected passes).
+
+Committed c320c2b: t/upstream/filters.t ported as TODO (348 assertions, all TODO); stays open until k17 flips the TODOs
+
+filters.t: dropped TODO{replace}; only the 2 '| safe' asserts are nested TODO (k17 job 4), 35 replace asserts run for real. Shared reason reworded to 'k17: filter not ported yet (ADR 0015)'.
+
+c7e8cad: filters.t now has 12 more it()s running for real.
+
+10 more filters.t it()s run for real (0cf8d2c)
+
+2026-11-13 20:24 Pre-release audit (release-manager): the card's purpose is done -- filters.t committed, 64/64 it(), the 48 filter names match upstream filters.js, the 5 TODOs left wait on k44/ADR items, not on filters. Still in-progress with a claim; ready for the release-manager to close.
+
+Closing (release audit 2026-11-17): 64/64 it() ported and committed; remaining TODOs in filters.t cite k70, k81, k87, k93 and k44, not filters.
