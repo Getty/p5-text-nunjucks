@@ -1,0 +1,35 @@
+---
+class: standard
+created: 2026-11-17T06:38:07Z
+id: 119
+priority: low
+status: backlog
+tags:
+- bug
+title: 'Environment->waterfall is a minimal stand-in, not a port of a-sync-waterfall:
+  repeated or late task callbacks and the arguments of an error differ'
+updated: 2026-11-17T06:38:07Z
+---
+
+Found by the fidelity audit of k107 / k109 (2026-11-17). Not caused by that change: HEAD 621ad19 and the k107 tree give identical traces (27 scenarios).
+
+Upstream: environment.js:332 delegates to the a-sync-waterfall package (node_modules/a-sync-waterfall/index.js). The port (Environment.pm waterfall) is a hand-written loop with one shared index; its own comment calls it "minimal". No ADR records the difference.
+
+Measured by calling both with the same task lists (node on the upstream package, perl on the port):
+
+| scenario | upstream | port |
+|---|---|---|
+| empty task list | final() | final(undef) |
+| task errors with extra args: cb("E1","x","y") | final("E1","x","y") | final("E1") |
+| task errors twice: cb("E1"); cb("E2") | final called once (callback is replaced by a no-op after the first error) | final("E1") and final("E2") |
+| error, then a late success from the same task | next task runs, final is not called again | next task runs, final(undef,"r") is called |
+| first task succeeds twice: cb(null,"a"); cb(null,"A") | tasks 2 and 3 run again with "A", final(null,"A23") | final(undef,"A") -- the shared index is already past the end |
+| last task calls back with a falsy first arg, cb(false) | final(false) -- the last task gets the final callback itself, unwrapped | final(undef) |
+
+Same on both sides: order and arguments of a normal run, deferred task callbacks, a task without callback.
+
+Reach: not from templates as far as measured. compile_include emits three tasks that each call their callback once, and its _make_callback wrappers send an error straight to the root cb, so waterfall's error path is not used by compiled code. It shows only when user code calls a callback twice (an async loader, async filter or extension inside an include) or calls $env->waterfall itself.
+
+Also stale in the same sub: the comment says no corpus case exercises waterfall yet; t/corpus has include cases in four files now (render-environment, compiler, render-strings-utf16, render-loaders).
+
+Wanted: either port a-sync-waterfall function by function (makeIterator / wrapIterator, per-step index, callback neutralised after an error), keeping the k107 rule that the step never captures the variable holding it, or record the difference in an ADR.
