@@ -1,0 +1,18 @@
+---
+class: standard
+created: 2026-11-13T12:58:14Z
+id: 88
+priority: low
+status: backlog
+tags:
+- bug
+- runtime
+title: Macro/function own properties length and name read as undefined
+updated: 2026-11-17T09:53:55Z
+---
+
+Oracle vs port (k17 job 3 and job 5 workers, 2026-11-13): a macro is a JS function with own length (declared parameter count) and name. [m]|groupby("length") groups under 0 and groupby("name") under "macro" upstream; m|length -> 0 upstream; the port gives undefined / empty (a Perl coderef / macro object has no such properties). Fix: member_lookup / js_member_read / has_own_prop / Lib keys treat a macro (Runtime make_macro) as a function object with length = number of declared positional args and name per upstream makeMacro, measured with the oracle; plain caller coderefs: check what the oracle-equivalent is (a JS function passed by the caller) and report whether it needs a decision. Oracle corpus cases.
+
+Also own 'prototype' (fidelity audit k17 job 5, 2026-11-13): oracle {% macro m() %}x{% endmacro %}{{ m.prototype }} -> [object Object], port -> empty; [m]|groupby("prototype") groups under [object Object] upstream, under undefined in the port. Same root cause: a macro has no function-object own properties (length, name, prototype).
+
+2026-11-17 test-writer, k108 review: {{ m|length }} on a macro and {{ f|length }} on a function held in a variable are oracle 0, port empty; both are corpus cases with a todo naming this card in t/corpus/render-known-differences-k108.json (found during k108, unrelated to the leak).
