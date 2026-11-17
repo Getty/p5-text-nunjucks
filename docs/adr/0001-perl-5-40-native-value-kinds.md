@@ -11,8 +11,11 @@ traditionally cannot see: `{{ 1 == 1 }}` renders `true`, `{{ '1' + 1 }}` is `11`
 while `{{ 1 + 1 }}` is `2`, `1 === '1'` is false, the `number` and `string`
 tests tell the two apart. A 1:1 port has to reproduce all of it.
 
-Options were (1) Perl 5.40, where `builtin::is_bool`, `created_as_number`,
-`true` and `false` are stable; (2) Perl 5.36, same functions but experimental;
+Options were (1) Perl 5.40, where of these only `builtin::true` and
+`builtin::false` are stable, while `builtin::is_bool` and
+`builtin::created_as_number` are still experimental (the modules that use them
+switch off the `experimental::builtin` warning); (2) Perl 5.36, same functions
+but all experimental;
 (3) an old minimum like the sibling dists, with wrapper objects for booleans and
 numbers or `B`-flag heuristics.
 

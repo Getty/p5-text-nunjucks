@@ -115,8 +115,12 @@ environment) does not exist: C<Text::Nunjucks> loads no code and has no
 functions or class methods. Its Perl calling convention is undecided.
 Also not ported: jinja-compat, C<precompile> and its CLI,
 C<NodeResolveLoader>, C<WebLoader>, chokidar C<watch> (a truthy C<watch> dies
-with C<watch requires chokidar to be installed>, ADR 0018) and the browser
-bundles. The Perl shape of an extension object (C<add_extension>) is not settled.
+with C<watch requires chokidar to be installed>, ADR 0018), the browser
+bundles (ADR 0022), C<express-app.js> (upstream's C<Environment#express(app)>, also reached by
+C<nunjucks.configure({ express: app })>; C<Text::Nunjucks::Environment> has no
+C<express> method) and C<precompile-global.js> (the wrapper that emits
+JavaScript source for C<precompile>; the Perl format of a precompiled template is
+open). The Perl shape of an extension object (C<add_extension>) is not settled.
 
 =cut
 
@@ -200,14 +204,14 @@ A number is an IEEE double even on a perl built with C<long double> or
 C<quadmath> NVs or with 4-byte IVs, so C<{{ 0.1 + 0.2 }}> prints
 C<0.30000000000000004> everywhere. Nothing changes on a double, 64-bit perl.
 
-=item Scope and platform (ADR 0018)
+=item Scope and platform (ADR 0018, ADR 0022)
 
 C<FileSystemLoader> and C<PrecompiledLoader> are ported
 (L<Text::Nunjucks::Loader::FileSystem>, L<Text::Nunjucks::Loader::Precompiled>).
-C<NodeResolveLoader>, C<WebLoader>, chokidar C<watch> and the browser branches of
-C<Environment> are out of scope. Node's C<path> and C<fs> are ported as their
-POSIX behaviour: C</> is the only separator, and paths follow the POSIX model of
-node's C<path>. Windows paths (node's C<path.win32>) come later; the tests that
+C<NodeResolveLoader>, C<WebLoader>, chokidar C<watch>, the browser branches of
+C<Environment>, C<express-app.js> and C<precompile-global.js> are out of scope.
+Node's C<path> and C<fs> are ported as their POSIX behaviour:
+C</> is the only separator, and paths follow the POSIX model of node's C<path>. Windows paths (node's C<path.win32>) come later; the tests that
 rest on the POSIX model (path resolution, directory and permission errors, file
 locks) are skipped on Windows, and all others run there.
 
