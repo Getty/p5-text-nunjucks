@@ -1,7 +1,7 @@
 package Text::Nunjucks::Lib;
 # ABSTRACT: 1:1 port of Nunjucks src/lib.js -- foundation utilities and escaping
 
-our $VERSION = '0.001';
+our $VERSION = '0.002';
 
 use strict;
 use warnings;

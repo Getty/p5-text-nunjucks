@@ -1,7 +1,7 @@
 package Text::Nunjucks::Nodes::Caller;
 # ABSTRACT: AST node Caller (fields name, args, body), ported from nodes.js
 
-our $VERSION = '0.001';
+our $VERSION = '0.002';
 
 use Moo;
 use namespace::autoclean;

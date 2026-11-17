@@ -1,7 +1,7 @@
 package Text::Nunjucks::Nodes;
 # ABSTRACT: AST node types for Text::Nunjucks, ported 1:1 from nodes.js
 
-our $VERSION = '0.001';
+our $VERSION = '0.002';
 
 use strict;
 use warnings;

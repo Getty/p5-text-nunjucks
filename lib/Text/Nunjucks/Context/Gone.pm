@@ -1,7 +1,7 @@
 package Text::Nunjucks::Context::Gone;
 # ABSTRACT: Stands in for the Context of a render that is over (ADR 0021)
 
-our $VERSION = '0.001';
+our $VERSION = '0.002';
 
 use strict;
 use warnings;

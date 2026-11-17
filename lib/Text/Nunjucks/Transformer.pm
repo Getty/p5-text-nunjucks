@@ -1,7 +1,7 @@
 package Text::Nunjucks::Transformer;
 # ABSTRACT: 1:1 port of Nunjucks src/transformer.js -- the async CPS rewrite
 
-our $VERSION = '0.001';
+our $VERSION = '0.002';
 
 use strict;
 use warnings;

@@ -1,7 +1,7 @@
 package Text::Nunjucks::Runtime::Regex;
 # ABSTRACT: A template regex literal, with the members of a JS RegExp (ADR 0013)
 
-our $VERSION = '0.001';
+our $VERSION = '0.002';
 
 use Moo;
 use overload

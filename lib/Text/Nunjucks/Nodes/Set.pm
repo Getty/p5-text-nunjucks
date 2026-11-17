@@ -1,7 +1,7 @@
 package Text::Nunjucks::Nodes::Set;
 # ABSTRACT: AST node Set (fields targets, value), ported from nodes.js
 
-our $VERSION = '0.001';
+our $VERSION = '0.002';
 
 use Moo;
 use namespace::autoclean;

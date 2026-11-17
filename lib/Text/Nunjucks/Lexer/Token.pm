@@ -1,7 +1,7 @@
 package Text::Nunjucks::Lexer::Token;
 # ABSTRACT: One lexer token -- type, value, line and column (lexer.js token())
 
-our $VERSION = '0.001';
+our $VERSION = '0.002';
 
 use Moo;
 use namespace::autoclean;

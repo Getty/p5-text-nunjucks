@@ -1,7 +1,7 @@
 package Text::Nunjucks::Environment;
 # ABSTRACT: 1:1 port of Nunjucks src/environment.js -- the template Environment
 
-our $VERSION = '0.001';
+our $VERSION = '0.002';
 
 use Moo;
 use builtin qw( true false );

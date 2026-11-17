@@ -1,7 +1,7 @@
 package Text::Nunjucks::Nodes::Mod;
 # ABSTRACT: AST node Mod (fields left, right), ported from nodes.js
 
-our $VERSION = '0.001';
+our $VERSION = '0.002';
 
 use Moo;
 use namespace::autoclean;

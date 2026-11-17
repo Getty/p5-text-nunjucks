@@ -1,7 +1,7 @@
 package Text::Nunjucks::Runtime::KwArgs;
 # ABSTRACT: Marker class for keyword arguments, the __keywords hash (ADR 0009)
 
-our $VERSION = '0.001';
+our $VERSION = '0.002';
 
 use strict;
 use warnings;

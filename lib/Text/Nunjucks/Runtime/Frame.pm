@@ -1,7 +1,7 @@
 package Text::Nunjucks::Runtime::Frame;
 # ABSTRACT: A scope of template variables (runtime.js class Frame)
 
-our $VERSION = '0.001';
+our $VERSION = '0.002';
 
 use Moo;
 use Text::Nunjucks::Runtime;

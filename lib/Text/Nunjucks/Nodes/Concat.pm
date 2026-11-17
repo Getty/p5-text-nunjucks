@@ -1,7 +1,7 @@
 package Text::Nunjucks::Nodes::Concat;
 # ABSTRACT: AST node Concat (fields left, right), ported from nodes.js
 
-our $VERSION = '0.001';
+our $VERSION = '0.002';
 
 use Moo;
 use namespace::autoclean;

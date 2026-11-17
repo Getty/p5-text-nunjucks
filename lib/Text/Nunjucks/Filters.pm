@@ -1,7 +1,7 @@
 package Text::Nunjucks::Filters;
 # ABSTRACT: 1:1 port of Nunjucks src/filters.js -- the built-in filters
 
-our $VERSION = '0.001';
+our $VERSION = '0.002';
 
 use strict;
 use warnings;

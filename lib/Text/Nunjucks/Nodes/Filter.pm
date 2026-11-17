@@ -1,7 +1,7 @@
 package Text::Nunjucks::Nodes::Filter;
 # ABSTRACT: AST node Filter (fields name, args), ported from nodes.js
 
-our $VERSION = '0.001';
+our $VERSION = '0.002';
 
 use Moo;
 use namespace::autoclean;

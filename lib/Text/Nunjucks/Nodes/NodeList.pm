@@ -1,7 +1,7 @@
 package Text::Nunjucks::Nodes::NodeList;
 # ABSTRACT: AST node holding a list of child nodes (nodes.js class NodeList)
 
-our $VERSION = '0.001';
+our $VERSION = '0.002';
 
 use Moo;
 use namespace::autoclean;

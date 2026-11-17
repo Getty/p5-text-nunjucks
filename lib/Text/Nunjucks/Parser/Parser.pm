@@ -1,7 +1,7 @@
 package Text::Nunjucks::Parser::Parser;
 # ABSTRACT: The recursive-descent parser (parser.js class Parser)
 
-our $VERSION = '0.001';
+our $VERSION = '0.002';
 
 use Moo;
 use Scalar::Util qw( blessed );

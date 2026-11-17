@@ -1,7 +1,7 @@
 package Text::Nunjucks::Nodes::For;
 # ABSTRACT: AST node For (fields arr, name, body, else_), ported from nodes.js
 
-our $VERSION = '0.001';
+our $VERSION = '0.002';
 
 use Moo;
 use namespace::autoclean;

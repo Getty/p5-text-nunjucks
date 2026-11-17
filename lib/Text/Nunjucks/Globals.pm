@@ -1,7 +1,7 @@
 package Text::Nunjucks::Globals;
 # ABSTRACT: 1:1 port of Nunjucks src/globals.js -- the built-in global functions
 
-our $VERSION = '0.001';
+our $VERSION = '0.002';
 
 use strict;
 use warnings;

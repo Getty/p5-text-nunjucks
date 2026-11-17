@@ -1,7 +1,7 @@
 package Text::Nunjucks::Template;
 # ABSTRACT: A compiled template that renders (environment.js class Template)
 
-our $VERSION = '0.001';
+our $VERSION = '0.002';
 
 use Moo;
 use Scalar::Util qw( refaddr weaken );

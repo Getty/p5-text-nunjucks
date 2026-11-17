@@ -1,7 +1,7 @@
 package Text::Nunjucks::Nodes::Root;
 # ABSTRACT: AST node Root (fields children), ported from nodes.js
 
-our $VERSION = '0.001';
+our $VERSION = '0.002';
 
 use Moo;
 use namespace::autoclean;

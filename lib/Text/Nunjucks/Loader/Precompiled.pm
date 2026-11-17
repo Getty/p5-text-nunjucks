@@ -1,7 +1,7 @@
 package Text::Nunjucks::Loader::Precompiled;
 # ABSTRACT: 1:1 port of Nunjucks src/precompiled-loader.js -- templates from precompiled code objects
 
-our $VERSION = '0.001';
+our $VERSION = '0.002';
 
 use Moo;
 use Text::Nunjucks::Runtime;

@@ -1,7 +1,7 @@
 package Text::Nunjucks::Nodes::Value;
 # ABSTRACT: Abstract AST node with a value field (nodes.js class Value)
 
-our $VERSION = '0.001';
+our $VERSION = '0.002';
 
 use Moo;
 use namespace::autoclean;

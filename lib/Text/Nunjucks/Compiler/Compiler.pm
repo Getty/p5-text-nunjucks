@@ -1,7 +1,7 @@
 package Text::Nunjucks::Compiler::Compiler;
 # ABSTRACT: The code generator, emitting Perl source (compiler.js class Compiler)
 
-our $VERSION = '0.001';
+our $VERSION = '0.002';
 
 use Moo;
 use builtin qw( is_bool created_as_number );

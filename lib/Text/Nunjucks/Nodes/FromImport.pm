@@ -1,7 +1,7 @@
 package Text::Nunjucks::Nodes::FromImport;
 # ABSTRACT: AST node FromImport (fields template, names, withContext), ported from nodes.js
 
-our $VERSION = '0.001';
+our $VERSION = '0.002';
 
 use Moo;
 use Text::Nunjucks::Nodes::NodeList;

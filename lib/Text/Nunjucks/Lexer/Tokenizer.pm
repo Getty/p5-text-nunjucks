@@ -1,7 +1,7 @@
 package Text::Nunjucks::Lexer::Tokenizer;
 # ABSTRACT: The template tokenizer (lexer.js class Tokenizer)
 
-our $VERSION = '0.001';
+our $VERSION = '0.002';
 
 use Moo;
 use Text::Nunjucks::Lib;

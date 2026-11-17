@@ -1,7 +1,7 @@
 package Text::Nunjucks::Loader;
 # ABSTRACT: 1:1 port of Nunjucks src/loader.js -- the base Loader (resolve/isRelative)
 
-our $VERSION = '0.001';
+our $VERSION = '0.002';
 
 use Moo;
 with 'Text::Nunjucks::EmitterObj';

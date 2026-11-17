@@ -1,7 +1,7 @@
 package Text::Nunjucks::Nodes::Node;
 # ABSTRACT: Base class of every AST node (nodes.js class Node)
 
-our $VERSION = '0.001';
+our $VERSION = '0.002';
 
 use Moo;
 use Scalar::Util qw( blessed );

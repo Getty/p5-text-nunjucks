@@ -1,7 +1,7 @@
 package Text::Nunjucks::Runtime::SafeString;
 # ABSTRACT: A string marked as safe from autoescaping (runtime.js SafeString)
 
-our $VERSION = '0.001';
+our $VERSION = '0.002';
 
 use strict;
 use warnings;

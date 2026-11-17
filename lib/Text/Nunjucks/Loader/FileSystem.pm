@@ -1,7 +1,7 @@
 package Text::Nunjucks::Loader::FileSystem;
 # ABSTRACT: 1:1 port of Nunjucks src/node-loaders.js FileSystemLoader -- templates from search paths on disk
 
-our $VERSION = '0.001';
+our $VERSION = '0.002';
 
 use Moo;
 use builtin qw( is_bool true false );

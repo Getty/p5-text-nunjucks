@@ -1,7 +1,7 @@
 package Text::Nunjucks::Nodes::CompareOperand;
 # ABSTRACT: AST node CompareOperand (fields expr, type), ported from nodes.js
 
-our $VERSION = '0.001';
+our $VERSION = '0.002';
 
 use Moo;
 use namespace::autoclean;

@@ -1,7 +1,7 @@
 package Text::Nunjucks::Runtime::None;
 # ABSTRACT: The JS null sentinel (ADR 0006)
 
-our $VERSION = '0.001';
+our $VERSION = '0.002';
 
 use strict;
 use warnings;
