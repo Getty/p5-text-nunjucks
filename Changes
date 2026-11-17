@@ -28,6 +28,11 @@ Revision history for Text-Nunjucks
     macro your own Perl code keeps and calls after its render ended dies when
     it reads a template variable (see "Template code that outlives its
     render" in DIFFERENCES FROM NUNJUCKS).
+  - No more "Deep recursion" warnings on long asyncEach loops, many
+    sequential includes or imports, templates that include themselves, or
+    macros that call themselves. The nesting is upstream's and the port sets
+    no depth limit of its own, so where Nunjucks stops with a RangeError the
+    port renders, bounded only by memory.
   - Requires Perl 5.40 or newer.
   - See "DIFFERENCES FROM NUNJUCKS" in the Text::Nunjucks documentation for
     every deliberate and every known open difference, and "SECURITY" before

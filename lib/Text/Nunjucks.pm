@@ -253,7 +253,14 @@ Known, not decided or not fixed yet. Each is a card; none is hidden.
 Set and Map as context values, C<new String(...)> wrappers and arrays with own
 properties cannot be built from Perl, and a C<toString> member is not honoured; the Unicode version of case mapping follows the running perl, Unicode 15
 on 5.40, not node's; V8's heap and string-length limits are not emulated, so
-an exhausting input (C<center(1/0)>) runs until the OS stops it; engine
+an exhausting input (C<center(1/0)>) runs until the OS stops it; the call
+stack is not limited either (ADR 0003): sequential includes and imports,
+C<asyncEach> items, a template that includes itself and a macro that calls itself
+nest one Perl call per step, as upstream nests one JavaScript call, so where
+upstream stops with a C<RangeError> (a few thousand C<asyncEach> items or macro
+self-calls, a few hundred sequential includes) the port renders, bounded only by
+memory, and an endless recursion runs until memory is exhausted (whether to emulate the JavaScript engine's limits is
+undecided); engine
 methods that read C<this>, such as C<cycler>'s C<next> and C<reset>, behave
 differently when called without C<memberLookup>; a loader object that is
 not a C<Text::Nunjucks::Loader> subclass and has only C<get_source> is not

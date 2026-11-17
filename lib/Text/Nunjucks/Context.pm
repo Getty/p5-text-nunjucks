@@ -114,6 +114,11 @@ sub get_super {
     die $self->_error_class->new( 'no super block available for "' . $name . '"' );
   }
 
+  # Port-only (k83): the block of a cached parent, called by a template that
+  # includes itself N deep, runs N calls deep, as upstream nests it (ADR 0003).
+  # Perl warns at the 100th nested call of a sub, at the call site; the depth
+  # is bounded by memory, not by Perl (see Lib async_iter).
+  no warnings 'recursion';
   $blk->( $env, $context, $frame, $runtime, $cb );
 }
 

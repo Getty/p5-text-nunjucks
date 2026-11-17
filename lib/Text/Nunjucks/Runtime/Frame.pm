@@ -63,6 +63,12 @@ sub lookup {
   my $p   = $self->parent;
   my $val = $self->variables->{$name};
   return $val if defined $val;                  # val !== undefined
+
+  # Port-only (k83): one call per frame up the chain, as upstream's lookup
+  # recurses; a template that includes itself N deep stands on N frames or
+  # more. Perl warns at the 100th nested call of a sub, at the call site; the
+  # depth is bounded by memory, not by Perl (see Lib async_iter).
+  no warnings 'recursion';
   return $p && $p->lookup($name);              # p && p.lookup(name)
 }
 
@@ -71,6 +77,9 @@ sub resolve {
   my $p = ( $for_write && $self->isolate_writes ) ? undef : $self->parent;
   my $val = $self->variables->{$name};
   return $self if defined $val;                 # val !== undefined
+
+  # one call per frame up the chain, as in lookup (k83)
+  no warnings 'recursion';
   return $p && $p->resolve($name);
 }
 

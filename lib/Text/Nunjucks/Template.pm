@@ -36,6 +36,9 @@ has _init_args        => ( is => 'ro' );
 # _root_render_func slot, set at compile.
 sub root_render_func {
   my ( $self, @args ) = @_;
+  # a cached parent of a template that includes itself N deep: N calls deep,
+  # as in render (k83)
+  no warnings 'recursion';
   return $self->_root_render_func->(@args);
 }
 
@@ -140,6 +143,12 @@ sub render {
   my $sync_result = undef;
   my $did_error   = 0;
 
+  # Port-only (k83): a cached template included N times in a row, or one that
+  # includes itself N deep, runs its root N calls deep, the next include
+  # running in the previous one's continuation -- as upstream nests them
+  # (ADR 0003). Perl warns at the 100th nested call of a sub, at the call site;
+  # the depth is bounded by memory, not by Perl (see Lib async_iter).
+  no warnings 'recursion';
   $self->_root_render_func->(
     $self->env, $context, $frame, $self->_runtime_class,
     sub {
@@ -278,6 +287,8 @@ sub _get_exported {
   # exports keeps it from then on.
   weaken( my $exporting = $context );
 
+  # N sequential imports of a cached template: N calls deep, as in render (k83)
+  no warnings 'recursion';
   $self->_root_render_func->(
     $self->env, $context, $frame, $self->_runtime_class,
     sub {

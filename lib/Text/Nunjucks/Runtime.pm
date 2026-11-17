@@ -102,6 +102,12 @@ sub make_macro {
       @args = @macro_args;
     }
 
+    # Port-only (k83): a macro that calls itself N deep enters its body N
+    # calls deep, as upstream nests one JS call per level. Perl warns at the
+    # 100th nested call of a sub, at the call site, and a template cannot
+    # switch a Perl warning off; the depth is bounded by memory, not by Perl
+    # (see Lib async_iter).
+    no warnings 'recursion';
     return $func->(@args);
   };
 }
@@ -962,6 +968,9 @@ sub call_wrap {
   # JS: obj.apply(context, args). The compiler binds member-call owners inside
   # member_lookup; a bare context coderef gets no `this` (ADR 0009), so the
   # Context passed as $context is not used as an invocant here.
+  # A macro that calls itself N deep comes through here N calls deep, as in
+  # make_macro (k83).
+  no warnings 'recursion';
   return $obj->( @$args );
 }
 
@@ -988,6 +997,14 @@ sub handle_error {
 
 sub async_each {
   my ( $self, $arr, $dimen, $iter, $cb ) = @_;
+
+  # Port-only (k83): the loop body $iter is entered once per item before the
+  # previous item's call has returned, as upstream nests one JS call per item
+  # (ADR 0003); an asyncEach inside a template that includes itself enters
+  # async_iter / async_for once per level. Perl warns at the 100th nested call
+  # of a sub, at the call site; the depth is bounded by memory, not by Perl,
+  # so that warning is off for the calls below (see Lib async_iter).
+  no warnings 'recursion';
 
   if ( Text::Nunjucks::Lib->is_array($arr) ) {
     my $len = scalar @$arr;

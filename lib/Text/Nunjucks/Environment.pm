@@ -369,6 +369,13 @@ sub get_template {
     }
   };
 
+  # Port-only (k83): an include, import or extends that loads its template
+  # runs the rest of the including template in this call's continuation, so N
+  # sequential (or N nested) loads enter async_iter N deep -- one JS call per
+  # load upstream as well (ADR 0003). Perl warns at the 100th nested call of a
+  # sub, at the call site; the depth is bounded by memory, not by Perl, so that
+  # warning is off from here to the end of get_template (see Lib async_iter).
+  no warnings 'recursion';
   $self->_lib->async_iter(
     $self->loaders,
     sub {

@@ -398,6 +398,12 @@ sub async_iter {
   my $next = sub {
     $i++;
     if ( $i < scalar @$arr ) {
+      # Port-only (k83): every item nests one call deeper, $iter being entered
+      # again before it has returned -- upstream's next() nests one JS call per
+      # item the same way (ADR 0003). Perl warns at the 100th nested call of a
+      # sub, here where the call is made; the depth is bounded by memory, not
+      # by Perl, so that warning is noise and is off for this call alone.
+      no warnings 'recursion';
       $iter->( $arr->[$i], $i, __SUB__, $cb );
     } else {
       $cb->();
@@ -435,6 +441,8 @@ sub async_for {
     $i++;
     my $k = $keys->[$i];
     if ( $i < $len ) {
+      # one call deeper per key, as in async_iter (k83)
+      no warnings 'recursion';
       $iter->( $k, $lookup->($k), $i, $len, __SUB__ );
     } else {
       $cb->();
