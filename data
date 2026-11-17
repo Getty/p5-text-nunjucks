@@ -1,0 +1,23 @@
+---
+claimed_at: 2026-11-17T04:42:49Z
+claimed_by: text-nunjucks-worker
+class: standard
+completed: 2026-11-17T04:42:49Z
+created: 2026-11-17T03:27:05Z
+id: 116
+priority: high
+started: 2026-11-17T03:30:54Z
+status: done
+tags:
+- refactor
+title: 'One class per .pm file: no inner packages, no generated node classes'
+updated: 2026-11-17T04:42:49Z
+---
+
+dzil build warns: [MetaProvides::Package] 17 provide map entries did not map to .pm files (inner package blocks in Lexer.pm, Parser.pm, Compiler.pm, Nodes.pm, Runtime.pm, Environment.pm). Maintainer decision (2026-11-17): no inner packages -- every class gets its own .pm at the path its name implies, INCLUDING the ~60 AST node types that Nodes.pm currently generates from @NODE_TYPES. This supersedes the "generated, not sixty hand-written class files" part of ADR 0002 -> new ADR. Done when: every package in lib/ lives in its own matching file, no string-eval class generation, dzil build has no MetaProvides warning, prove -lr t/ and prove -l xt/ green with unchanged counts, an xt/ guard test enforces the rule, ADR + core-skill module map updated.
+
+Split done: 68 new class files (57 Nodes::*, Lexer::Token/Tokenizer, Parser::Parser, Compiler::Compiler, Runtime::None/KwArgs/Regex/SafeString/Frame, Context, Template). No inner packages, no generated classes; parent modules still load their classes; all 86 modules require in a fresh process. prove -lr t/: 21 files, 4623 tests, 89 TODO, 0 skip (= baseline). prove -l xt/: 191 ok (guard 173, oracle-live 18). dzil build: MetaProvides warning gone, 86 provides at their own path. New files staged, not committed.
+
+Ready for review: pure structural refactor, behaviour unchanged (B::Deparse snapshot of all 86 packages diffed, every difference explained). Tokenizer now reads TOKEN_* through $self->lexer (same resolver pattern as Parser::Parser). ADR 0020, the ADR 0002 edit and the core-skill map are the doc-writer's; xt/one-class-per-file.t is untracked and not staged by me.
+
+Committed as 621ad19 (ADR 0020, guard xt/one-class-per-file.t)
