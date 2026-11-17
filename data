@@ -1,0 +1,34 @@
+---
+class: standard
+created: 2026-11-17T08:32:18Z
+id: 120
+priority: low
+status: backlog
+tags:
+- bug
+title: 'Async filter inside a call block or a filter block: upstream throws a ReferenceError
+  at render time, the port emits Perl that does not compile'
+updated: 2026-11-17T08:32:18Z
+---
+
+Found by the fidelity auditor during the k108 review (2026-11-17). Same result at HEAD 04e3a23 and with the k108 change: not part of k108.
+
+An async filter used in the body of {% call %} or {% filter %} is lifted by the transformer into a FilterAsync node whose symbol ends up glued to the next statement. Upstream emits JavaScript that happens to parse (one identifier) and fails when it runs; the port emits the same text with sigils, which is a Perl syntax error.
+
+Upstream emitted line (compiler.compile with asyncFilters ["af"]):
+  var t_5 = "";hole_1t_5 += runtime.suppressValue(runtime.contextOrFrameLookup(context, frame, "hole_0"), env.opts.autoescape);
+Port emitted line:
+  my $t_5 = "";$hole_1$runtime->js_string_append($t_5, ...context_or_frame_lookup($context, $frame, "hole_0")...);
+
+Measured in node against the pinned upstream with env.addFilter("af", (v, cb) => cb(null, "<" + v + ">"), true), renderString with a callback, context {x: "X"}:
+(1) {% macro w() %}<{{ caller() }}>{% endmacro %}{% call w() %}{{ x | af }}{% endcall %}!
+    upstream: the filter is called once, then the callback gets "(unknown path)\n  ReferenceError: hole_2t_5 is not defined"
+    port: the filter is never called; the callback gets "(unknown path)\n  syntax error at (eval N) line M, near \"$hole_2$runtime\"\nExecution of (eval N) aborted due to compilation errors.\n"
+(2) {% filter upper %}a{{ x | af }}b{% endfilter %}!
+    upstream: "(unknown path)\n  ReferenceError: hole_4output is not defined"
+    port: the same kind of Perl syntax error, near "$hole_4$runtime"
+The hole numbers come from the transformer gensym counter and depend on what was compiled before.
+
+For comparison, the neighbouring shape is 1:1 and needs nothing: an async filter inside a {% set s %}...{% endset %} capture block is not lifted at all (the capture body is not a field of Set), so upstream calls the filter with an undefined callback and renders its return value: {% set s %}[{{ x | af }}]{% endset %}{{ s }}! -> "[true]!" for a filter that returns true; the port does the same.
+
+Not pinned: the oracle cannot register an async filter, so this needs a Perl-side test with the expected text taken from node. Needed: either port the upstream bug (an error of kind ReferenceError with the glued name, raised at render time after the filter call) or record the difference in an ADR.
