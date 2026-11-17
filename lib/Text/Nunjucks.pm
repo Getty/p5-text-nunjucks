@@ -211,6 +211,23 @@ node's C<path>. Windows paths (node's C<path.win32>) come later; the tests that
 rest on the POSIX model (path resolution, directory and permission errors, file
 locks) are skipped on Windows, and all others run there.
 
+=item Template code that outlives its render (ADR 0021)
+
+A render holds its Context only for as long as something of it is still going to
+run, so a render leaves nothing behind. Three things follow. A macro, C<caller>
+block or extension body that your own Perl code keeps and calls after the render
+that made it has ended dies at its first read of the template's variables, with
+C<template code ran after its render had ended: its Context is gone>; one that
+reads only its own arguments works. An async filter or extension that calls its
+callback a second time dies in your event loop. If the result was already
+delivered, or the including render is still pending and the included template
+made no macro or C<call> block, and what follows reads a variable, it dies with
+that error where Nunjucks calls the render callback again. If the first answer
+was an error and the importing render had ended before the second came, it dies
+where Nunjucks runs the rest of the importing template. And C<get_exported> of
+L<Text::Nunjucks::Template> returns every top-level function wrapped, so a
+coderef of yours that the template re-exports is not the same reference any more.
+
 =item The random filter
 
 C<random> uses Perl's C<rand>, upstream V8's C<Math.random>: different
@@ -281,9 +298,18 @@ beyond 64 bits arrive as strings in the corpus harness.
 
 Keep one long-lived L<Text::Nunjucks::Environment>. A cached template holds its
 Environment, so an Environment with a caching loader is never freed; a
-render keeps its context alive when its template defines a macro or C<caller>
-block that reads a name from outside itself, stores a macro with C<set>, or
-uses C<asyncEach> or C<asyncAll> with four or more loop names.
+render keeps its context alive when it uses C<asyncEach> or C<asyncAll> with four
+or more loop names. Macros, C<caller> blocks, imports and includes do not leak a
+render (ADR 0021), but they cost memory until the render ends: every executed
+C<import> or C<from ... import> keeps the library's context, so an import in a
+loop of 20,000 holds about 6 kB per round until the render is over, and so does an
+included template that made a macro or C<call> block, about 8 kB for a macro
+with a dozen context variables (a plain partial is not kept). Contexts are still
+left behind when an included template that made a macro or C<call> block fails
+inside an C<asyncEach>, C<asyncAll> or a C<for> with an async filter after a
+deferral, when it hands a macro
+with an async construct to the including template and then never completes, and
+when an C<import> fails inside one of those loops.
 
 =item Speed
 

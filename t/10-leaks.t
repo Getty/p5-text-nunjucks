@@ -4,6 +4,8 @@ use warnings;
 use Test::More;
 use Scalar::Util qw( weaken );
 use Path::Tiny ();
+use JSON::MaybeXS ();
+use Text::Nunjucks::Loader;
 
 use Text::Nunjucks::Environment;
 use Text::Nunjucks::Context;
@@ -11,7 +13,7 @@ use Text::Nunjucks::Template;
 use Text::Nunjucks::Runtime::Frame;
 use Text::Nunjucks::Loader::FileSystem;
 
-# Port-only regression tests for reference-count leaks (k107, k108, k109).
+# Port-only regression tests for reference-count leaks (k107, k108, k109, k121).
 #
 # JavaScript has a tracing GC, so upstream cannot leak a closure cycle; Perl
 # frees by reference count and a cycle lives for the whole process. There is
@@ -71,12 +73,31 @@ my %files = (
   'page.njk'      => 'A{% include "part.njk" %}B',
   'child.njk'     => '{% extends "base.njk" %}{% block c %}{{ super() }}!{% endblock %}',
   'nosuper.njk'   => '{% extends "base.njk" %}{% block c %}child{% endblock %}',
+  'libinc.njk'    => '{% macro m() %}[{% include "part.njk" %}]{% endmacro %}',
+  'libafter.njk'  => '{% from "libplain.njk" import m %}{% macro n() %}[{{ m() }}]{% endmacro %}',
+  'incmac.njk'    => '{% macro m() %}[{% include "part.njk" %}{{ x }}]{% endmacro %}{{ m() }}',
+  'liblate.njk'   => '{% macro m() %}p{% endmacro %}{{ x | later }}',
+  # k108 round 2: included templates that hand a closure to the includer
+  'inchand.njk'   => q({% set v = 'V' %}{% macro m() %}<{{ v }}{{ x }}>{% endmacro %}{% set _ = bag.push(m) %}),
+  'inchandinc.njk' => q({% macro m() %}[{% include "part.njk" %}{{ x }}]{% endmacro %}{% set _ = bag.push(m) %}),
+  'inchandimp.njk' => q({% from "libplain.njk" import m %}{% set _ = bag.push(m) %}),
+  'inchandns.njk' => q({% import "lib.njk" as ns %}{% set _ = bag.push(ns.m) %}),
+  'inchandcall.njk' => q({% set v = 'V' %}{% call reg() %}<{{ v }}{{ x }}>{% endcall %}),
+  'inchandnest.njk' => q(g{% if true %}{% include "inchand.njk" %}{% endif %}),
+  'inchandasync.njk' => q({% macro m() %}[{{ x | af }}]{% endmacro %}{% set _ = bag.push(m) %}),
 );
 $dir->child($_)->spew_raw( $files{$_} ) for keys %files;
 
+# The async filters of the tests below. 'af' calls back at once; 'later' parks
+# its callback in @queue, to be called (or dropped) by the test, like an
+# application that answers from an event loop.
+our @queue;
 sub new_env {
   my (%o) = @_;
-  return Text::Nunjucks::Environment->new( Text::Nunjucks::Loader::FileSystem->new( ["$dir"], \%o ) );
+  my $env = Text::Nunjucks::Environment->new( Text::Nunjucks::Loader::FileSystem->new( ["$dir"], \%o ) );
+  $env->add_filter( af => sub { my ( $v, $cb ) = @_; $cb->( undef, "<$v>" ) }, 1 );
+  $env->add_filter( later => sub { my ( $v, $cb ) = @_; push @queue, sub { $cb->( undef, "<$v>" ) }; return }, 1 );
+  return $env;
 }
 
 my @ALL = qw( Context Frame Template );
@@ -109,31 +130,81 @@ my @cases = (
   [ 'asyncEach over a dict',                       '{% asyncEach k, v in {a:1,b:2} %}{{ k }}{{ v }}{% endeach %}', undef ],
   [ 'asyncEach containing an include',             '{% asyncEach i in [1,2] %}{% include "part.njk" %}{% endeach %}', undef ],
 
-  # ---- k108 cycle A: Context -> exported macro -> captured $context
-  [ 'macro reading an outer name',                 '{% macro m() %}{{ x }}{% endmacro %}{{ m() }}', 'k108' ],
-  [ 'macro reading an outer name, never called',   '{% macro m() %}{{ x }}{% endmacro %}', 'k108' ],
-  [ 'macro reading a global',                      '{% macro m() %}{{ range(0,2) | join("") }}{% endmacro %}{{ m() }}', 'k108' ],
-  [ 'macro calling a sibling macro',               '{% macro a() %}{{ b() }}{% endmacro %}{% macro b() %}B{% endmacro %}{{ a() }}', 'k108' ],
-  [ 'macro calling itself',                        '{% macro m(n) %}{% if n %}{{ m(n - 1) }}{% endif %}{{ n }}{% endmacro %}{{ m(2) }}', 'k108' ],
-  [ 'call block / caller()',                       '{% macro m() %}[{{ caller() }}]{% endmacro %}{% call m() %}c{% endcall %}', 'k108' ],
-  [ 'from-import of a macro reading an outer name','{% from "lib.njk" import m %}{{ m() }}', 'k108' ],
-  [ 'import as namespace, macro reading an outer name', '{% import "lib.njk" as l %}{{ l.m() }}', 'k108' ],
-  [ 'macro defined in a block, reading an outer name', '{% block c %}{% macro m() %}{{ x }}{% endmacro %}{{ m() }}{% endblock %}', 'k108' ],
+  # ---- k108 (fixed) cycle A: Context -> exported macro -> captured $context
+  [ 'macro reading an outer name',                 '{% macro m() %}{{ x }}{% endmacro %}{{ m() }}', undef ],
+  [ 'macro reading an outer name, never called',   '{% macro m() %}{{ x }}{% endmacro %}', undef ],
+  [ 'macro reading a global',                      '{% macro m() %}{{ range(0,2) | join("") }}{% endmacro %}{{ m() }}', undef ],
+  [ 'macro calling a sibling macro',               '{% macro a() %}{{ b() }}{% endmacro %}{% macro b() %}B{% endmacro %}{{ a() }}', undef ],
+  [ 'macro calling itself',                        '{% macro m(n) %}{% if n %}{{ m(n - 1) }}{% endif %}{{ n }}{% endmacro %}{{ m(2) }}', undef ],
+  [ 'call block / caller()',                       '{% macro m() %}[{{ caller() }}]{% endmacro %}{% call m() %}c{% endcall %}', undef ],
+  [ 'from-import of a macro reading an outer name','{% from "lib.njk" import m %}{{ m() }}', undef ],
+  [ 'import as namespace, macro reading an outer name', '{% import "lib.njk" as l %}{{ l.m() }}', undef ],
+  [ 'macro defined in a block, reading an outer name', '{% block c %}{% macro m() %}{{ x }}{% endmacro %}{{ m() }}{% endblock %}', undef ],
   [ 'macro that dies while called with a caller block (outer read)',
-    '{% macro m() %}{{ x }}{{ caller() }}{{ nope() }}{% endmacro %}{% call m() %}c{% endcall %}', 'k108', 'dies' ],
+    '{% macro m() %}{{ x }}{{ caller() }}{{ nope() }}{% endmacro %}{% call m() %}c{% endcall %}', undef, 'dies' ],
 
-  # ---- k108 cycle B: a macro stored in a frame that its captured $frame reaches
-  [ 'macro stored with set, no outer read',        '{% macro m() %}plain{% endmacro %}{% set f = m %}{{ f() }}', 'k108' ],
-  [ 'macro defined and set in a block, no outer read', '{% block c %}{% macro m() %}plain{% endmacro %}{% set f = m %}{{ f() }}{% endblock %}', 'k108' ],
+  # ---- k108 (fixed) cycle B: a macro stored in a frame that its captured $frame reaches
+  [ 'macro stored with set, no outer read',        '{% macro m() %}plain{% endmacro %}{% set f = m %}{{ f() }}', undef ],
+  [ 'macro defined and set in a block, no outer read', '{% block c %}{% macro m() %}plain{% endmacro %}{% set f = m %}{{ f() }}{% endblock %}', undef ],
   [ 'control: macro set inside a for loop, no outer read',  '{% for i in [1] %}{% macro m() %}plain{% endmacro %}{% set f = m %}{{ f() }}{% endfor %}', undef ],
   [ 'from-import with context inside a for loop, plain macro',
-    '{% for i in [1] %}{% from "libplain.njk" import m with context %}{{ m() }}{% endfor %}', 'k108' ],
+    '{% for i in [1] %}{% from "libplain.njk" import m with context %}{{ m() }}{% endfor %}', undef ],
   [ 'macro that dies while called with a caller block (no outer read)',
-    '{% macro m() %}{{ caller() }}{{ nope() }}{% endmacro %}{% call m() %}c{% endcall %}', 'k108', 'dies' ],
+    '{% macro m() %}{{ caller() }}{{ nope() }}{% endmacro %}{% call m() %}c{% endcall %}', undef, 'dies' ],
+  # ---- k108 cycle D: a macro made INSIDE a continuation (after an import,
+  # include, extends, super() or async filter) used to keep the enclosing
+  # closure, and with it the Context, alive -- even when it reads nothing
+  [ 'D: from-import, then a macro reading nothing',   '{% from "libplain.njk" import m %}{% macro n() %}plain{% endmacro %}{{ n() }}', undef ],
+  [ 'D: from-import, then a macro reading an outer name', '{% from "libplain.njk" import m %}{% macro n() %}{{ x }}{% endmacro %}{{ n() }}', undef ],
+  [ 'D: import, then a macro reading nothing',        '{% import "libplain.njk" as l %}{% macro n() %}plain{% endmacro %}{{ n() }}', undef ],
+  [ 'D: include, then a macro reading nothing',       '{% include "part.njk" %}{% macro n() %}plain{% endmacro %}{{ n() }}', undef ],
+  [ 'D: include, then a macro reading an outer name', '{% include "part.njk" %}{% macro n() %}{{ x }}{% endmacro %}{{ n() }}', undef ],
+  [ 'D: extends, then a macro reading nothing, used in a block',
+    '{% extends "base.njk" %}{% macro n() %}plain{% endmacro %}{% block c %}{{ n() }}{% endblock %}', undef ],
+  [ 'D: extends, then a macro reading an outer name, used in a block',
+    '{% extends "base.njk" %}{% macro n() %}{{ x }}{% endmacro %}{% block c %}{{ n() }}{% endblock %}', undef ],
+  [ 'D: async filter, then a macro reading nothing',  '{{ x | af }}{% macro n() %}plain{% endmacro %}{{ n() }}', undef ],
+  [ 'D: super() in a block, then a macro reading nothing',
+    '{% extends "base.njk" %}{% block c %}{% macro m() %}p{% endmacro %}{{ m() }}{{ super() }}{% endblock %}', undef ],
+  [ 'D: a library that imports, then defines a macro; that macro imported',
+    '{% from "libafter.njk" import n %}{{ n() }}', undef ],
+  [ 'D: call block after an include',                 '{% macro w() %}<{{ caller() }}>{% endmacro %}{% include "part.njk" %}{% call w() %}c{% endcall %}', undef ],
+  [ 'D: include, then a macro and a call block',      '{% include "part.njk" %}{% macro w() %}<{{ caller() }}>{% endmacro %}{% call w() %}c{% endcall %}', undef ],
+
+  # ---- k108 cycle C: a macro whose body holds an async construct captured
+  # the callback of the enclosing sub, behind which the caller waits
+  [ 'C: root macro containing an include',            '{% macro m() %}[{% include "part.njk" %}]{% endmacro %}{{ m() }}', undef ],
+  [ 'C: block macro containing an include',           '{% block c %}{% macro m() %}[{% include "part.njk" %}]{% endmacro %}{{ m() }}{% endblock %}', undef ],
+  [ 'C: imported macro containing an include',        '{% from "libinc.njk" import m %}{{ m() }}', undef ],
+  [ 'C: import as namespace, macro containing an include', '{% import "libinc.njk" as l %}{{ l.m() }}', undef ],
+  [ 'C: included template with a macro containing an include', '{% include "incmac.njk" %}', undef ],
+  [ 'C: macro containing asyncEach',                  '{% macro m() %}{% asyncEach i in [1,2] %}{{ i }}{% endeach %}{% endmacro %}{{ m() }}', undef ],
+  [ 'C: macro containing an async filter',            '{% macro m() %}[{{ x | af }}]{% endmacro %}{{ m() }}', undef ],
+  [ 'C: macro containing an include, never called',   '{% macro m() %}[{% include "part.njk" %}]{% endmacro %}', undef ],
+
+  # ---- k108 round 2: an include inside an if / for / macro body / set capture /
+  # block / async loop whose included template hands a closure to the includer
+  # (a shared array), used after the include. The including Context keeps the
+  # included one while the render lasts and lets go of it with the render.
+  [ 'I: include in an if, macro handed up and called',   '{% set bag = [] %}{% if true %}{% include "inchand.njk" %}{% endif %}{% for f in bag %}{{ f() }}{% endfor %}', undef ],
+  [ 'I: include in a for loop, macro handed up and called', '{% set bag = [] %}{% for i in [1,2] %}{% include "inchand.njk" %}{% endfor %}{% for f in bag %}{{ f() }}{% endfor %}', undef ],
+  [ 'I: include in a macro body, macro handed up and called', '{% set bag = [] %}{% macro w() %}{% include "inchand.njk" %}{% endmacro %}{{ w() }}{% for f in bag %}{{ f() }}{% endfor %}', undef ],
+  [ 'I: include in a set capture, macro handed up and called', '{% set bag = [] %}{% set c %}{% include "inchand.njk" %}{% endset %}{% for f in bag %}{{ f() }}{% endfor %}', undef ],
+  [ 'I: include in a block, macro handed up and called', '{% set bag = [] %}{% block c %}{% for i in [1] %}{% include "inchand.njk" %}{% endfor %}{% endblock %}{% for f in bag %}{{ f() }}{% endfor %}', undef ],
+  [ 'I: include in asyncEach, macro handed up and called', '{% set bag = [] %}{% asyncEach i in [1,2] %}{% include "inchand.njk" %}{% endeach %}{% for f in bag %}{{ f() }}{% endfor %}', undef ],
+  [ 'I: include in asyncAll, macro handed up and called', '{% set bag = [] %}{% asyncAll i in [1,2] %}{% include "inchand.njk" %}{% endall %}{% for f in bag %}{{ f() }}{% endfor %}', undef ],
+  [ 'I: included macro containing an include, handed up, in an if', '{% set bag = [] %}{% if true %}{% include "inchandinc.njk" %}{% endif %}{% for f in bag %}{{ f() }}{% endfor %}', undef ],
+  [ 'I: included macro containing an async filter, handed up, in an if', '{% set bag = [] %}{% if true %}{% include "inchandasync.njk" %}{% endif %}{% for f in bag %}{{ f() }}{% endfor %}', undef ],
+  [ 'I: from-import inside the included template, in an if', '{% set bag = [] %}{% if true %}{% include "inchandimp.njk" %}{% endif %}{% for f in bag %}{{ f() }}{% endfor %}', undef ],
+  [ 'I: import as namespace inside the included template, in a for loop', '{% set bag = [] %}{% for i in [1,2] %}{% include "inchandns.njk" %}{% endfor %}{% for f in bag %}{{ f() }}{% endfor %}', undef ],
+  [ 'I: call block registered through an includer macro, in a for loop',
+    '{% set bag = [] %}{% macro reg() %}{% set _ = bag.push(caller) %}{% endmacro %}{% for i in [1,2] %}{% include "inchandcall.njk" %}{% endfor %}{% for f in bag %}{{ f() }}{% endfor %}', undef ],
+  [ 'I: nested include, the grandchild hands the macro up', '{% set bag = [] %}{% for i in [1,2] %}{% include "inchandnest.njk" %}{% endfor %}{% for f in bag %}{{ f() }}{% endfor %}', undef ],
+  [ 'I: a plain partial next to one that hands a macro up', '{% set bag = [] %}{% for i in [1,2,3] %}{% if i == 2 %}{% include "inchand.njk" %}{% else %}{% include "part.njk" %}{% endif %}{% endfor %}{% for f in bag %}{{ f() }}{% endfor %}', undef ],
+  [ 'I: included macro handed up, never called',         '{% set bag = [] %}{% if true %}{% include "inchand.njk" %}{% endif %}', undef ],
+  [ 'I: the including template dies after the include',  '{% set bag = [] %}{% if true %}{% include "inchand.njk" %}{% endif %}{{ nope() }}', undef, 'dies' ],
 );
-my %todo_text = (
-  k108 => 'k108: macros capture $context and $frame, so Context and Frame of the render are kept',
-);
+my %todo_text = ();
 
 my $ctx = { x => 'X', rows => [ 1 .. 5 ] };
 
@@ -215,21 +286,343 @@ subtest 'compiled block code is freed with its Template' => sub {
       '{% extends "base.njk" %}{% block c %}{% for i in [1,2] %}{{ super() }}{% endfor %}{% endblock %}', '<basebase>', undef ],
     [ 'control: a block without super()', '{% extends "base.njk" %}{% block c %}child{% endblock %}', '<child>', undef ],
     [ 'control: a root block',        '{% block c %}x{% endblock %}', 'x', undef ],
+    # k108: a block (or the root) that makes a macro or a call block
+    [ 'a block containing a macro reading an outer name',
+      '{% block c %}{% macro m() %}{{ x }}{% endmacro %}{{ m() }}{% endblock %}', 'X', undef ],
+    [ 'a block containing a plain macro',
+      '{% block c %}{% macro m() %}p{% endmacro %}{{ m() }}{% endblock %}', 'p', undef ],
+    [ 'a block containing a call block',
+      '{% macro w() %}<{{ caller() }}>{% endmacro %}{% block c %}{% call w() %}c{% endcall %}{% endblock %}', '<c>', undef ],
+    [ 'a block containing a macro and a set of it',
+      '{% block c %}{% macro m() %}p{% endmacro %}{% set f = m %}{{ f() }}{% endblock %}', 'p', undef ],
+    [ 'a block containing a macro that contains an include',
+      '{% block c %}{% macro m() %}[{% include "part.njk" %}]{% endmacro %}{{ m() }}{% endblock %}', '[P]', undef ],
+    [ 'a root macro that contains an include, called in a block',
+      '{% macro m() %}[{% include "part.njk" %}]{% endmacro %}{% block c %}{{ m() }}{% endblock %}', '[P]', undef ],
     )
   {
     my ( $name, $src, $expect, $card ) = @$case;
-    my ( $weak, $out );
+    my ( $weak, $wroot, $out );
     {
       my $tmpl = Text::Nunjucks::Template->new( $src, $env, 'k109.njk' );
       $tmpl->compile;
       $weak = $tmpl->blocks->{c};
       weaken($weak);
+      $wroot = $tmpl->_root_render_func;
+      weaken($wroot);
       $out = $tmpl->render($ctx);
     }
     is( $out, $expect, "$name: renders" );
     TODO: {
       local $TODO = $card ? $todo_text{$card} : undef;
       ok( !defined $weak, "$name: block coderef freed once the Template is gone" );
+      ok( !defined $wroot, "$name: root coderef freed once the Template is gone" );
+    }
+  }
+};
+
+# ---- k108: the error path with a user callback. The macro stored in a frame
+# with set and an include that fails: the callback gets the error, nothing is
+# kept.
+subtest 'a render that ends in an error, callback form' => sub {
+  my $env = new_env();
+  for my $case (
+    [ 'set f = m, then a missing include',
+      '{% macro m() %}plain{% endmacro %}{% set f = m %}{% include "nope.njk" %}', qr/template not found: nope\.njk/ ],
+    [ 'macro reading an outer name, set f = m, then a missing include',
+      '{% macro m() %}{{ x }}{% endmacro %}{% set f = m %}{% include "nope.njk" %}', qr/template not found: nope\.njk/ ],
+    [ 'a macro that dies while called with a caller block',
+      '{% macro m() %}{{ x }}{{ caller() }}{{ nope() }}{% endmacro %}{% call m() %}c{% endcall %}', qr/Unable to call `nope`/ ],
+    )
+  {
+    my ( $name, $src, $re ) = @$case;
+    my @got;
+    my $got = survivors(
+      sub {
+        @got = ();
+        $env->render_string( $src, $ctx, sub { push @got, [@_] } );
+      },
+      @ALL
+    );
+    is( scalar @got, 1, "$name: the callback is called once" );
+    like( eval { $got[0][0]->message } // '', $re, "$name: with the error" );
+    is( $got, 'Context=0 Frame=0 Template=0', "$name: nothing kept" );
+  }
+};
+
+# ---- k108: a deferred async filter. While the filter has not answered, the
+# render is alive (it must be, the answer needs it); after the answer it is gone.
+subtest 'a render waiting for an async filter' => sub {
+  my $env = new_env();
+  for my $case (
+    [ 'plain', '{{ x | later }}!', '&lt;X&gt;!' ],
+    [ 'then a macro reading an outer name', '{{ x | later }}{% macro m() %}{{ x }}{% endmacro %}{{ m() }}', '&lt;X&gt;X' ],
+    [ 'then an include', '{{ x | later }}{% include "part.njk" %}', '&lt;X&gt;P' ],
+    [ 'inside a block of a child template',
+      '{% extends "base.njk" %}{% block c %}{{ x | later }}{% endblock %}', '<&lt;X&gt;>' ],
+    [ 'from a library imported with context',
+      '{% import "liblate.njk" as l with context %}{{ l.m() }}!', 'p!' ],
+    )
+  {
+    my ( $name, $src, $expect ) = @$case;
+    @queue = ();
+    %live  = ();
+    my @got;
+    $env->render_string( $src, $ctx, sub { push @got, [@_] } );
+    is( scalar @got, 0, "$name: no result while the filter has not answered" );
+    ok( alive('Context') >= 1, "$name: the Context is alive while it waits" );
+    my $n = 0;
+    while ( my $job = shift @queue ) { $n++; $job->() }
+    ok( $n >= 1, "$name: the filter was asked ($n)" );
+    is( scalar @got, 1, "$name: one result after the answer" );
+    is( $got[0][0], undef, "$name: no error" );
+    is( $got[0][1], $expect, "$name: result" );
+    is( alive('Context'), 0, "$name: the Context is freed after the answer" );
+    is( alive('Frame'),   0, "$name: the Frame is freed after the answer" );
+  }
+};
+
+# ---- k108: a render that is abandoned: the application's async filter never
+# calls back and drops its callback. The render is then nothing but garbage.
+subtest 'a render whose async filter never answers' => sub {
+  my $env = new_env();
+  for my $case (
+    [ 'root, plain',                             '{{ x | later }}' ],
+    [ 'root: a macro after an include, then the filter', '{% include "part.njk" %}{% macro m() %}{{ x }}{% endmacro %}{{ x | later }}{{ m() }}' ],
+    [ 'root: a macro containing an include, then the filter', '{% macro m() %}[{% include "part.njk" %}]{% endmacro %}{{ m() }}{{ x | later }}' ],
+    [ 'a library that never completes',          '{% from "liblate.njk" import m %}{{ m() }}' ],
+    )
+  {
+    my ( $name, $src ) = @$case;
+    @queue = ();
+    %live  = ();
+    my @got;
+    $env->render_string( $src, $ctx, sub { push @got, [@_] } );
+    ok( alive('Context') >= 1, "$name: the Context is alive while the callback is parked" );
+    @queue = ();    # the filter drops its callbacks without calling them
+    is( scalar @got, 0, "$name: the render never called back" );
+    is( alive('Context'), 0, "$name: Context freed once the callbacks are dropped" );
+    is( alive('Frame'),   0, "$name: Frame freed once the callbacks are dropped" );
+  }
+
+  # A BLOCK whose render never completes and that defines a macro containing
+  # an async construct: the macro holds the callback the block was called
+  # with, so that callback must not hold the Context (k108).
+  for my $case (
+    [ 'block: a macro containing an include, then the filter',
+      '{% block c %}{% macro m() %}[{% include "part.njk" %}]{% endmacro %}{{ m() }}{{ x | later }}{% endblock %}' ],
+    [ 'block: a macro containing an include and a set of it, then the filter',
+      '{% block c %}{% macro m() %}[{% include "part.njk" %}]{% endmacro %}{% set f = m %}{{ x | later }}{% endblock %}' ],
+    )
+  {
+    my ( $name, $src ) = @$case;
+    @queue = ();
+    %live  = ();
+    $env->render_string( $src, $ctx, sub { } );
+    @queue = ();
+    is( alive('Context'), 0, "$name: Context freed once the callbacks are dropped" );
+  }
+};
+
+# ---- k108 round 2: an INCLUDED render that is abandoned (the async filter never
+# answers). The macro of the included template contains an async construct.
+subtest 'an included render whose async filter never answers' => sub {
+  my $env = new_env();
+  $dir->child('abandon.njk')->spew_raw(q({% macro m() %}[{{ x | later }}]{% endmacro %}{{ y | later }}));
+  $dir->child('abandon-push.njk')->spew_raw(q({% macro m() %}[{{ x | later }}]{% endmacro %}{% set _ = bag.push(m) %}{{ y | later }}));
+  $dir->child('abandon-inc.njk')->spew_raw(q({% macro m() %}[{% include "part.njk" %}]{% endmacro %}{{ y | later }}));
+  $dir->child('abandon-w.njk')->spew_raw(q({{ w() }}));
+  $dir->child('abandon-each.njk')->spew_raw(q({% macro m() %}{% asyncEach i in [1] %}{{ i | later }}{% endeach %}{% endmacro %}{{ y | later }}));
+  for my $case (
+    [ 'a macro holding an async filter, kept in the included template', '{% include "abandon.njk" %}', 0 ],
+    [ 'the same, the include inside an if',                             '{% if true %}{% include "abandon.njk" %}{% endif %}', 0 ],
+    [ 'the same, the include inside a for loop',                        '{% for i in [1,2] %}{% include "abandon.njk" %}{% endfor %}', 0 ],
+    [ 'a macro holding an include, kept in the included template',      '{% include "abandon-inc.njk" %}', 0 ],
+    [ 'a macro holding an asyncEach, kept in the included template',    '{% for i in [1,2] %}{% include "abandon-each.njk" %}{% endfor %}', 0 ],
+    [ 'a macro of the includer holding an async filter, called from the included template',
+      '{% macro w() %}{{ x | later }}{% endmacro %}{% include "abandon-w.njk" %}', 0 ],
+    )
+  {
+    my ( $name, $src, $want ) = @$case;
+    @queue = ();
+    %live  = ();
+    $env->render_string( $src, $ctx, sub { } );
+    my $during = alive('Context');
+    @queue = ();
+    ok( $during >= 1, "$name: alive while the callbacks are parked ($during)" );
+    is( alive('Context'), $want, "$name: Context freed once the callbacks are dropped" );
+    is( alive('Frame'),   0,     "$name: Frame freed once the callbacks are dropped" );
+  }
+
+  # the residual shape: the included template pushes such a macro into an
+  # object of the includer and then never completes. Measured: the includer
+  # stays alive (includer -> shared array -> macro -> its callback -> render
+  # callback -> include continuation -> includer).
+  for my $case (
+    [ 'a macro holding an async filter handed to the includer, then the included template waits',
+      '{% set bag = [] %}{% include "abandon-push.njk" %}' ],
+    [ 'the same, the include inside an if',
+      '{% set bag = [] %}{% if true %}{% include "abandon-push.njk" %}{% endif %}' ],
+    )
+  {
+    my ( $name, $src ) = @$case;
+    @queue = ();
+    %live  = ();
+    $env->render_string( $src, $ctx, sub { } );
+    @queue = ();
+    TODO: {
+      local $TODO = 'k121: an included template that hands a macro holding an async construct to the includer and then never completes keeps the includer alive';
+      is( alive('Context'), 0, "$name: Context freed once the callbacks are dropped" );
+    }
+  }
+};
+
+# ---- k108 round 2: what the including Context keeps of the included ones
+subtest 'including Context: a plain partial is not kept, one that makes a macro is kept until the render ends' => sub {
+  my $peak = 0;
+  my $penv = new_env();
+  $penv->add_global( probe => sub { my $n = alive('Context'); $peak = $n if $n > $peak; return '' } );
+
+  my $run = sub {
+    my ( $src, $n ) = @_;
+    $peak = 0;
+    %live = ();
+    my $out = $penv->render_string( $src, { %$ctx, n => $n } );
+    return ( $peak, alive('Context'), $out );
+  };
+
+  my $plain = '{% for i in range(0, n) %}{% include "part.njk" %}{{ probe() }}{% endfor %}';
+  my ( $p20 )  = $run->( $plain, 20 );
+  my ( $p200, $after, $out ) = $run->( $plain, 200 );
+  ok( $p200 <= 3, "a plain partial in a loop of 200: the peak of live Contexts stays small ($p200)" );
+  is( $p200, $p20, "the peak does not grow with the number of includes (20: $p20, 200: $p200)" );
+  is( $after, 0, 'nothing alive after the render' );
+  is( length($out), 200, 'the render did its 200 includes' );
+
+  # a partial that makes a macro: kept until the including render ends
+  $dir->child('partmac.njk')->spew_raw('{% macro m() %}p{% endmacro %}P');
+  my $kept = '{% for i in range(0, n) %}{% include "partmac.njk" %}{% endfor %}{{ probe() }}';
+  my ( $k50, $kafter, $kout ) = $run->( $kept, 50 );
+  ok( $k50 >= 50, "a partial that defines a macro: kept until the including render ends ($k50 live at the end of the loop, 50 includes)" );
+  is( $kafter, 0, 'and nothing alive after the render' );
+  is( $kout, 'P' x 50, 'the render did its 50 includes' );
+};
+
+# ---- k108 round 3: an INCLUDED render that FAILS after it made a closure. The
+# included template made a macro (one holding an async construct, or a plain
+# one defined behind an import / include / async filter, or one imported from
+# a library) and then fails; the render's callback gets the error and nothing
+# of the render may stay alive. The case that found it:
+#   main = A{% include 'i.njk' %}B
+#   i    = {% macro m(a) %}[{{ a | later }}]{% endmacro %}{% include 'missing.njk' %}
+# (2 Contexts and 2 Frames stayed). The fix is one emitted statement, `undef
+# $callback;`, in the error branch of the include's render callback.
+#
+# The cases and their expectations (how often the render callback is called,
+# with which error text) are in t/data/include-failure.json, written from real
+# upstream by maint/include-failure-fixtures; the same data drives
+# t/10-include-failure.t, which pins what the template does after the failure.
+{
+  package T::MemLoader;
+  use Moo;
+  extends 'Text::Nunjucks::Loader';
+  has templates => ( is => 'ro', default => sub { {} } );
+  sub get_source {
+    my ( $self, $name ) = @_;
+    return undef unless exists $self->templates->{$name};
+    return { src => $self->templates->{$name}, path => $name, noCache => 1 };
+  }
+}
+
+my $include_failure = JSON::MaybeXS->new( utf8 => 1 )->decode( Path::Tiny->new(__FILE__)->parent->child( 'data', 'include-failure.json' )->slurp_raw );
+
+# Render main.njk of the case, answer every parked filter call, drop what the
+# application kept, and report calls / died / what is alive. The environment
+# stays alive while the numbers are taken.
+sub failing_render {
+  my ($c) = @_;
+  my $env = Text::Nunjucks::Environment->new( T::MemLoader->new( templates => $c->{templates} ) );
+  my ( @q, @kept, @calls, @died );
+  $env->add_filter( later => sub { my ( $v, $cb ) = @_; $v //= 'undefined'; push @q, sub { $cb->( undef, "<$v>" ) }; return }, 1 );
+  $env->add_filter( af    => sub { my ( $v, $cb ) = @_; $v //= 'undefined'; $cb->( undef, "<$v>" ) }, 1 );
+  $env->add_global( reg      => sub { push @kept, $_[0]; return '' } );
+  $env->add_global( regc     => sub { push @kept, $_[-1]{caller}; return '' } );
+  $env->add_global( callreg  => sub { push @kept, $_[0]; return '' } );
+  $env->add_global( callkept => sub { return join '', map { $_->() . '' } @kept } );
+  $env->add_global( mark     => sub { return '' } );
+  %live = ();
+  $env->render(
+    'main.njk', $c->{context},
+    sub { push @calls, [ ( Scalar::Util::blessed( $_[0] ) && $_[0]->can('message') ? $_[0]->message : $_[0] ), defined $_[1] ? "$_[1]" : undef ] }
+  );
+  while ( my $job = shift @q ) {
+    eval { $job->(); 1 } or push @died, "$@";
+  }
+  @kept = ();
+  return { calls => \@calls, died => \@died, context => alive('Context'), frame => alive('Frame'), env => $env };
+}
+
+subtest 'an included render that fails after it made a closure leaves nothing alive' => sub {
+  my @cases = grep { $_->{group} eq 'leak' } @{ $include_failure->{cases} };
+  cmp_ok( scalar @cases, '>=', 45, 'the error shapes of the audit (' . scalar(@cases) . ')' );
+  for my $c (@cases) {
+    my $r = failing_render($c);
+    is( scalar @{ $r->{calls} }, scalar @{ $c->{calls} }, "$c->{name}: the render callback is called " . scalar( @{ $c->{calls} } ) . ' time(s), as upstream' );
+    is_deeply( $r->{calls}, $c->{calls}, "$c->{name}: the callback gets the error text (or the output) of upstream" );
+    is_deeply( $r->{died}, [], "$c->{name}: no parked answer died" );
+    is( $r->{context}, 0, "$c->{name}: no live Context" );
+    is( $r->{frame},   0, "$c->{name}: no live Frame" );
+  }
+};
+
+# k108 round 4: a LIBRARY that fails after it handed a macro out (an import
+# or from-import that stands in an if, a for loop, a macro body, an extends
+# child). The importing template goes on after the error and may call what the
+# library handed out; the Context of the library is kept for that and has to
+# go with the render. M1-M3 are the three minimal shapes; the rest of the
+# group is the same family (extends, include behind an import, import of an
+# import, a library that extends or includes a failing template, a macro body
+# called twice, a call block kept by the application).
+subtest 'a library that fails after it handed a macro out leaves nothing alive' => sub {
+  my @cases = grep { $_->{group} eq 'import' } @{ $include_failure->{cases} };
+  is( scalar @cases, 14, 'the 14 shapes' );
+  for my $c (@cases) {
+    my $r = failing_render($c);
+    is( scalar @{ $r->{calls} }, scalar @{ $c->{calls} }, "$c->{name}: the render callback is called " . scalar( @{ $c->{calls} } ) . ' time(s), as upstream' );
+    is_deeply( $r->{calls}, $c->{calls}, "$c->{name}: the callback gets the error text of upstream" );
+    is_deeply( $r->{died}, [], "$c->{name}: no parked answer died" );
+    is( $r->{context}, 0, "$c->{name}: no live Context" );
+    is( $r->{frame},   0, "$c->{name}: no live Frame" );
+  }
+};
+
+# k121, wider extent: the same family of leak, where the Contexts of an
+# included or imported render that failed are not freed. The macro of every
+# shape holds an async construct (an async filter or an include). The first
+# four cases hand it up to the includer after the include, with asyncAll /
+# asyncEach and a sibling branch or item that defers (an async filter that
+# answers later). K1-K4 hand nothing up:
+#   K1 / K2  a failing import inside asyncEach (K1) / from-import inside
+#            asyncAll (K2), item 2 would defer. asyncEach runs its items one
+#            after another, so in K1 item 2 never runs once item 1 failed;
+#            asyncAll starts both, so in K2 item 2 does defer.
+#   K3 / K4  a deferral in a for loop, then a failing include (K3) or an import
+#            with context (K4).
+# Measured against commit 04e3a23 (the tree before k108), live Contexts after
+# the render: K1, K2 and K4 leak 2 there too, so those are not a regression.
+# K3 is: its macro takes only an argument, 04e3a23 frees it (0 Contexts), the
+# k108 tree leaves 2 Contexts (and 3 Frames). That is the price of the include
+# rule (an include that made a closure is kept by its includer) plus the
+# take-over on error, accepted under k121.
+subtest 'a failed included / imported render inside asyncAll / asyncEach or behind a deferral' => sub {
+  for my $c ( grep { $_->{group} eq 'k121' } @{ $include_failure->{cases} } ) {
+    my $r = failing_render($c);
+    is( scalar @{ $r->{calls} }, scalar @{ $c->{calls} }, "$c->{name}: the render callback is called " . scalar( @{ $c->{calls} } ) . ' time(s), as upstream' );
+    is_deeply( $r->{calls}, $c->{calls}, "$c->{name}: the callback gets the error text of upstream" );
+    TODO: {
+      local $TODO = 'k121: a failed included / imported render whose macro holds an async construct keeps its Contexts alive inside asyncAll / asyncEach or behind a deferral';
+      is( $r->{context}, 0, "$c->{name}: no live Context" );
+      is( $r->{frame},   0, "$c->{name}: no live Frame" );
     }
   }
 };

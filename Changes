@@ -23,6 +23,11 @@ Revision history for Text-Nunjucks
     to a file that loads. The AST node classes are ordinary modules, not
     generated at load time. Loading a parent module (Environment, Nodes,
     Runtime, ...) still loads the classes it used to define.
+  - A render frees its Context when nothing of it is going to run any more,
+    also for templates with macros, caller blocks, imports and includes. A
+    macro your own Perl code keeps and calls after its render ended dies when
+    it reads a template variable (see "Template code that outlives its
+    render" in DIFFERENCES FROM NUNJUCKS).
   - Requires Perl 5.40 or newer.
   - See "DIFFERENCES FROM NUNJUCKS" in the Text::Nunjucks documentation for
     every deliberate and every known open difference, and "SECURITY" before

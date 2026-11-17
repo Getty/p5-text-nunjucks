@@ -130,6 +130,18 @@ sub _emit_func_begin {
   # $<name> = sub { ... }  -- assigned to a forward-declared lexical
   $self->_emit_line( '$' . $name . ' = sub {' );
   $self->_emit_line('my ($env, $context, $frame, $runtime, $cb) = @_;');
+
+  # Port-only (ADR 0021). In upstream everything in this function closes over
+  # `context` -- every continuation callback, every macro -- and the Context
+  # holds the macros: cycles a tracing GC collects and a reference count never
+  # frees. So no root or block sub holds its Context: this line weakens the
+  # sub's $context variable, which is the one variable all its nested subs
+  # capture, and registers it and $frame with the Context (Runtime
+  # _render_scope). What holds the Context is what is still going to run: the
+  # call that started the render, and each continuation until it is called
+  # (_continuation_open).
+  $self->_emit_line('$runtime->_render_scope(\$context, \$frame);');
+
   $self->_emit_line( 'my $lineno = ' . $self->_num_or_undef( $node->lineno ) . ';' );
   $self->_emit_line( 'my $colno = ' . $self->_num_or_undef( $node->colno ) . ';' );
   $self->_emit_line( 'my $' . $self->buffer . ' = "";' );
@@ -151,9 +163,15 @@ sub _emit_func_end {
   $self->buffer(undef);
 }
 
+# A scope level is a continuation (_make_callback, or the waterfall callback
+# of compile_include). A continuation is an argument of
+# $runtime->_continuation( -- hence the second parenthesis, which upstream's
+# '})' does not have -- unless it was made plain (see _make_callback), which
+# closes like upstream's. With two kinds of closers they have to come in the
+# reverse order of opening, so the newest goes in front.
 sub _add_scope_level {
-  my ($self) = @_;
-  $self->_scope_closers( $self->_scope_closers . '})' );
+  my ( $self, $plain ) = @_;
+  $self->_scope_closers( ( $plain ? '})' : '}))' ) . $self->_scope_closers );
 }
 
 sub _close_scope_levels {
@@ -173,16 +191,42 @@ sub _with_scoped_syntax {
   $self->_scope_closers($scope_closers);
 }
 
-# `sub { my ($t_err[, $res]) = @_; if ($t_err) { $cb->($t_err); return; }`
-# -- an unclosed anonymous callback, closed by a later scope closer.
+# Port-only (ADR 0021): what upstream emits as `function(...) {` for a
+# continuation -- a callback handed to something that calls it when it is
+# done. The compiled subs do not hold their Context (_emit_func_begin); a
+# continuation that is still waiting to be called has to, or the Context of a
+# render would be gone before an async filter calls back. Runtime
+# _continuation wraps the sub so that it holds the Context from here until it
+# is called. It is closed with '}))', see _add_scope_level.
+sub _continuation_open {
+  my ($self) = @_;
+  return '$runtime->_continuation($context, sub {';
+}
+
+# `$runtime->_continuation($context, sub { my ($t_err[, $res]) = @_;
+# if ($t_err) { $cb->($t_err); return; }` -- an unclosed continuation, closed
+# by a later scope closer.
+#
+# Port-only (ADR 0021): with $plain it is upstream's bare `sub {`, which holds
+# nothing. That is for the callback handed to a block (compile_block,
+# compile_super): the block runs in the same Context, so whatever of the block
+# is still going to run holds that Context already, and the block calls this
+# callback from inside it. A hold of its own would be one a macro of the block
+# keeps for good: a macro whose body contains an async construct captures the
+# block's `$cb`, which is this callback, and the block's frame holds the
+# macro -- a block that never finishes would keep its Context for ever.
+#
+# Port-only (ADR 0021): $on_error is a statement that goes in front of the
+# `$cb->($t_err)` of the error branch, see compile_include and
+# _keep_alive_statement.
 sub _make_callback {
-  my ( $self, $res ) = @_;
+  my ( $self, $res, $plain, $on_error ) = @_;
   my $err = $self->_tmpid;
 
   return
-      'sub {' . "\n"
+      ( $plain ? 'sub {' : $self->_continuation_open ) . "\n"
     . 'my ($' . $err . ( $res ? ', $' . $res : '' ) . ') = @_;' . "\n"
-    . 'if($' . $err . ') { $cb->($' . $err . '); return; }';
+    . 'if($' . $err . ') { ' . ( $on_error // '' ) . '$cb->($' . $err . '); return; }';
 }
 
 sub _tmpid {
@@ -251,6 +295,10 @@ sub compile_call_extension {
     ? $node->autoescape
     : 1;
   my $ae = $autoescape ? '1' : '0';
+
+  # Port-only (ADR 0021): a content argument is a function the extension can
+  # keep and call later, see _emit_made_closure.
+  $self->_emit_made_closure if grep { $_ } @$content_args;
 
   # `buffer += ...` is Runtime js_string_append throughout: JS's buffer joins
   # code units, so it re-pairs two halves of a surrogate pair (ADR 0012).
@@ -1035,6 +1083,16 @@ sub compile_async_all {
   $self->_compile_async_loop( $node, $frame, 1 );
 }
 
+# Port-only (ADR 0021), the statement in front of everything a template makes
+# that can be called after the render it was made in has delivered its result:
+# a macro, a call block (_compile_macro) and the body an extension is handed
+# (compile_call_extension). It tells the Context, so that the Context of a
+# template that included this one keeps it (Context _made_closure).
+sub _emit_made_closure {
+  my ($self) = @_;
+  $self->_emit_line('$context->_made_closure;');
+}
+
 sub _compile_macro {
   my ( $self, $node, $frame ) = @_;
   my @args;
@@ -1068,6 +1126,7 @@ sub _compile_macro {
   my $curr_frame =
     $keep_frame ? $frame->push(1) : $self->frame_class->new;
 
+  $self->_emit_made_closure;
   $self->_emit_lines(
     'my $' . $func_id . ' = $runtime->make_macro(',
     '[' . join( ', ', @arg_names ) . '], ',
@@ -1155,15 +1214,36 @@ sub _compile_get_template {
   return $parent_template_id;
 }
 
+# Port-only (ADR 0021), a statement of an import's getExported callback, in
+# both branches of its error check. The macros of the imported template do not
+# hold the Context they were made in (see _emit_func_begin); the importing
+# Context does, from the third callback argument (Template _get_exported).
+#
+# A library that failed is kept like one that did not: it may have handed a
+# macro out before it failed -- into an array of the importing template, to a
+# function of the application -- and the importing template goes on after the
+# error with whatever follows the `if`, the `for`, the macro call or the `set`
+# block the import stands in.
+sub _keep_alive_statement {
+  my ($self) = @_;
+  return '$context->_keep_alive($_[2]);';
+}
+
+sub _emit_keep_alive {
+  my ($self) = @_;
+  $self->_emit_line( $self->_keep_alive_statement );
+}
+
 sub compile_import {
   my ( $self, $node, $frame ) = @_;
   my $target = $node->target->value;
   my $id     = $self->_compile_get_template( $node, $frame, 0, 0 );
   $self->_add_scope_level;
 
-  $self->_emit_line( '$' . $id . '->get_exported('
+  $self->_emit_line( '$' . $id . '->_get_exported('
       . ( $node->withContext ? '$context->get_variables(), $frame, ' : '' )
-      . $self->_make_callback($id) );
+      . $self->_make_callback( $id, 0, $self->_keep_alive_statement . ' ' ) );
+  $self->_emit_keep_alive;
   $self->_add_scope_level;
 
   $frame->set( $target, $id );
@@ -1181,9 +1261,10 @@ sub compile_from_import {
   my $imported_id = $self->_compile_get_template( $node, $frame, 0, 0 );
   $self->_add_scope_level;
 
-  $self->_emit_line( '$' . $imported_id . '->get_exported('
+  $self->_emit_line( '$' . $imported_id . '->_get_exported('
       . ( $node->withContext ? '$context->get_variables(), $frame, ' : '' )
-      . $self->_make_callback($imported_id) );
+      . $self->_make_callback( $imported_id, 0, $self->_keep_alive_statement . ' ' ) );
+  $self->_emit_keep_alive;
   $self->_add_scope_level;
 
   for my $name_node ( @{ $node->names->children } ) {
@@ -1232,9 +1313,9 @@ sub compile_block {
   if ( !$self->in_block ) {
     $self->_emit(')');
   }
-  $self->_emit_line( '->($env, $context, $frame, $runtime, ' . $self->_make_callback($id) );
+  $self->_emit_line( '->($env, $context, $frame, $runtime, ' . $self->_make_callback( $id, 1 ) );
   $self->_emit_line( '$runtime->js_string_append($' . $self->buffer . ', $' . $id . ');' );
-  $self->_add_scope_level;
+  $self->_add_scope_level(1);
 }
 
 sub compile_super {
@@ -1242,10 +1323,10 @@ sub compile_super {
   my $name = $node->blockName->value;
   my $id   = $node->symbol->value;
 
-  my $cb = $self->_make_callback($id);
+  my $cb = $self->_make_callback( $id, 1 );
   $self->_emit_line( '$context->get_super($env, ' . $self->_quote($name) . ', $b_' . $name . ', $frame, $runtime, ' . $cb );
   $self->_emit_line( '$' . $id . ' = $runtime->mark_safe($' . $id . ');' );
-  $self->_add_scope_level;
+  $self->_add_scope_level(1);
   $frame->set( $id, $id );
 }
 
@@ -1272,14 +1353,33 @@ sub compile_include {
   $self->_emit_line('push @tasks, sub {');
   $self->_emit_line('my ($callback) = @_;');
   my $id = $self->_compile_get_template( $node, $frame, 0, $node->ignoreMissing );
-  $self->_emit_line( '$callback->(undef, $' . $id . ');});' );
+  $self->_emit_line( '$callback->(undef, $' . $id . ');}));' );
   $self->_emit_line('};');
 
+  # Port-only (ADR 0021): the fourth argument of render, after the callback's
+  # closers. The included template gets a Context of its own, and nothing
+  # holds that once its render has delivered -- but a macro it made can be in
+  # the hands of this template by then. So the included Context is told who
+  # included it, and this Context takes it over when it has to (Template
+  # render, Context _included_by).
+  #
+  # Port-only (ADR 0021) as well: `undef $callback;` in the error branch of
+  # that callback. An error goes to `$cb` and not on through the waterfall, so
+  # the waterfall's last callback -- the rest of this template, which holds
+  # this Context until it is called -- is never called; upstream's is garbage
+  # then. Here a macro of the included template can hold this callback (it is
+  # behind the included template's `$cb`, which a macro containing an async
+  # construct captures), and this Context keeps the included one, so the two
+  # Contexts would hold each other for good. Once the callback has seen an
+  # error it never needs `$callback` again: Template render drops every result
+  # that comes after an error, and a second error takes this branch again.
+  # The statement comes first because `$cb` may die.
   my $id2 = $self->_tmpid;
   $self->_emit_line('push @tasks, sub {');
   $self->_emit_line('my ($template, $callback) = @_;');
-  $self->_emit_line( '$template->render($context->get_variables(), $frame, ' . $self->_make_callback($id2) );
-  $self->_emit_line( '$callback->(undef, $' . $id2 . ');});' );
+  $self->_emit_line( '$template->render($context->get_variables(), $frame, '
+      . $self->_make_callback( $id2, 0, 'undef $callback; ' ) );
+  $self->_emit_line( '$callback->(undef, $' . $id2 . ');}), $context);' );
   $self->_emit_line('};');
 
   $self->_emit_line('push @tasks, sub {');
@@ -1287,7 +1387,7 @@ sub compile_include {
   $self->_emit_line( '$runtime->js_string_append($' . $self->buffer . ', $result);' );
   $self->_emit_line('$callback->(undef);');
   $self->_emit_line('};');
-  $self->_emit_line('$env->waterfall(\@tasks, sub {');
+  $self->_emit_line( '$env->waterfall(\@tasks, ' . $self->_continuation_open );
   $self->_add_scope_level;
 }
 

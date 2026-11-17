@@ -19,6 +19,13 @@ $runtime, $cb )` and the same callback nesting as `compiler.js`. A callback is
 invoked synchronously unless user code (an async filter, an extension) defers
 it.
 
+Since ADR 0021 the nesting is the same but the text is not literally upstream's:
+every continuation but the callbacks of a block call and of `super()` is wrapped in
+`$runtime->_continuation($context, sub { ... })`,
+the first statement of a root or block sub is a `_render_scope` call, and
+imports, macros and includes carry a few port-only statements. ADR 0021 lists
+them, and none changes output or error text.
+
 ## Consequences
 
 - `compiler.js` can be ported method by method and reviewed side by side; a

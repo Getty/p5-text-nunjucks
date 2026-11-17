@@ -4,11 +4,14 @@ package Text::Nunjucks::Template;
 our $VERSION = '0.001';
 
 use Moo;
+use Scalar::Util qw( refaddr weaken );
+use Hash::Util::FieldHash qw( fieldhash );
 use Text::Nunjucks::Lib;
 use Text::Nunjucks::Lib::Error;
 use Text::Nunjucks::Runtime;
 use Text::Nunjucks::Compiler;
 use Text::Nunjucks::Context;
+use Text::Nunjucks::Context::Gone;
 use Text::Nunjucks::Environment;
 use namespace::autoclean;
 
@@ -41,6 +44,7 @@ sub _runtime_class     { 'Text::Nunjucks::Runtime' }
 sub _compiler_class    { 'Text::Nunjucks::Compiler' }
 sub _context_class     { 'Text::Nunjucks::Context' }
 sub _environment_class { 'Text::Nunjucks::Environment' }
+sub _gone_class        { 'Text::Nunjucks::Context::Gone' }
 
 sub BUILDARGS {
   my ( $class, @args ) = @_;
@@ -97,7 +101,7 @@ sub _lib_error {
 }
 
 sub render {
-  my ( $self, $ctx, $parent_frame, $cb ) = @_;
+  my ( $self, $ctx, $parent_frame, $cb, $including ) = @_;
   if ( $self->_lib->is_function($ctx) ) {
     $cb  = $ctx;
     $ctx = {};
@@ -124,6 +128,13 @@ sub render {
   }
 
   my $context = $self->_context_class->new( $ctx || {}, $self->blocks, $self->env );
+
+  # Port-only (ADR 0021). A compiled `include` passes its own Context as a
+  # fourth argument, which upstream's render does not have: the including
+  # Context has to keep this one alive if a macro of the included template
+  # outlives this render (Context _included_by).
+  $cb = $context->_included_by( $including, $cb ) if $including;
+
   my $frame = $parent_frame ? $parent_frame->push(1) : $self->_runtime_class->Frame->new;
   $frame->top_level(1);
   my $sync_result = undef;
@@ -164,7 +175,74 @@ sub render {
   return $sync_result;
 }
 
+# Port-only (ADR 0021). The macros a template exports do not hold the Context
+# they read their library's variables, globals and sibling macros through
+# (Runtime _render_scope); whoever takes them has to. A compiled `import` does
+# that itself and calls _get_exported, upstream's getExported. This is the
+# method a Perl caller uses. The Context lives as long as the hash the
+# callback gets (_hold_context), and as long as any function that was a value
+# of that hash: each of those is a wrapper that holds the Context, so a macro
+# taken out of the hash works for as long as the caller keeps it. The same
+# function exported under two names gets one wrapper.
+#
+# What that does not reach: a function inside an exported array or object,
+# taken out and called after the hash and every function that was a value of
+# it are gone.
 sub get_exported {
+  my ( $self, @args ) = @_;
+
+  # the callback _get_exported is going to call: the second argument if that
+  # is a function, else the first if that is one, else the third
+  my ($at) = grep { $self->_lib->is_function( $args[$_] ) } 1, 0;
+  $at //= 2;
+
+  if ( $self->_lib->is_function( $args[$at] ) ) {
+    my $cb = $args[$at];
+    $args[$at] = sub {
+      # an error goes on with the one or two arguments upstream passes: one
+      # for a compile error, two for a render error, which comes with the
+      # Context as a third one that is for a compiled `import` only
+      return $cb->(@_) if @_ < 3;
+      my ( $err, $exported, $context ) = @_;
+      return $cb->( $err, $exported ) if $err;
+      return $cb->( $err, $self->_hold_context( $exported, $context ) );
+    };
+  }
+
+  return $self->_get_exported(@args);
+}
+
+# The Context of each hash get_exported handed out, by that hash: the entry
+# goes when the hash is freed (Hash::Util::FieldHash), and the Context with it
+# unless a wrapper still holds it. It is not an attribute of anything because
+# nothing of ours outlives the hash for sure -- not this Template, which may
+# be a temporary, and not the Environment -- and it cannot be an entry of the
+# hash itself, which is the exported names and nothing else.
+fieldhash my %context_of;
+
+sub _hold_context {
+  my ( $self, $exported, $context ) = @_;
+  return $exported unless $context;
+
+  $context_of{$exported} = $context;
+
+  my %holder;
+  for my $name ( keys %$exported ) {
+    my $func = $exported->{$name};
+    next unless $self->_lib->is_function($func);
+    $exported->{$name} = $holder{ refaddr($func) } //= sub {
+      my $held = $context;    # naming it is what makes this sub hold it
+      return $func->(@_);
+    };
+  }
+  return $exported;
+}
+
+# upstream getExported. Port-only: the callback gets the Context the template
+# ran in as a third argument, for the caller to keep alive (ADR 0021) -- with
+# a render error too, because a template that failed may have handed a macro
+# out before it did (Compiler _keep_alive_statement).
+sub _get_exported {
   my ( $self, $ctx, $parent_frame, $cb ) = @_;
   if ( $self->_lib->is_function($ctx) ) {
     $cb  = $ctx;
@@ -192,15 +270,25 @@ sub get_exported {
 
   # Run the rootRenderFunc to populate the context with exported vars.
   my $context = $self->_context_class->new( $ctx || {}, $self->blocks, $self->env );
+
+  # Port-only (ADR 0021). The compiled code does not hold its Context
+  # (Runtime _render_scope), and neither may this callback: a macro of the
+  # template can hold the callback. The Context is alive when the template is
+  # done -- this call or a continuation holds it -- and whoever takes the
+  # exports keeps it from then on.
+  weaken( my $exporting = $context );
+
   $self->_root_render_func->(
     $self->env, $context, $frame, $self->_runtime_class,
     sub {
       my ($err) = @_;
       if ($err) {
-        $cb->( $err, undef );
+        $cb->( $err, undef, $exporting );
       }
       else {
-        $cb->( undef, $context->get_exported );
+        my $held    = $exporting;
+        my $context = $held // $self->_gone_class->instance;
+        $cb->( undef, $context->get_exported, $held );
       }
     }
   );
@@ -319,6 +407,9 @@ Renders the template. Compiles it first if needed. The return value, the death
 on error and the callback form are those of C<render> of the Environment. The
 context is copied, so the template's C<set> never changes the hash you passed.
 
+A fourth positional argument exists for the compiled C<include> of a template;
+it is internal and not part of the interface.
+
 =cut
 
 =method compile
@@ -338,6 +429,23 @@ to find errors early.
 
 Runs the template and passes its callback the hash of the top-level variables
 it exports, as C<import> and C<from ... import> read them. The callback is
-required.
+required. It gets C<( $err, $exported )>; on a compile error that is one
+argument, on a render error two, as in Nunjucks.
+
+The macros in the hash read the template's variables through its context, which
+the template does not keep once it is done. This method makes it live as long as
+the returned hash or any function that was a value in it: every top-level
+function in the hash is a wrapper that holds the context (one function under two
+names gets one wrapper), so a macro you take out of the hash keeps working for as
+long as you keep it. That includes a coderef of yours which the template
+re-exports: it comes back as a wrapper, not as the reference you passed in.
+
+A shallow copy of the hash holds the context only through the functions it
+contains. A function inside an exported array or object, taken out and called
+after the hash and every function that was a value in it are gone, finds the
+context gone and dies with C<template code ran after its render had ended>. A
+returned hash that you store into data the template's context holds leaks that
+context. A template that failed is not kept: macros it handed out before the
+error find their context gone. See ADR 0021 in F<docs/adr/>.
 
 =cut

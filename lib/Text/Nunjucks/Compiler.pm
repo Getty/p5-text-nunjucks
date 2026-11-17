@@ -76,7 +76,9 @@ L<Text::Nunjucks::Environment>, and not an interface for applications.
 
 A 1:1 port of Nunjucks C<src/compiler.js>. Unlike every other ported module,
 this one emits B<Perl> source (upstream emits JavaScript), keeping upstream's
-CPS shape (ADR 0003). C<< Text::Nunjucks::Compiler->compile($src, $async_filters,
+CPS shape (ADR 0003): every continuation but the callbacks of a block call is wrapped in a call that
+holds the render's context, and a few port-only statements keep a render from leaking
+(ADR 0021), so the text is not literally upstream's. C<< Text::Nunjucks::Compiler->compile($src, $async_filters,
 $extensions, $name, $opts) >> returns a string that, when C<eval>ed, yields a
 hashref C<< { root => \&root, b_<name> => \&b_<name>, ... } >>. The class
 that walks the AST and emits the code is L<Text::Nunjucks::Compiler::Compiler>

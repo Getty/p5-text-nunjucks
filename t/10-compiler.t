@@ -18,8 +18,19 @@ use Text::Nunjucks::Runtime;
 #           -> string eval -> run root() with Runtime (k14) + the stub below
 #           -> output, compared to the oracle-committed corpus expected.
 # The Environment/Context here is a *minimal stub* -- the real ones land with
-# k16. It provides only the surface the emitted code calls for these cases
-# (opts/get_filter/get_test, lookup/set_variable/get_variables/add_export).
+# k16. It provides what the emitted code calls on them for these cases:
+# opts/get_filter/get_test, and lookup/set_variable/get_variables/add_export
+# plus the port-only _made_closure, which the code calls before it makes a
+# macro or a call block and before it hands a body to an extension (ADR 0021).
+#
+# That is not all the emitted code calls. The first statement of every root
+# and block sub is $runtime->_render_scope(\$context, \$frame), and every
+# continuation is made by $runtime->_continuation(...) (both ADR 0021). The
+# stub has no _track_scope, so _render_scope returns at once: nothing is
+# weakened, nothing is registered, and every closure holds the stub strongly.
+# This file deliberately runs the emitted code WITHOUT the lifetime mechanism;
+# that mechanism is tested with the real Context in t/10-leaks.t and
+# t/10-macro-lifetime.t.
 
 {
   package T::Ctx;
@@ -28,6 +39,7 @@ use Text::Nunjucks::Runtime;
   sub set_variable { my ( $s, $n, $v ) = @_; $s->{vars}{$n} = $v; return }
   sub get_variables { $_[0]->{vars} }
   sub add_export { my ( $s, $n ) = @_; $s->{exported}{$n} = 1; return }
+  sub _made_closure { return }
 }
 {
   package T::Env;

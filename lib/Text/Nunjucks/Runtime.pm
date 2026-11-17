@@ -6,7 +6,7 @@ our $VERSION = '0.001';
 use strict;
 use warnings;
 use builtin qw( is_bool created_as_number true false );
-use Scalar::Util qw( blessed refaddr );
+use Scalar::Util qw( blessed refaddr weaken );
 use POSIX qw( floor fmod );
 use Carp qw( croak );
 use Hash::Ordered;
@@ -103,6 +103,53 @@ sub make_macro {
     }
 
     return $func->(@args);
+  };
+}
+
+#### render scope -- port-only, no upstream counterpart (ADR 0021)
+#
+# In upstream every function a compiled template is made of closes over
+# `context`, and the Context holds the macros among them
+# (context.setVariable): a tracing GC collects those cycles, a reference count
+# never does. Two things make it more than the macros that read a name from
+# outside: Perl keeps the enclosing sub of a closure alive, so a macro defined
+# after an `import` or `include` holds the continuation it was made in and
+# with it everything that continuation captured; and a macro whose body
+# contains an async construct captures the `$cb` of its sub, behind which the
+# continuations of the calling template wait.
+#
+# So no compiled sub holds its Context. The first statement of every root and
+# block sub (Compiler _emit_func_begin) calls this with references to the
+# sub's `$context` and `$frame` variables: the `$context` variable -- the one
+# all nested subs of that call capture -- becomes a weak reference, and the
+# Context remembers both variables (Context _track_scope) to put something
+# harmless into them when it is freed.
+#
+# What holds a Context is what is still going to run in it: the call that
+# started the render (Template render, _get_exported) for as long as it is on
+# the stack, and every continuation from the moment the compiled code hands it
+# out until it is called (_continuation). What already ran holds nothing.
+sub _render_scope {
+  my ( $self, $context_ref, $frame_ref ) = @_;
+  my $context = $$context_ref;
+  return unless blessed($context) && $context->can('_track_scope');
+  $context->_track_scope( $context_ref, $frame_ref );
+  weaken($$context_ref);
+  return;
+}
+
+# Every callback the compiled code hands out to be called when something is
+# done -- upstream's `function(err, res) { ... }` after an async filter, a
+# getTemplate, a block -- is made through this (Compiler _continuation_open).
+# The wrapper holds the Context until it is called, and for as long as that
+# call runs; after that it holds nothing, so a macro made inside the
+# continuation, which Perl makes keep the continuation, keeps no Context.
+sub _continuation {
+  my ( $self, $context, $continuation ) = @_;
+  return sub {
+    my $held = $context;
+    undef $context;
+    return $continuation->(@_);
   };
 }
 
