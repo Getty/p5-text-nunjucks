@@ -1,0 +1,25 @@
+---
+class: standard
+completed: 2026-11-17T04:42:30Z
+created: 2026-11-13T16:26:02Z
+id: 100
+priority: low
+started: 2026-11-17T04:42:30Z
+status: done
+tags:
+- release
+- build
+- release-limitation
+- release-0.001
+title: 'dzil build: MetaProvides::Package warns 17 provide-map entries do not map
+  to .pm files'
+updated: 2026-11-17T04:42:30Z
+---
+
+Seen by the release-manager during the k19 build check (2026-11-13), predates k19. `dzil build` prints "17 provide map entries did not map to .pm files", e.g. Text::Nunjucks::Lexer::Token, Text::Nunjucks::Context, Text::Nunjucks::Template (packages that live inside another module file: Context/Template in Environment.pm, Token in Lexer.pm, ...). Decide before release whether those inner packages are public (then the provides entries are wanted and the warning is noise to silence in dist.ini) or internal (then hide them from the indexer). Belongs to the pre-release audit (k24 territory).
+
+From the k20 doc-writer (2026-11-13): consequence for users -- Text::Nunjucks::Template and ::Context have no file of their own (they live in Environment.pm), so 'use Text::Nunjucks::Template' alone fails; it has to come in through Text::Nunjucks::Environment. Relevant to whether these packages are public.
+
+2026-11-13 20:24 Pre-release audit (release-manager): harmless for a first PAUSE upload -- META provides maps each inner package to the file that contains it (Context/Template -> Environment.pm, Lexer::Token -> Lexer.pm, ...), all at 0.001, so the uploader gets every permission. Only consequence: 'use Text::Nunjucks::Template' alone fails, and the main POD says so. Release: limitation; decide accept-and-silence or hide the internals.
+
+resolved by k116 / ADR 0020: every class has its own .pm (621ad19)
