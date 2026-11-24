@@ -1532,12 +1532,16 @@ subtest 'node fs: existsSync and the readFileSync errors' => sub {
   is( $L->node_fs_read_file_sync_utf8("$file"), "\x{FEFF}a\x{E9}", 'readFileSync keeps the BOM and decodes UTF-8' );
 
   # a name with non-ASCII characters is opened by its UTF-8 bytes, as node does
+  # (a Windows code page can lack them: the file then cannot be made by them)
   my $name = "\x{E9}\x{1F600}.njk";
   my $raw  = $name;
   utf8::encode($raw);
-  Path::Tiny::path( "$dir/" . $raw )->spew_raw('x');
-  ok( $L->node_fs_exists_sync( "$dir/" . $name ), 'existsSync: a non-ASCII name' );
-  is( $L->node_fs_read_file_sync_utf8( "$dir/" . $name ), 'x', 'readFileSync: a non-ASCII name' );
+  SKIP: {
+    skip 'this system cannot create a file named by those UTF-8 bytes', 2
+      unless eval { Path::Tiny::path( "$dir/" . $raw )->spew_raw('x'); 1 };
+    ok( $L->node_fs_exists_sync( "$dir/" . $name ), 'existsSync: a non-ASCII name' );
+    is( $L->node_fs_read_file_sync_utf8( "$dir/" . $name ), 'x', 'readFileSync: a non-ASCII name' );
+  }
 
   my $e = do { local $@; eval { $L->node_fs_read_file_sync_utf8("$dir"); 1 } ? undef : $@ };
   ok( $e && $e->isa('Text::Nunjucks::Lib::Error'), 'a directory throws an Error' );
@@ -1580,6 +1584,11 @@ subtest 'node fs: existsSync and the readFileSync errors' => sub {
     skip 'POSIX path model; path.win32 comes later (no chmod 0000 on Windows)', 2 if $^O eq 'MSWin32';
     skip 'running as root: every file is readable', 2 if $> == 0;
     chmod 0000, "$file" or die "chmod: $!";
+    if ( open( my $probe, '<', "$file" ) ) {    # Cygwin on a file system without POSIX permissions
+      close $probe;
+      chmod 0644, "$file";
+      skip 'chmod 0000 leaves the file readable here', 2;
+    }
     $e = do { local $@; eval { $L->node_fs_read_file_sync_utf8("$file"); 1 } ? undef : $@ };
     chmod 0644, "$file";
     ok( $e && $e->isa('Text::Nunjucks::Lib::Error'), 'an unreadable file throws an Error' );
