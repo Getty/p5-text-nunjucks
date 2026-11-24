@@ -930,7 +930,18 @@ subtest 'js_math_pow: a power of ten does not depend on the platform pow' => sub
   my $bits = sub { unpack 'H16', pack 'd>', $_[0] };
   my $libm = \&POSIX::pow;
   no warnings 'redefine';
-  local *POSIX::pow = sub { POSIX::nextafter( $libm->(@_), 9**9**9 ) };
+  # one step on the double's bit pattern, whatever the NV is: nextafter steps the
+  # NV, a long double / quadmath ulp that pack 'd' rounds away again (positive,
+  # finite values only; no Q: a 32-bit IV perl lacks it)
+  my $bump = sub {
+    my ( $hi, $lo ) = unpack 'N2', pack 'd>', $_[0];
+    $hi++ if ++$lo > 0xFFFFFFFF;
+    $lo = 0 if $lo > 0xFFFFFFFF;
+    return unpack 'd>', pack 'N2', $hi, $lo;
+  };
+  is( $bits->( $bump->(1) ), '3ff0000000000001', 'the bump steps the bit pattern by one' );
+  is( $bits->( $bump->( unpack 'd>', pack 'H16', '3ff00000ffffffff' ) ), '3ff0000100000000', 'the bump carries into the high word' );
+  local *POSIX::pow = sub { $bump->( $libm->(@_) ) };
   is( $bits->( POSIX::pow( 10, -21 ) ), '3b92e3b40a0e9b50', "the stand-in pow is BSD libm's 10 ** -21" );
   for my $n ( -22 .. 22 ) {
     is( $bits->( $L->js_math_pow( 10, $n ) ), $v8[ $n + 22 ], '10 ** ' . $n );
