@@ -9,6 +9,9 @@ Revision history for Text-Nunjucks
     "EISDIR: illegal operation on a directory, read" on every system; where
     the system lets a directory be read, its raw entries rendered as the
     template.
+  - The error for a template file that cannot be read names the error code
+    as node does (ENOENT, EACCES, ...) also where Perl knows the errno by a
+    second name; on Strawberry Perl ENOENT read EC_QUERYWAITING.
 
 0.001     2026-11-17 20:12:32Z
   - First release: a Perl port of Nunjucks 3.2.4. The same template,

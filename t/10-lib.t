@@ -4,6 +4,7 @@ use warnings;
 use Test::More;
 use builtin qw( true false is_bool );
 use Cwd ();
+use Errno ();
 use Fcntl ();
 use JSON::MaybeXS ();
 use Path::Tiny ();
@@ -1584,6 +1585,19 @@ subtest 'node fs: existsSync and the readFileSync errors' => sub {
     ok( $e && $e->isa('Text::Nunjucks::Lib::Error'), 'an unreadable file throws an Error' );
     is( $e && $e->message, "EACCES: permission denied, open '$file'", "... with node's message, the path after open" );
   }
+};
+
+# node's code is libuv's name for the errno. A perl can know an errno by a name
+# libuv does not have: Strawberry Perl's Errno also calls ENOENT (2)
+# EC_QUERYWAITING, which sorts before it. Here %! is lent that name.
+subtest "node fs: the code is libuv's name where the errno has another" => sub {
+  my $dir     = Path::Tiny->tempdir;
+  my $missing = $dir->child('nope') . '';
+  local tied(%!)->{EC_QUERYWAITING} = Errno::ENOENT();
+  local $! = Errno::ENOENT();
+  ok( $!{EC_QUERYWAITING} && $!{ENOENT}, 'the errno has both names' );
+  my $e = do { local $@; eval { $L->node_fs_read_file_sync_utf8($missing); 1 } ? undef : $@ };
+  is( $e && $e->message, "ENOENT: no such file or directory, open '$missing'", "... and readFileSync's code is ENOENT" );
 };
 
 done_testing;

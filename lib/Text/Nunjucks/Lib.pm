@@ -2909,9 +2909,10 @@ my %NODE_UV_ERROR_MESSAGE = (
 );
 
 # libuv's name for an errno the system knows by two (util.getSystemErrorMap()
-# lists EAGAIN and ENOTSUP, never EWOULDBLOCK or EOPNOTSUPP); any other errno
-# with two names (EDEADLK / EDEADLOCK, not in libuv's map) takes the first in
-# sort order, so the code never depends on hash order.
+# lists EAGAIN and ENOTSUP, never EWOULDBLOCK or EOPNOTSUPP). Of an errno's
+# names, one with a libuv description above wins (Strawberry Perl's Errno also
+# calls ENOENT EC_QUERYWAITING); else the first in sort order (EDEADLK /
+# EDEADLOCK, not in libuv's map), so the code never depends on hash order.
 my %NODE_UV_ERRNO_ALIAS = (
   EOPNOTSUPP  => 'ENOTSUP',
   EWOULDBLOCK => 'EAGAIN',
@@ -2922,7 +2923,8 @@ sub _node_uv_exception {
   my ( $self, $errno, $syscall, $path ) = @_;
   local $! = $errno;
   my $strerror = "$!";
-  my ($code) = sort { $a cmp $b } CORE::map { $NODE_UV_ERRNO_ALIAS{$_} // $_ } grep { $!{$_} } CORE::keys %!;
+  my @names = sort { $a cmp $b } CORE::map { $NODE_UV_ERRNO_ALIAS{$_} // $_ } grep { $!{$_} } CORE::keys %!;
+  my ($code) = ( ( grep { exists $NODE_UV_ERROR_MESSAGE{$_} } @names ), @names );
   $code //= 'UNKNOWN';
   my $message = $code . ': ' . ( $NODE_UV_ERROR_MESSAGE{$code} // lc $strerror ) . ', ' . $syscall;
   $message .= " '" . $path . "'" if defined $path;
