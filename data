@@ -1,0 +1,49 @@
+---
+class: standard
+completed: 2026-11-24T21:02:17Z
+created: 2026-11-24T18:49:00Z
+id: 124
+priority: critical
+started: 2026-11-24T21:02:17Z
+status: done
+tags:
+- cpantesters
+- tests
+- bug
+title: 'CPAN Testers: fix the 34 FAIL reports of 0.001'
+updated: 2026-11-24T21:02:24Z
+---
+
+Text::Nunjucks 0.001 on CPAN Testers (2026-11-24): 34 FAIL, 39 PASS, 30 NA.
+
+1. t/corpus.t test 2116 (27 reports: FreeBSD, OpenBSD, NetBSD, MidnightBSD, GNU/Hurd, ...):
+   "render-filters-values.json: values: round: precision -21 [render]". The round filter
+   with a precision of -21 gives another result there than upstream nunjucks.
+2. t/10-lib.t (11 reports: NetBSD, Windows, DragonFly, GNU/Hurd, Cygwin): "node fs:
+   existsSync and the readFileSync errors", "... with node", "a directory throws an Error",
+   "... named Error"; with them render-loaders.json "FileSystemLoader: the empty name is the
+   search path itself, a directory", "an include of a directory", "a directory name throws".
+   Reading a directory behaves differently on these systems.
+3. t/10-leaks.t (6 reports, Windows): "render_string on a long-lived Environment keeps
+   nothing of a finished render".
+
+Sample reports (GUID): eb7ab980-e2c5-11f1-bf7f-b055d346470f (1).
+
+Done: each cause fixed in lib with a test red before, or the check skipped with the reason
+where the platform cannot do it; full suite green; Changes entry for each lib fix.
+
+2026-11-24 19:02 Cause 1 (round precision -21, BSD): Lib js_math_pow calls the platform's C pow. BSD libm (msun & co.) returns pow(10, -21) one ulp high (0x1.2e3b40a0e9b50p-70, 1/x = 9.9999999999999987e20, printed 999999999999999900000); glibc and V8 return the correctly rounded 1e-21. Measured with node: V8's Math.pow(10, n) equals the exact path (10^|n| exact in a double, one IEEE division for n < 0) for every integer n in -22..22; the general rule (any integer base, exact power, reciprocal) does NOT match V8 (1294 of 1.2M negative-exponent cases differ), so the fix is limited to base 10, |n| <= 22 -- round's factor. Platform pow beyond that stays libm (k74).
+
+2026-11-24 19:13 Cause 3 (10-leaks.t, Windows): not a leak. The subtest dies at its 7th case, the first that loads through the FileSystemLoader: the loader searched the tempdir by its absolute path, and 'C:/...' is no absolute path to node's POSIX path model (path.win32 comes later, documented in 0.001), so 'template not found' escaped render_string as a Lib::Error (the reports print Text::Nunjucks::Lib::Error=HASH). Reproduced on Linux with a 'C:/...' search path. Fix is test-side: the test chdirs into the fixture dir and searches '.', the loader scenario stays as it was. No lib change, no Changes entry.
+
+Cause 1 committed: 3ee6a34 (js_math_pow: 10 ** n exact for integer n in -22..22, as V8; test simulates BSD libm one ulp off; corpus case from the oracle). Cause 3 committed: af49339 (t/10-leaks.t runs from its fixture dir, loader searches '.'; test-only). Cause 2 split: (2a) NetBSD/DragonFly/GNU-Hurd let read(2) return a directory's entries, so readFileSync of a directory rendered them as source. Decision: EISDIR at the read on every system, as the oracle gives it (Linux read(2)), via -d on the open handle; new t/10-lib-read-dir.t stands in a read that hands out entries (red against the old lib, green after). (2b) Strawberry's Errno has EC_QUERYWAITING = 2 = ENOENT, which sorts first, so the code read 'EC_QUERYWAITING: ...' (reports c9f1ba8e, cff817fc). Decision: the code prefers libuv's names (the uv message table) among an errno's names. (2c) test-only: Cygwin chmod 0000 leaves the file readable (194ea330) -> skip on exactly that condition; Windows 1f650d4a cannot create the non-ASCII name by its UTF-8 bytes (Path::Tiny move fails) -> skip on exactly that condition.
+
+Cause 2 committed: 232eeb3 (2a, EISDIR for a directory on every system; t/10-lib-read-dir.t red against the old lib), 7445cf4 (2b, the uv code prefers libuv's name among an errno's names; t/10-lib.t lends %! EC_QUERYWAITING, red before with exactly the Windows message), e819ab7 (2c, test-only: skip the non-ASCII name where the system cannot create it, chmod 0000 where it leaves the file readable; HEAD's test fails under a simulation of both reports, the new one skips). Branch ct-1124: 3ee6a34 af49339 232eeb3 7445cf4 e819ab7 on main b622cec. Offline prove -lr t/ on e819ab7's tree: Files=26, Tests=4782, PASS, 0 skipped, 117 TODO (pre-existing). Every read report maps to a cause: the three Windows 10-leaks reports without a 'Failed test' line (99756f62, 6b87dd0e, 7c8e3574) are cause 3 (Lib::Error after test 1). Not run here: BSD, Hurd, Cygwin, Windows -- bin/smoke and the Windows smoker are the coordinator's.
+
+Also found: (1) the general Math.pow still rests on the C library's pow outside base 10 with an integer exponent in -22..22 (V8 differs from glibc and BSD libm on ties, k74). (2) Windows: a directory fails at open with EACCES, node opens it and fails the read with EISDIR -- skipped there as part of path.win32 (corpus WIN_SKIP, t/10-lib.t). (3) Windows: a non-ASCII name is opened by its UTF-8 bytes through the ANSI API, node uses the UTF-16 API, so such a name depends on the code page there. (4) Runtime.pm op_pow calls Text::Nunjucks::Lib->js_math_pow by its class name.
+
+2026-11-24 20:47 Merged to main (3ee6a34, af49339, 232eeb3, 7445cf4, e819ab7). bin/smoke on main: perl 5.40 PASS; ld and quadmath FAIL in t/10-lib.t, only the check of the BSD pow stand-in (it steps one NV ulp, which pack 'd' rounds away on long-double perls). Follow-up ct-1124b: the stand-in steps the double's bit pattern.
+
+ct-1124b e9ad68a: BSD pow stand-in steps the double's bit pattern (test-only, no Changes). Offline prove -lr t/: Files=26 Tests=4782 PASS, 0 skipped. ld/quadmath run is the coordinator's.
+
+2026-11-24 21:02 Merged to main (3ee6a34, af49339, 232eeb3, 7445cf4, e819ab7, e9ad68a) and pushed. bin/smoke on main: perl 5.40, ld and quadmath PASS.
