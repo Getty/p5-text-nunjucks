@@ -2,6 +2,7 @@
 use strict;
 use warnings;
 use Test::More;
+use Cwd ();
 use Scalar::Util qw( weaken );
 use Path::Tiny ();
 use JSON::MaybeXS ();
@@ -88,13 +89,21 @@ my %files = (
 );
 $dir->child($_)->spew_raw( $files{$_} ) for keys %files;
 
+# The loader searches '.', the fixture directory as the working directory: an
+# absolute Windows path ('C:/...') is no absolute path to node's POSIX path
+# model (path.win32 comes later), and these tests are about what a render
+# keeps, not about paths.
+my $CWD  = Cwd::getcwd();
+my $TDIR = Path::Tiny->new(__FILE__)->absolute->parent;
+chdir "$dir" or die "chdir $dir: $!";
+
 # The async filters of the tests below. 'af' calls back at once; 'later' parks
 # its callback in @queue, to be called (or dropped) by the test, like an
 # application that answers from an event loop.
 our @queue;
 sub new_env {
   my (%o) = @_;
-  my $env = Text::Nunjucks::Environment->new( Text::Nunjucks::Loader::FileSystem->new( ["$dir"], \%o ) );
+  my $env = Text::Nunjucks::Environment->new( Text::Nunjucks::Loader::FileSystem->new( ['.'], \%o ) );
   $env->add_filter( af => sub { my ( $v, $cb ) = @_; $cb->( undef, "<$v>" ) }, 1 );
   $env->add_filter( later => sub { my ( $v, $cb ) = @_; push @queue, sub { $cb->( undef, "<$v>" ) }; return }, 1 );
   return $env;
@@ -534,7 +543,7 @@ subtest 'including Context: a plain partial is not kept, one that makes a macro 
   }
 }
 
-my $include_failure = JSON::MaybeXS->new( utf8 => 1 )->decode( Path::Tiny->new(__FILE__)->parent->child( 'data', 'include-failure.json' )->slurp_raw );
+my $include_failure = JSON::MaybeXS->new( utf8 => 1 )->decode( $TDIR->child( 'data', 'include-failure.json' )->slurp_raw );
 
 # Render main.njk of the case, answer every parked filter call, drop what the
 # application kept, and report calls / died / what is alive. The environment
@@ -661,5 +670,7 @@ subtest 'guard: macros returned by Template->get_exported work after it returned
   undef $lib;
   is( ( $exported->{a}->() ) . '', '[V012bh]', '... also after the Template object is gone' );
 };
+
+chdir $CWD or die "chdir $CWD: $!";    # Windows removes no directory in use
 
 done_testing;
