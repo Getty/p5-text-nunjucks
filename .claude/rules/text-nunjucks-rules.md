@@ -52,7 +52,7 @@ A plan runs in this folder on this branch, no worktree, so the board stays here.
 one after another: `text-nunjucks-worker` (a test task: `-test-writer`, docs: `-doc-writer`)
 is told to skip the implementer prompt's commit step; `text-nunjucks-fidelity-auditor`
 reviews the uncommitted `git diff`; then `text-nunjucks-release-manager` commits. Never
-`general-purpose`: built-in agents get no briefing. Brainstorming and the plan stay with
+`general-purpose`: built-in agents get no preloaded skills. Brainstorming and the plan stay with
 the main agent. Upstream's tests are ported, not invented: "test first" here means the
 ported upstream suite is in (as TODO) before the module is.
 

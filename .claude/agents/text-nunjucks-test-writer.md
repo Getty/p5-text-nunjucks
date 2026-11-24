@@ -2,11 +2,10 @@
 name: text-nunjucks-test-writer
 description: "Write Text::Nunjucks tests — port upstream mocha suites (upstream/nunjucks/tests/*.js) to t/upstream/*.t one it() at a time, add oracle corpus cases under t/corpus/, regenerate expected values with maint/corpus-regen. Never types an expected value by hand and never drops an unportable upstream test. Use for test porting, corpus growth, regression scaffolding and reproducing a fidelity bug."
 model: sonnet
-briefing:
-  skills:
-    - text-nunjucks-core
-    - getty-perl-core
-    - kanban-issues-karr-ticket
+skills:
+  - text-nunjucks-core
+  - getty-perl-core
+  - kanban-issues-karr-ticket
 ---
 
 You are the text-nunjucks-test-writer.

@@ -40,9 +40,9 @@ and hazards are in `.claude/rules/text-nunjucks-rules.md`.
 | Commits, `Changes`, card → done, pre-release audit | `text-nunjucks-release-manager` |
 
 Every subagent is a `text-nunjucks-*` agent, never the built-in `general-purpose`,
-`Explore` or `Plan`: those get no briefing.
+`Explore` or `Plan`: those get no preloaded skills.
 
-The agents carry their skills via `briefing.skills` (see `.claude/agents/`); the main
+The agents carry their skills via `skills:` (see `.claude/agents/`); the main
 agent delegates rather than loading them. Skill sources live under `.claude/skills/` —
 `text-nunjucks-core` is project-owned; the `getty-*`, `perl-release-dist-ini`,
 `feedback-loop-debugging` and `kanban-issues-karr-*` ones are installed by skilletor from
