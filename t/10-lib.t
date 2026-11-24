@@ -905,6 +905,38 @@ subtest 'js_math_pow (Math.pow)' => sub {
   is( $s->( $L->js_math_pow( 2, $inf ) ),   'Infinity', '2 ** Infinity' );
 };
 
+# round's factor Math.pow(10, n), n an integer in -22..22: V8 returns the exact
+# power, or for n < 0 its correctly rounded reciprocal. A platform pow need not:
+# BSD's libm gives 10 ** -21 one ulp high, so round(-21, 'ceil') printed
+# 999999999999999900000 there. A stand-in pow one ulp high everywhere must not
+# reach these results. Expected: node, Math.pow(10, n) as big-endian IEEE
+# doubles, n = -22 .. 22.
+subtest 'js_math_pow: a power of ten does not depend on the platform pow' => sub {
+  my @v8 = qw(
+    3b5e392010175ee6 3b92e3b40a0e9b4f 3bc79ca10c924223 3bfd83c94fb6d2ac
+    3c32725dd1d243ac 3c670ef54646d497 3c9cd2b297d889bc 3cd203af9ee75616
+    3d06849b86a12b9b 3d3c25c268497682 3d719799812dea11 3da5fd7fe1796495
+    3ddb7cdfd9d7bdbb 3e112e0be826d695 3e45798ee2308c3a 3e7ad7f29abcaf48
+    3eb0c6f7a0b5ed8d 3ee4f8b588e368f1 3f1a36e2eb1c432d 3f50624dd2f1a9fc
+    3f847ae147ae147b 3fb999999999999a 3ff0000000000000 4024000000000000
+    4059000000000000 408f400000000000 40c3880000000000 40f86a0000000000
+    412e848000000000 416312d000000000 4197d78400000000 41cdcd6500000000
+    4202a05f20000000 42374876e8000000 426d1a94a2000000 42a2309ce5400000
+    42d6bcc41e900000 430c6bf526340000 4341c37937e08000 4376345785d8a000
+    43abc16d674ec800 43e158e460913d00 4415af1d78b58c40 444b1ae4d6e2ef50
+    4480f0cf064dd592
+  );
+  my $bits = sub { unpack 'H16', pack 'd>', $_[0] };
+  my $libm = \&POSIX::pow;
+  no warnings 'redefine';
+  local *POSIX::pow = sub { POSIX::nextafter( $libm->(@_), 9**9**9 ) };
+  is( $bits->( POSIX::pow( 10, -21 ) ), '3b92e3b40a0e9b50', "the stand-in pow is BSD libm's 10 ** -21" );
+  for my $n ( -22 .. 22 ) {
+    is( $bits->( $L->js_math_pow( 10, $n ) ), $v8[ $n + 22 ], '10 ** ' . $n );
+  }
+  is( $L->number_to_string( 1 / $L->js_math_pow( 10, -21 ) ), '1.0000000000000001e+21', "round(-21, 'ceil')'s 1 / factor" );
+};
+
 # parseInt(string, radix) over a string and a Number radix (undef: undefined);
 # every expected value is node's String(parseInt(s, radix)), -0 spelt '-0'
 subtest 'js_parse_int (parseInt)' => sub {

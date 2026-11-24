@@ -860,11 +860,22 @@ sub js_math_abs {
 # exponentiate is IEEE pow with two exceptions C's pow does not share: a NaN
 # exponent gives NaN even for base 1, and base +-1 with an infinite exponent
 # gives NaN, not 1 (oracle: 1 ** (1/0) -> NaN).
+#
+# Base 10 with an integer exponent in -22..22, round's factor, does not reach
+# C's pow: 10 ** |n| is exact in a double, and V8 returns it, or for n < 0 its
+# correctly rounded reciprocal (node: every such n). IEEE multiplication and
+# division give that on every platform; a platform pow need not (BSD's libm:
+# 10 ** -21 one ulp high). Other powers are C's pow.
 sub js_math_pow {
   my ( $self, $base, $exponent ) = @_;
   return $NUM_NAN if $exponent != $exponent;
   return $NUM_NAN
     if ( $exponent == $NUM_POS_INF || $exponent == $NUM_NEG_INF ) && ( $base == 1 || $base == -1 );
+  if ( $base == 10 && abs($exponent) <= 22 && $exponent == int($exponent) ) {
+    my $power = 1;
+    $power = unpack( 'd', pack( 'd', $power * 10 ) ) for 1 .. abs($exponent);
+    return unpack( 'd', pack( 'd', $exponent < 0 ? 1 / $power : $power ) );
+  }
   return POSIX::pow( $base, $exponent );
 }
 

@@ -1,6 +1,10 @@
 Revision history for Text-Nunjucks
 
 {{$NEXT}}
+  - The round filter with a precision from -22 to 22, and 10 ** n in a
+    template for such an n, give JavaScript's result on every system; the
+    C library's pow is one unit in the last place off for some of them on
+    the BSDs (round(-21, "ceil") printed 999999999999999900000 there).
 
 0.001     2026-11-17 20:12:32Z
   - First release: a Perl port of Nunjucks 3.2.4. The same template,
