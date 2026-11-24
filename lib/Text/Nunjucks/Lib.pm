@@ -2870,10 +2870,14 @@ sub node_fs_exists_sync {
 # open(2) and read(2), not Path::Tiny: its slurp takes flock(LOCK_SH) first,
 # which blocks while another process holds LOCK_EX (node reads at once) and
 # fails where flock is not supported. Each failure is that syscall's errno.
+# A directory is EISDIR at the read on every system, as the oracle's read(2)
+# gives it: NetBSD, DragonFly and GNU/Hurd let read(2) return the directory's
+# raw entries, which would then be template source.
 sub node_fs_read_file_sync_utf8 {
   my ( $self, $path ) = @_;
   open( my $fh, '<:raw', $self->_node_fs_path_bytes($path) )
     or die $self->_node_uv_exception( $! + 0, 'open', $path );
+  die $self->_node_uv_exception( Errno::EISDIR(), 'read' ) if -d $fh;
   my $bytes = '';
   while (1) {
     my $n = read( $fh, $bytes, 65536, length($bytes) );

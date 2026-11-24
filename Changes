@@ -5,6 +5,10 @@ Revision history for Text-Nunjucks
     template for such an n, give JavaScript's result on every system; the
     C library's pow is one unit in the last place off for some of them on
     the BSDs (round(-21, "ceil") printed 999999999999999900000 there).
+  - A template name or an include that names a directory throws node's
+    "EISDIR: illegal operation on a directory, read" on every system; where
+    the system lets a directory be read, its raw entries rendered as the
+    template.
 
 0.001     2026-11-17 20:12:32Z
   - First release: a Perl port of Nunjucks 3.2.4. The same template,
